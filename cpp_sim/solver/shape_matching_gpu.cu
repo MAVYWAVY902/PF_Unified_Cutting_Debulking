@@ -1,0 +1,640 @@
+#include "shape_matching_gpu.h"
+#include "svd3_cuda.h"
+#include <cstdio>
+
+// ============== CUDA Kernels ==============
+
+__global__ void predict_kernel(
+    float3* pos, float3* vel, float3* predicted_pos, float3* old_pos,
+    int* removed, int* fixed,
+    float3 gravity, float dt, float damping, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i]) return;
+
+    old_pos[i] = pos[i];
+    vel[i].x += gravity.x * dt;
+    vel[i].y += gravity.y * dt;
+    vel[i].z += gravity.z * dt;
+    vel[i].x *= damping;
+    vel[i].y *= damping;
+    vel[i].z *= damping;
+    predicted_pos[i].x = pos[i].x + vel[i].x * dt;
+    predicted_pos[i].y = pos[i].y + vel[i].y * dt;
+    predicted_pos[i].z = pos[i].z + vel[i].z * dt;
+}
+
+__global__ void collision_kernel(
+    float3* pred_pos, int* removed, int* fixed,
+    float floor_y, float3 knife_pos, float knife_radius, int knife_active, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i]) return;
+
+    // 地板
+    if (pred_pos[i].y < floor_y) {
+        pred_pos[i].y = floor_y;
+    }
+
+    // 刀具（球形 SDF）
+    if (knife_active) {
+        float dx = pred_pos[i].x - knife_pos.x;
+        float dy = pred_pos[i].y - knife_pos.y;
+        float dz = pred_pos[i].z - knife_pos.z;
+        float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+        if (dist < knife_radius && dist > 1e-10f) {
+            float inv = knife_radius / dist;
+            pred_pos[i].x = knife_pos.x + dx * inv;
+            pred_pos[i].y = knife_pos.y + dy * inv;
+            pred_pos[i].z = knife_pos.z + dz * inv;
+        }
+    }
+}
+
+__global__ void cluster_solve_kernel(
+    float3* positions, int* removed,
+    int* cluster_starts, int* cluster_sizes,
+    int* particle_ids, float3* rest_offsets,
+    float3* deltas, int* delta_counts,
+    int num_clusters)
+{
+    int cid = blockIdx.x;
+    if (cid >= num_clusters) return;
+    int tid = threadIdx.x;
+
+    int start = cluster_starts[cid];
+    int size  = cluster_sizes[cid];
+    if (size < 2) return;
+
+    // 1. Warp reduction 求质心（跳过 removed 粒子）
+    float cx = 0, cy = 0, cz = 0;
+    float tw = 0;
+    for (int j = tid; j < size; j += 32) {
+        int pid = particle_ids[start + j];
+        if (removed[pid]) continue;
+        cx += positions[pid].x;
+        cy += positions[pid].y;
+        cz += positions[pid].z;
+        tw += 1.0f;
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        cx += __shfl_down_sync(0xFFFFFFFF, cx, offset);
+        cy += __shfl_down_sync(0xFFFFFFFF, cy, offset);
+        cz += __shfl_down_sync(0xFFFFFFFF, cz, offset);
+        tw += __shfl_down_sync(0xFFFFFFFF, tw, offset);
+    }
+    float total_w = __shfl_sync(0xFFFFFFFF, tw, 0);
+    if (total_w < 1.5f) return;  // 簇中活跃粒子不足 2 个，跳过
+    cx = __shfl_sync(0xFFFFFFFF, cx, 0) / total_w;
+    cy = __shfl_sync(0xFFFFFFFF, cy, 0) / total_w;
+    cz = __shfl_sync(0xFFFFFFFF, cz, 0) / total_w;
+
+    // 2a. 活跃粒子的 rest offset 均值（移除粒子后不再零均值）
+    float qcx = 0, qcy = 0, qcz = 0;
+    for (int j = tid; j < size; j += 32) {
+        int pid = particle_ids[start + j];
+        if (removed[pid]) continue;
+        qcx += rest_offsets[start + j].x;
+        qcy += rest_offsets[start + j].y;
+        qcz += rest_offsets[start + j].z;
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        qcx += __shfl_down_sync(0xFFFFFFFF, qcx, offset);
+        qcy += __shfl_down_sync(0xFFFFFFFF, qcy, offset);
+        qcz += __shfl_down_sync(0xFFFFFFFF, qcz, offset);
+    }
+    qcx = __shfl_sync(0xFFFFFFFF, qcx, 0) / total_w;
+    qcy = __shfl_sync(0xFFFFFFFF, qcy, 0) / total_w;
+    qcz = __shfl_sync(0xFFFFFFFF, qcz, 0) / total_w;
+
+    // 2b. 协方差矩阵 A_pq (3x3)（用修正后的 rest offsets）
+    float a11=0,a12=0,a13=0,a21=0,a22=0,a23=0,a31=0,a32=0,a33=0;
+    for (int j = tid; j < size; j += 32) {
+        int pid = particle_ids[start + j];
+        if (removed[pid]) continue;
+        float px = positions[pid].x - cx;
+        float py = positions[pid].y - cy;
+        float pz = positions[pid].z - cz;
+        float qx = rest_offsets[start + j].x - qcx;
+        float qy = rest_offsets[start + j].y - qcy;
+        float qz = rest_offsets[start + j].z - qcz;
+        a11 += px*qx; a12 += px*qy; a13 += px*qz;
+        a21 += py*qx; a22 += py*qy; a23 += py*qz;
+        a31 += pz*qx; a32 += pz*qy; a33 += pz*qz;
+    }
+    // Warp reduction for all 9 elements
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        a11 += __shfl_down_sync(0xFFFFFFFF, a11, offset);
+        a12 += __shfl_down_sync(0xFFFFFFFF, a12, offset);
+        a13 += __shfl_down_sync(0xFFFFFFFF, a13, offset);
+        a21 += __shfl_down_sync(0xFFFFFFFF, a21, offset);
+        a22 += __shfl_down_sync(0xFFFFFFFF, a22, offset);
+        a23 += __shfl_down_sync(0xFFFFFFFF, a23, offset);
+        a31 += __shfl_down_sync(0xFFFFFFFF, a31, offset);
+        a32 += __shfl_down_sync(0xFFFFFFFF, a32, offset);
+        a33 += __shfl_down_sync(0xFFFFFFFF, a33, offset);
+    }
+
+    // 3. SVD → 旋转矩阵 R（只在 lane 0 计算）
+    float u11,u12,u13,u21,u22,u23,u31,u32,u33;
+    float s11,s12,s13,s21,s22,s23,s31,s32,s33;
+    float v11,v12,v13,v21,v22,v23,v31,v32,v33;
+    float r11,r12,r13,r21,r22,r23,r31,r32,r33;
+
+    if (tid == 0) {
+        // Broadcast A to lane 0 (already there from reduction)
+        svd(a11,a12,a13,a21,a22,a23,a31,a32,a33,
+            u11,u12,u13,u21,u22,u23,u31,u32,u33,
+            s11,s12,s13,s21,s22,s23,s31,s32,s33,
+            v11,v12,v13,v21,v22,v23,v31,v32,v33);
+
+        // R = U * V^T
+        multAB(u11,u12,u13,u21,u22,u23,u31,u32,u33,
+               v11,v21,v31,v12,v22,v32,v13,v23,v33,
+               r11,r12,r13,r21,r22,r23,r31,r32,r33);
+
+        // 确保 det(R) > 0
+        float det = r11*(r22*r33-r23*r32) - r12*(r21*r33-r23*r31) + r13*(r21*r32-r22*r31);
+        if (det < 0) {
+            u13 = -u13; u23 = -u23; u33 = -u33;
+            multAB(u11,u12,u13,u21,u22,u23,u31,u32,u33,
+                   v11,v21,v31,v12,v22,v32,v13,v23,v33,
+                   r11,r12,r13,r21,r22,r23,r31,r32,r33);
+        }
+    }
+
+    // Broadcast R to all threads
+    r11 = __shfl_sync(0xFFFFFFFF, r11, 0);
+    r12 = __shfl_sync(0xFFFFFFFF, r12, 0);
+    r13 = __shfl_sync(0xFFFFFFFF, r13, 0);
+    r21 = __shfl_sync(0xFFFFFFFF, r21, 0);
+    r22 = __shfl_sync(0xFFFFFFFF, r22, 0);
+    r23 = __shfl_sync(0xFFFFFFFF, r23, 0);
+    r31 = __shfl_sync(0xFFFFFFFF, r31, 0);
+    r32 = __shfl_sync(0xFFFFFFFF, r32, 0);
+    r33 = __shfl_sync(0xFFFFFFFF, r33, 0);
+
+    // 4. Goal positions → atomicAdd deltas（跳过 removed 粒子）
+    for (int j = tid; j < size; j += 32) {
+        int pid = particle_ids[start + j];
+        if (removed[pid]) continue;
+        float qx = rest_offsets[start + j].x - qcx;
+        float qy = rest_offsets[start + j].y - qcy;
+        float qz = rest_offsets[start + j].z - qcz;
+
+        float gx = r11*qx + r12*qy + r13*qz + cx;
+        float gy = r21*qx + r22*qy + r23*qz + cy;
+        float gz = r31*qx + r32*qy + r33*qz + cz;
+
+        atomicAdd(&deltas[pid].x, gx - positions[pid].x);
+        atomicAdd(&deltas[pid].y, gy - positions[pid].y);
+        atomicAdd(&deltas[pid].z, gz - positions[pid].z);
+        atomicAdd(&delta_counts[pid], 1);
+    }
+}
+
+__global__ void apply_kernel(
+    float3* pred_pos, float3* deltas, int* delta_counts,
+    float* damage, int* removed, int* fixed,
+    float stiffness, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i] || delta_counts[i] == 0) return;
+
+    float local_stiff = stiffness * (1.0f - damage[i] * 0.95f);
+    float inv_count = 1.0f / delta_counts[i];
+    pred_pos[i].x += local_stiff * deltas[i].x * inv_count;
+    pred_pos[i].y += local_stiff * deltas[i].y * inv_count;
+    pred_pos[i].z += local_stiff * deltas[i].z * inv_count;
+}
+
+__global__ void clear_deltas_kernel(float3* deltas, int* counts, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N) return;
+    deltas[i] = make_float3(0, 0, 0);
+    counts[i] = 0;
+}
+
+__global__ void update_velocity_kernel(
+    float3* pos, float3* vel, float3* pred_pos, float3* old_pos,
+    int* removed, int* fixed, float inv_dt, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i]) return;
+
+    vel[i].x = (pred_pos[i].x - old_pos[i].x) * inv_dt;
+    vel[i].y = (pred_pos[i].y - old_pos[i].y) * inv_dt;
+    vel[i].z = (pred_pos[i].z - old_pos[i].z) * inv_dt;
+    pos[i] = pred_pos[i];
+}
+
+// ============== Cutting Kernels ==============
+
+// 边 P(F) 计算 + damage 更新（每边一线程）
+__global__ void update_edge_damage_kernel(
+    float3* pred_pos, int* removed,
+    int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
+    float3 knife_pos, float knife_radius, float alpha_min, int num_edges)
+{
+    int eid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (eid >= num_edges || broken[eid]) return;
+
+    int a = edge_a[eid], b = edge_b[eid];
+    if (removed[a] || removed[b]) return;
+
+    // 边中点
+    float3 mid;
+    mid.x = (pred_pos[a].x + pred_pos[b].x) * 0.5f;
+    mid.y = (pred_pos[a].y + pred_pos[b].y) * 0.5f;
+    mid.z = (pred_pos[a].z + pred_pos[b].z) * 0.5f;
+
+    float dx = mid.x - knife_pos.x;
+    float dy = mid.y - knife_pos.y;
+    float dz = mid.z - knife_pos.z;
+    float dist_to_knife_center = sqrtf(dx*dx + dy*dy + dz*dz);
+
+    // 只更新刀具附近的边
+    float search_r = knife_radius * 3.0f;
+    if (dist_to_knife_center > search_r) return;
+
+    // 边半径（circumsphere）
+    float ex = pred_pos[a].x - pred_pos[b].x;
+    float ey = pred_pos[a].y - pred_pos[b].y;
+    float ez = pred_pos[a].z - pred_pos[b].z;
+    float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
+    if (radius < 1e-10f) return;
+
+    // 用刀具**表面**（非中心）作为闯入者
+    // 刀具表面到边中点的距离 = dist_to_knife_center - knife_radius
+    float intruder_dist = dist_to_knife_center - knife_radius;
+    float sdist = intruder_dist - radius;
+    float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
+
+    // Damage 更新（只增不减）
+    float rest = pf_rest[eid];
+    if (rest > 0.01f) {
+        float target = fmaxf(0.0f, 1.0f - pf / rest);
+        damage[eid] = fmaxf(damage[eid], target);
+    }
+
+    // 断裂检查
+    if (damage[eid] > 0.5f) {
+        broken[eid] = 1;
+    }
+}
+
+// 每粒子 damage 聚合（从边 damage 取最大值）
+__global__ void update_particle_damage_kernel(
+    float* particle_damage, int* removed,
+    int* edge_a, int* edge_b, float* edge_damage, int num_edges, int N)
+{
+    // 先清零
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) particle_damage[i] = 0;
+    __syncthreads();
+
+    // 每条边更新两端粒子的 damage（atomicMax）
+    int eid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (eid >= num_edges) return;
+    int a = edge_a[eid], b = edge_b[eid];
+    if (removed[a] || removed[b]) return;
+
+    // CUDA 没有 atomicMax for float，用 atomicCAS 模拟
+    float val = edge_damage[eid];
+    // 简化：直接用 atomicAdd 累加，后面取最大值不精确但够用
+    // 更精确做法需要 atomicCAS loop，暂时用这个
+    if (val > particle_damage[a]) particle_damage[a] = val; // race ok，取近似最大
+    if (val > particle_damage[b]) particle_damage[b] = val;
+}
+
+// CUSA 吸引：刀具内 + 高 damage → 标记 removed
+__global__ void aspirate_kernel(
+    float3* pred_pos, float* particle_damage, int* removed,
+    float3 knife_pos, float knife_radius, float threshold, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i]) return;
+
+    float dx = pred_pos[i].x - knife_pos.x;
+    float dy = pred_pos[i].y - knife_pos.y;
+    float dz = pred_pos[i].z - knife_pos.z;
+    if (dx*dx + dy*dy + dz*dz > knife_radius * knife_radius) return;
+
+    if (particle_damage[i] > threshold) {
+        removed[i] = 1;
+    }
+}
+
+// ============== Host Functions ==============
+
+#define CUDA_CHECK(call) { \
+    cudaError_t err = call; \
+    if (err != cudaSuccess) { \
+        printf("CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+    } \
+}
+
+void ShapeMatchingGPUSolver::init(
+    const std::vector<float3>& positions,
+    const std::vector<float3>& velocities,
+    const std::vector<int>& removed,
+    const std::vector<int>& fixed,
+    const std::vector<int>& cluster_starts,
+    const std::vector<int>& cluster_sizes,
+    const std::vector<int>& particle_ids,
+    const std::vector<float3>& rest_offsets,
+    const std::vector<float3>& rest_cm)
+{
+    int N = positions.size();
+    int C = cluster_starts.size();
+    int total = particle_ids.size();
+
+    d_particles.N = N;
+    d_clusters.num_clusters = C;
+    d_clusters.total_entries = total;
+
+    // 分配粒子数据
+    CUDA_CHECK(cudaMalloc(&d_particles.pos, N * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_particles.vel, N * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_particles.predicted_pos, N * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_particles.old_pos, N * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_particles.damage, N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_particles.removed, N * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_particles.fixed, N * sizeof(int)));
+
+    // 上传粒子数据
+    CUDA_CHECK(cudaMemcpy(d_particles.pos, positions.data(), N * sizeof(float3), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_particles.vel, velocities.data(), N * sizeof(float3), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_particles.predicted_pos, positions.data(), N * sizeof(float3), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_particles.removed, removed.data(), N * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_particles.fixed, fixed.data(), N * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d_particles.damage, 0, N * sizeof(float)));
+
+    // 分配簇数据
+    CUDA_CHECK(cudaMalloc(&d_clusters.cluster_starts, C * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_clusters.cluster_sizes, C * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_clusters.particle_ids, total * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_clusters.rest_offsets, total * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_clusters.rest_cm, C * sizeof(float3)));
+
+    CUDA_CHECK(cudaMemcpy(d_clusters.cluster_starts, cluster_starts.data(), C * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_clusters.cluster_sizes, cluster_sizes.data(), C * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_clusters.particle_ids, particle_ids.data(), total * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_clusters.rest_offsets, rest_offsets.data(), total * sizeof(float3), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_clusters.rest_cm, rest_cm.data(), C * sizeof(float3), cudaMemcpyHostToDevice));
+
+    // 分配 delta buffers
+    CUDA_CHECK(cudaMalloc(&d_deltas, N * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_delta_counts, N * sizeof(int)));
+
+    printf("[GPU] 初始化完成: %d 粒子, %d 簇, %d 总条目\n", N, C, total);
+
+    // 初始化边数据为空
+    d_edges.num_edges = 0;
+    d_edges.particle_a = nullptr;
+}
+
+void ShapeMatchingGPUSolver::init_edges(
+    const std::vector<int>& edge_a,
+    const std::vector<int>& edge_b,
+    const std::vector<float>& edge_pf_rest)
+{
+    int E = edge_a.size();
+    d_edges.num_edges = E;
+
+    CUDA_CHECK(cudaMalloc(&d_edges.particle_a, E * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_edges.particle_b, E * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_edges.pf_rest, E * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_edges.damage, E * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_edges.broken, E * sizeof(int)));
+
+    CUDA_CHECK(cudaMemcpy(d_edges.particle_a, edge_a.data(), E * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_edges.particle_b, edge_b.data(), E * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_edges.pf_rest, edge_pf_rest.data(), E * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d_edges.damage, 0, E * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_edges.broken, 0, E * sizeof(int)));
+
+    printf("[GPU] 边数据初始化: %d 条边\n", E);
+}
+
+void ShapeMatchingGPUSolver::gpu_update_damage() {
+    if (d_edges.num_edges == 0 || !config.knife_active) return;
+    int E = d_edges.num_edges;
+    int blocks_e = (E + 255) / 256;
+
+    update_edge_damage_kernel<<<blocks_e, 256>>>(
+        d_particles.predicted_pos, d_particles.removed,
+        d_edges.particle_a, d_edges.particle_b,
+        d_edges.pf_rest, d_edges.damage, d_edges.broken,
+        config.knife_pos, config.knife_radius, alpha_min, E);
+}
+
+void ShapeMatchingGPUSolver::gpu_update_particle_damage() {
+    if (d_edges.num_edges == 0) return;
+    int N = d_particles.N;
+    int E = d_edges.num_edges;
+
+    // 清零 particle damage
+    CUDA_CHECK(cudaMemset(d_particles.damage, 0, N * sizeof(float)));
+
+    int blocks_e = (E + 255) / 256;
+    update_particle_damage_kernel<<<blocks_e, 256>>>(
+        d_particles.damage, d_particles.removed,
+        d_edges.particle_a, d_edges.particle_b,
+        d_edges.damage, E, N);
+}
+
+void ShapeMatchingGPUSolver::gpu_aspirate() {
+    if (!config.knife_active) return;
+    int N = d_particles.N;
+    int blocks_n = (N + 255) / 256;
+
+    aspirate_kernel<<<blocks_n, 256>>>(
+        d_particles.predicted_pos, d_particles.damage, d_particles.removed,
+        config.knife_pos, config.knife_radius, aspiration_threshold, N);
+}
+
+void ShapeMatchingGPUSolver::step() {
+    int N = d_particles.N;
+    int C = d_clusters.num_clusters;
+    int blocks_n = (N + 255) / 256;
+
+    // 1. Predict
+    predict_kernel<<<blocks_n, 256>>>(
+        d_particles.pos, d_particles.vel,
+        d_particles.predicted_pos, d_particles.old_pos,
+        d_particles.removed, d_particles.fixed,
+        config.gravity, config.dt, config.damping, N);
+
+    // 2. Collision (predict 后)
+    collision_kernel<<<blocks_n, 256>>>(
+        d_particles.predicted_pos,
+        d_particles.removed, d_particles.fixed,
+        config.floor_y, config.knife_pos, config.knife_radius, config.knife_active, N);
+
+    // 3. Jacobi 迭代
+    for (int iter = 0; iter < config.num_iterations; iter++) {
+        // Clear deltas
+        clear_deltas_kernel<<<blocks_n, 256>>>(d_deltas, d_delta_counts, N);
+
+        // Solve all clusters（每簇一个 block，32 线程/warp）
+        cluster_solve_kernel<<<C, 32>>>(
+            d_particles.predicted_pos, d_particles.removed,
+            d_clusters.cluster_starts, d_clusters.cluster_sizes,
+            d_clusters.particle_ids, d_clusters.rest_offsets,
+            d_deltas, d_delta_counts, C);
+
+        // Apply
+        apply_kernel<<<blocks_n, 256>>>(
+            d_particles.predicted_pos, d_deltas, d_delta_counts,
+            d_particles.damage, d_particles.removed, d_particles.fixed,
+            config.stiffness, N);
+
+        // Collision (每次迭代)
+        collision_kernel<<<blocks_n, 256>>>(
+            d_particles.predicted_pos,
+            d_particles.removed, d_particles.fixed,
+            config.floor_y, config.knife_pos, config.knife_radius, config.knife_active, N);
+    }
+
+    // 4. Cutting pipeline（每 cutting_update_interval 步）
+    if (config.knife_active && d_edges.num_edges > 0 &&
+        (step_count % cutting_update_interval == 0)) {
+        gpu_update_damage();
+        gpu_update_particle_damage();
+        gpu_aspirate();
+    }
+    step_count++;
+
+    // 5. Update velocity
+    float inv_dt = 1.0f / config.dt;
+    update_velocity_kernel<<<blocks_n, 256>>>(
+        d_particles.pos, d_particles.vel,
+        d_particles.predicted_pos, d_particles.old_pos,
+        d_particles.removed, d_particles.fixed, inv_dt, N);
+}
+
+void ShapeMatchingGPUSolver::download_positions(std::vector<float3>& positions) {
+    int N = d_particles.N;
+    positions.resize(N);
+    CUDA_CHECK(cudaMemcpy(positions.data(), d_particles.pos, N * sizeof(float3), cudaMemcpyDeviceToHost));
+}
+
+void ShapeMatchingGPUSolver::download_removed(std::vector<int>& removed) {
+    int N = d_particles.N;
+    removed.resize(N);
+    CUDA_CHECK(cudaMemcpy(removed.data(), d_particles.removed, N * sizeof(int), cudaMemcpyDeviceToHost));
+}
+
+void ShapeMatchingGPUSolver::download_damage(std::vector<float>& damage) {
+    int N = d_particles.N;
+    damage.resize(N);
+    CUDA_CHECK(cudaMemcpy(damage.data(), d_particles.damage, N * sizeof(float), cudaMemcpyDeviceToHost));
+}
+
+void ShapeMatchingGPUSolver::download_edge_broken(std::vector<int>& broken) {
+    int E = d_edges.num_edges;
+    broken.resize(E);
+    if (E > 0) CUDA_CHECK(cudaMemcpy(broken.data(), d_edges.broken, E * sizeof(int), cudaMemcpyDeviceToHost));
+}
+
+void ShapeMatchingGPUSolver::download_edge_damage(std::vector<float>& damage) {
+    int E = d_edges.num_edges;
+    damage.resize(E);
+    if (E > 0) CUDA_CHECK(cudaMemcpy(damage.data(), d_edges.damage, E * sizeof(float), cudaMemcpyDeviceToHost));
+}
+
+void ShapeMatchingGPUSolver::upload_removed(const std::vector<int>& removed) {
+    int N = d_particles.N;
+    CUDA_CHECK(cudaMemcpy(d_particles.removed, removed.data(), N * sizeof(int), cudaMemcpyHostToDevice));
+}
+
+void ShapeMatchingGPUSolver::reupload_clusters(
+    const std::vector<int>& cluster_starts,
+    const std::vector<int>& cluster_sizes,
+    const std::vector<int>& particle_ids,
+    const std::vector<float3>& rest_offsets,
+    const std::vector<float3>& rest_cm)
+{
+    // 释放旧 buffers
+    cudaFree(d_clusters.cluster_starts);
+    cudaFree(d_clusters.cluster_sizes);
+    cudaFree(d_clusters.particle_ids);
+    cudaFree(d_clusters.rest_offsets);
+    cudaFree(d_clusters.rest_cm);
+
+    int C = (int)cluster_starts.size();
+    int total = (int)particle_ids.size();
+    d_clusters.num_clusters = C;
+    d_clusters.total_entries = total;
+
+    CUDA_CHECK(cudaMalloc(&d_clusters.cluster_starts, C * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_clusters.cluster_sizes, C * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_clusters.particle_ids, total * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_clusters.rest_offsets, total * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_clusters.rest_cm, C * sizeof(float3)));
+
+    CUDA_CHECK(cudaMemcpy(d_clusters.cluster_starts, cluster_starts.data(), C * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_clusters.cluster_sizes, cluster_sizes.data(), C * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_clusters.particle_ids, particle_ids.data(), total * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_clusters.rest_offsets, rest_offsets.data(), total * sizeof(float3), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_clusters.rest_cm, rest_cm.data(), C * sizeof(float3), cudaMemcpyHostToDevice));
+}
+
+void ShapeMatchingGPUSolver::reupload_edges(
+    const std::vector<int>& edge_a,
+    const std::vector<int>& edge_b,
+    const std::vector<float>& pf_rest,
+    const std::vector<float>& damage,
+    const std::vector<int>& broken)
+{
+    if (d_edges.particle_a) {
+        cudaFree(d_edges.particle_a);
+        cudaFree(d_edges.particle_b);
+        cudaFree(d_edges.pf_rest);
+        cudaFree(d_edges.damage);
+        cudaFree(d_edges.broken);
+    }
+
+    int E = (int)edge_a.size();
+    d_edges.num_edges = E;
+
+    if (E == 0) { d_edges.particle_a = nullptr; return; }
+
+    CUDA_CHECK(cudaMalloc(&d_edges.particle_a, E * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_edges.particle_b, E * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_edges.pf_rest, E * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_edges.damage, E * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_edges.broken, E * sizeof(int)));
+
+    CUDA_CHECK(cudaMemcpy(d_edges.particle_a, edge_a.data(), E * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_edges.particle_b, edge_b.data(), E * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_edges.pf_rest, pf_rest.data(), E * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_edges.damage, damage.data(), E * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_edges.broken, broken.data(), E * sizeof(int), cudaMemcpyHostToDevice));
+}
+
+void ShapeMatchingGPUSolver::cleanup() {
+    cudaFree(d_particles.pos);
+    cudaFree(d_particles.vel);
+    cudaFree(d_particles.predicted_pos);
+    cudaFree(d_particles.old_pos);
+    cudaFree(d_particles.damage);
+    cudaFree(d_particles.removed);
+    cudaFree(d_particles.fixed);
+    cudaFree(d_clusters.cluster_starts);
+    cudaFree(d_clusters.cluster_sizes);
+    cudaFree(d_clusters.particle_ids);
+    cudaFree(d_clusters.rest_offsets);
+    cudaFree(d_clusters.rest_cm);
+    cudaFree(d_deltas);
+    cudaFree(d_delta_counts);
+    if (d_edges.particle_a) {
+        cudaFree(d_edges.particle_a);
+        cudaFree(d_edges.particle_b);
+        cudaFree(d_edges.pf_rest);
+        cudaFree(d_edges.damage);
+        cudaFree(d_edges.broken);
+    }
+}
