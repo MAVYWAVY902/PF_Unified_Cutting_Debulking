@@ -376,9 +376,7 @@ int main(int argc, char** argv) {
         viewer.draw_points = true;
     }
 
-    // 计时统计
     int timing_frame = 0;
-    double t_gpu_step_total = 0, t_download_total = 0, t_sync_total = 0;
 
     // GPU step 回调：替代 solver->step()
     viewer.on_step = [&](int substeps) {
@@ -403,7 +401,6 @@ int main(int argc, char** argv) {
         gpu_solver.download_positions(cpu_positions);
         gpu_solver.download_removed(cpu_removed);
         gpu_solver.download_damage(cpu_damage);
-        auto t2 = std::chrono::high_resolution_clock::now();
 
         // 同步到 cpu_solver.particles（viewer 读取用）
         int active = 0, rem = 0;
@@ -416,49 +413,42 @@ int main(int argc, char** argv) {
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
 
-        // 周期性 CPU BFS 簇分裂（每 200 步 = 每 100 帧）
-        static int split_step_counter = 0;
-        split_step_counter += substeps;
-        if (viewer.knife_active && split_step_counter >= 200) {
-            split_step_counter = 0;
-            cudaDeviceSynchronize();
-            bool did_split = cpu_bfs_split(
-                gpu_solver, cpu_solver,
-                edge_a, edge_b, edge_pf_rest,
-                cpu_positions, cpu_removed,
-                use_tet ? tet_mesh.vertex_neighbors : std::vector<std::vector<int>>());
-            if (did_split) {
-                viewer.num_clusters_display = (int)cpu_solver.clusters.size();
-                // 重新同步 removed 状态
-                for (int i = 0; i < N; i++) {
-                    cpu_solver.particles[i].removed = (cpu_removed[i] != 0);
+        // 边界侵蚀：移除大部分邻居已被移除的孤立粒子
+        if (use_tet && rem > 0) {
+            bool eroded = false;
+            for (int i = 0; i < N; i++) {
+                if (cpu_removed[i]) continue;
+                const auto& nbrs = tet_mesh.vertex_neighbors[i];
+                if (nbrs.empty()) continue;
+                int alive_nbrs = 0;
+                for (int nb : nbrs) {
+                    if (!cpu_removed[nb]) alive_nbrs++;
                 }
+                if ((float)alive_nbrs / nbrs.size() < 0.4f) {
+                    cpu_removed[i] = 1;
+                    cpu_solver.particles[i].removed = true;
+                    eroded = true;
+                }
+            }
+            if (eroded) {
+                gpu_solver.upload_removed(cpu_removed);
+                // 重新计数
+                active = 0; rem = 0;
+                for (int i = 0; i < N; i++) {
+                    if (cpu_removed[i]) rem++; else active++;
+                }
+                viewer.num_active_particles = active;
+                viewer.num_removed_particles = rem;
             }
         }
 
-        auto t3 = std::chrono::high_resolution_clock::now();
-
-        double dt_gpu = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        double dt_dl  = std::chrono::duration<double, std::milli>(t2 - t1).count();
-        double dt_sync = std::chrono::duration<double, std::milli>(t3 - t2).count();
-        t_gpu_step_total += dt_gpu;
-        t_download_total += dt_dl;
-        t_sync_total += dt_sync;
         timing_frame++;
 
-        double dt_total = dt_gpu + dt_dl + dt_sync;
-        if (timing_frame <= 5 || timing_frame % 120 == 0) {
-            printf("[TIMING frame %d] gpu_step=%.2fms download=%.2fms cpu_sync=%.2fms | avg: gpu=%.2f dl=%.2f sync=%.2f\n",
-                timing_frame, dt_gpu, dt_dl, dt_sync,
-                t_gpu_step_total / timing_frame,
-                t_download_total / timing_frame,
-                t_sync_total / timing_frame);
-        }
-        // 尖峰检测：任何超过 10ms 的帧都打印
-        if (dt_total > 10.0) {
-            printf("[SPIKE frame %d] total=%.1fms (gpu=%.1f dl=%.1f sync=%.1f) knife_active=%d\n",
-                timing_frame, dt_total, dt_gpu, dt_dl, dt_sync,
-                gpu_solver.config.knife_active);
+        // 周期性状态输出
+        if (timing_frame <= 5 || timing_frame % 300 == 0) {
+            double dt_gpu = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            printf("[frame %d] gpu=%.1fms active=%d removed=%d\n",
+                timing_frame, dt_gpu, active, rem);
         }
     };
 

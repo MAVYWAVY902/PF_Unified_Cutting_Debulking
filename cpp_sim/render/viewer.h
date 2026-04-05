@@ -150,11 +150,7 @@ public:
                         int curr_removed = num_removed_particles;
                         static int prev_removed_gpu = 0;
                         if (curr_removed > prev_removed_gpu) {
-                            auto t_rb0 = std::chrono::high_resolution_clock::now();
                             tet_mesh->rebuild_surface_faces(solver->particles);
-                            auto t_rb1 = std::chrono::high_resolution_clock::now();
-                            double rb_ms = std::chrono::duration<double, std::milli>(t_rb1 - t_rb0).count();
-                            printf("[REBUILD] %.1fms (removed %d -> %d)\n", rb_ms, prev_removed_gpu, curr_removed);
                         }
                         prev_removed_gpu = curr_removed;
                     }
@@ -222,7 +218,6 @@ public:
             }
 
             // 渲染
-            auto render_t0 = std::chrono::high_resolution_clock::now();
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             // 相机追踪粒子质心
@@ -245,20 +240,6 @@ public:
             _draw_particles(view, proj);
             // 刀具始终可见，但只有激活后（按 K）才有碰撞
             _draw_knife(view, proj);
-
-            auto render_t1 = std::chrono::high_resolution_clock::now();
-            double render_ms = std::chrono::duration<double, std::milli>(render_t1 - render_t0).count();
-            static int render_frame = 0;
-            static double render_total = 0;
-            render_total += render_ms;
-            render_frame++;
-            if (render_frame <= 5 || render_frame % 120 == 0) {
-                printf("[RENDER frame %d] %.2fms (avg %.2fms)\n",
-                    render_frame, render_ms, render_total / render_frame);
-            }
-            if (render_ms > 10.0) {
-                printf("[RENDER SPIKE frame %d] %.1fms\n", render_frame, render_ms);
-            }
 
             glfwSwapBuffers(m_window);
         }

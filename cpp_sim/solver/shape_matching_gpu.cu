@@ -284,28 +284,31 @@ __global__ void update_edge_damage_kernel(
     }
 }
 
-// 每粒子 damage 聚合（从边 damage 取最大值）
+// float atomicMax（CUDA 原生不支持，用 atomicCAS 模拟）
+__device__ void atomicMaxFloat(float* addr, float val) {
+    if (val <= 0.0f) return;
+    int* addr_as_i = (int*)addr;
+    int old = *addr_as_i, assumed;
+    do {
+        assumed = old;
+        if (__int_as_float(assumed) >= val) return;
+        old = atomicCAS(addr_as_i, assumed, __float_as_int(val));
+    } while (assumed != old);
+}
+
+// 每粒子 damage 聚合（从边 damage 取最大值，只增不减）
 __global__ void update_particle_damage_kernel(
     float* particle_damage, int* removed,
-    int* edge_a, int* edge_b, float* edge_damage, int num_edges, int N)
+    int* edge_a, int* edge_b, float* edge_damage, int num_edges)
 {
-    // 先清零
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < N) particle_damage[i] = 0;
-    __syncthreads();
-
-    // 每条边更新两端粒子的 damage（atomicMax）
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
     if (eid >= num_edges) return;
     int a = edge_a[eid], b = edge_b[eid];
     if (removed[a] || removed[b]) return;
 
-    // CUDA 没有 atomicMax for float，用 atomicCAS 模拟
     float val = edge_damage[eid];
-    // 简化：直接用 atomicAdd 累加，后面取最大值不精确但够用
-    // 更精确做法需要 atomicCAS loop，暂时用这个
-    if (val > particle_damage[a]) particle_damage[a] = val; // race ok，取近似最大
-    if (val > particle_damage[b]) particle_damage[b] = val;
+    atomicMaxFloat(&particle_damage[a], val);
+    atomicMaxFloat(&particle_damage[b], val);
 }
 
 // CUSA 吸引：刀具内 + 高 damage → 标记 removed
@@ -432,17 +435,14 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
 
 void ShapeMatchingGPUSolver::gpu_update_particle_damage() {
     if (d_edges.num_edges == 0) return;
-    int N = d_particles.N;
     int E = d_edges.num_edges;
 
-    // 清零 particle damage
-    CUDA_CHECK(cudaMemset(d_particles.damage, 0, N * sizeof(float)));
-
+    // 不清零：damage 只增不减（单调递增）
     int blocks_e = (E + 255) / 256;
     update_particle_damage_kernel<<<blocks_e, 256>>>(
         d_particles.damage, d_particles.removed,
         d_edges.particle_a, d_edges.particle_b,
-        d_edges.damage, E, N);
+        d_edges.damage, E);
 }
 
 void ShapeMatchingGPUSolver::gpu_aspirate() {
