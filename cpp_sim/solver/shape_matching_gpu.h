@@ -35,6 +35,10 @@ struct SimConfigGPU {
     float3 knife_pos;
     float knife_radius;
     int knife_active;
+    // Self-collision
+    float self_collision_radius;
+    float self_collision_stiffness;
+    int self_collision_enabled;
 };
 
 // 边数据（cutting 用）
@@ -118,4 +122,17 @@ private:
     void gpu_update_damage();
     void gpu_aspirate();
     void gpu_update_particle_damage();
+
+    // Self-collision hash grid
+    static const int HASH_TABLE_SIZE = 32768;  // 2^15
+    unsigned int* d_cell_hash = nullptr;
+    unsigned int* d_particle_index = nullptr;
+    unsigned int* d_cell_hash_sorted = nullptr;
+    unsigned int* d_particle_index_sorted = nullptr;
+    unsigned int* d_cell_start = nullptr;
+    unsigned int* d_cell_end = nullptr;
+    void* d_cub_temp = nullptr;
+    size_t cub_temp_bytes = 0;
+
+    void build_hash_grid();
 };

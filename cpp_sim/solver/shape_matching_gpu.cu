@@ -1,5 +1,6 @@
 #include "shape_matching_gpu.h"
 #include "svd3_cuda.h"
+#include <cub/cub.cuh>
 #include <cstdio>
 
 // ============== CUDA Kernels ==============
@@ -229,6 +230,113 @@ __global__ void update_velocity_kernel(
     pos[i] = pred_pos[i];
 }
 
+// ============== Self-Collision Kernels ==============
+
+__global__ void compute_cell_hash_kernel(
+    float3* positions, int* removed,
+    unsigned int* cell_hash, unsigned int* particle_index,
+    float cell_size, int table_size, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N) return;
+
+    if (removed[i]) {
+        cell_hash[i] = table_size;  // sentinel → sorted to end
+    } else {
+        int ix = (int)floorf(positions[i].x / cell_size);
+        int iy = (int)floorf(positions[i].y / cell_size);
+        int iz = (int)floorf(positions[i].z / cell_size);
+        unsigned int h = ((unsigned int)(ix * 73856093) ^
+                          (unsigned int)(iy * 19349663) ^
+                          (unsigned int)(iz * 83492791)) & (table_size - 1);
+        cell_hash[i] = h;
+    }
+    particle_index[i] = i;
+}
+
+__global__ void find_cell_bounds_kernel(
+    unsigned int* sorted_hash, unsigned int* cell_start, unsigned int* cell_end, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N) return;
+
+    unsigned int h = sorted_hash[i];
+    if (i == 0 || sorted_hash[i - 1] != h) {
+        cell_start[h] = i;
+    }
+    if (i == N - 1 || sorted_hash[i + 1] != h) {
+        cell_end[h] = i + 1;
+    }
+}
+
+__global__ void self_collision_kernel(
+    float3* pred_pos, int* removed, int* fixed,
+    unsigned int* sorted_index, unsigned int* sorted_hash,
+    unsigned int* cell_start, unsigned int* cell_end,
+    float3* deltas, int* delta_counts,
+    float radius, float stiffness, float cell_size,
+    int table_size, int N)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N) return;
+
+    // Get original particle index from sorted order
+    unsigned int i = sorted_index[idx];
+    if (removed[i] || fixed[i]) return;
+    if (sorted_hash[idx] >= (unsigned int)table_size) return;  // sentinel
+
+    float3 pi = pred_pos[i];
+    int ix = (int)floorf(pi.x / cell_size);
+    int iy = (int)floorf(pi.y / cell_size);
+    int iz = (int)floorf(pi.z / cell_size);
+
+    float collision_dist = 2.0f * radius;
+
+    // 3x3x3 neighbor cells
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                unsigned int h = ((unsigned int)((ix + dx) * 73856093) ^
+                                  (unsigned int)((iy + dy) * 19349663) ^
+                                  (unsigned int)((iz + dz) * 83492791)) & (table_size - 1);
+
+                unsigned int start = cell_start[h];
+                if (start == 0xFFFFFFFF) continue;
+                unsigned int end = cell_end[h];
+
+                for (unsigned int k = start; k < end; k++) {
+                    unsigned int j = sorted_index[k];
+                    if (j <= i || removed[j]) continue;  // avoid double-count
+
+                    float ex = pi.x - pred_pos[j].x;
+                    float ey = pi.y - pred_pos[j].y;
+                    float ez = pi.z - pred_pos[j].z;
+                    float dist2 = ex * ex + ey * ey + ez * ez;
+
+                    if (dist2 < collision_dist * collision_dist && dist2 > 1e-16f) {
+                        float dist = sqrtf(dist2);
+                        float overlap = collision_dist - dist;
+                        float inv_dist = 1.0f / dist;
+                        float cx = stiffness * 0.5f * overlap * ex * inv_dist;
+                        float cy = stiffness * 0.5f * overlap * ey * inv_dist;
+                        float cz = stiffness * 0.5f * overlap * ez * inv_dist;
+
+                        atomicAdd(&deltas[i].x, cx);
+                        atomicAdd(&deltas[i].y, cy);
+                        atomicAdd(&deltas[i].z, cz);
+                        atomicAdd(&delta_counts[i], 1);
+
+                        atomicAdd(&deltas[j].x, -cx);
+                        atomicAdd(&deltas[j].y, -cy);
+                        atomicAdd(&deltas[j].z, -cz);
+                        atomicAdd(&delta_counts[j], 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ============== Cutting Kernels ==============
 
 // 边 P(F) 计算 + damage 更新（每边一线程）
@@ -391,6 +499,26 @@ void ShapeMatchingGPUSolver::init(
     CUDA_CHECK(cudaMalloc(&d_deltas, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_delta_counts, N * sizeof(int)));
 
+    // Self-collision hash grid buffers
+    if (config.self_collision_enabled) {
+        CUDA_CHECK(cudaMalloc(&d_cell_hash, N * sizeof(unsigned int)));
+        CUDA_CHECK(cudaMalloc(&d_particle_index, N * sizeof(unsigned int)));
+        CUDA_CHECK(cudaMalloc(&d_cell_hash_sorted, N * sizeof(unsigned int)));
+        CUDA_CHECK(cudaMalloc(&d_particle_index_sorted, N * sizeof(unsigned int)));
+        CUDA_CHECK(cudaMalloc(&d_cell_start, HASH_TABLE_SIZE * sizeof(unsigned int)));
+        CUDA_CHECK(cudaMalloc(&d_cell_end, HASH_TABLE_SIZE * sizeof(unsigned int)));
+
+        // Query CUB temp storage size
+        cub_temp_bytes = 0;
+        cub::DeviceRadixSort::SortPairs(nullptr, cub_temp_bytes,
+            d_cell_hash, d_cell_hash_sorted,
+            d_particle_index, d_particle_index_sorted,
+            N, 0, 15);
+        CUDA_CHECK(cudaMalloc(&d_cub_temp, cub_temp_bytes));
+        printf("[GPU] Self-collision hash grid: table=%d, cub_temp=%zu bytes\n",
+               HASH_TABLE_SIZE, cub_temp_bytes);
+    }
+
     printf("[GPU] 初始化完成: %d 粒子, %d 簇, %d 总条目\n", N, C, total);
 
     // 初始化边数据为空
@@ -485,7 +613,20 @@ void ShapeMatchingGPUSolver::step() {
             d_clusters.particle_ids, d_clusters.rest_offsets,
             d_deltas, d_delta_counts, C);
 
-        // Apply
+        // Self-collision（hash grid + neighbor query → atomicAdd deltas）
+        if (config.self_collision_enabled && d_cell_hash) {
+            build_hash_grid();
+            float cell_size = config.self_collision_radius * 2.0f;
+            self_collision_kernel<<<blocks_n, 256>>>(
+                d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
+                d_particle_index_sorted, d_cell_hash_sorted,
+                d_cell_start, d_cell_end,
+                d_deltas, d_delta_counts,
+                config.self_collision_radius, config.self_collision_stiffness,
+                cell_size, HASH_TABLE_SIZE, N);
+        }
+
+        // Apply（merge shape matching + self-collision）
         apply_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_deltas, d_delta_counts,
             d_particles.damage, d_particles.removed, d_particles.fixed,
@@ -615,6 +756,31 @@ void ShapeMatchingGPUSolver::reupload_edges(
     CUDA_CHECK(cudaMemcpy(d_edges.broken, broken.data(), E * sizeof(int), cudaMemcpyHostToDevice));
 }
 
+void ShapeMatchingGPUSolver::build_hash_grid() {
+    int N = d_particles.N;
+    int blocks = (N + 255) / 256;
+    float cell_size = config.self_collision_radius * 2.0f;
+
+    // 1. Compute per-particle cell hash
+    compute_cell_hash_kernel<<<blocks, 256>>>(
+        d_particles.predicted_pos, d_particles.removed,
+        d_cell_hash, d_particle_index,
+        cell_size, HASH_TABLE_SIZE, N);
+
+    // 2. Sort by hash (CUB radix sort)
+    cub::DeviceRadixSort::SortPairs(
+        d_cub_temp, cub_temp_bytes,
+        d_cell_hash, d_cell_hash_sorted,
+        d_particle_index, d_particle_index_sorted,
+        N, 0, 15);  // only sort lower 15 bits for TABLE_SIZE=32768
+
+    // 3. Find cell boundaries
+    cudaMemset(d_cell_start, 0xFF, HASH_TABLE_SIZE * sizeof(unsigned int));
+    cudaMemset(d_cell_end, 0xFF, HASH_TABLE_SIZE * sizeof(unsigned int));
+    find_cell_bounds_kernel<<<blocks, 256>>>(
+        d_cell_hash_sorted, d_cell_start, d_cell_end, N);
+}
+
 void ShapeMatchingGPUSolver::cleanup() {
     cudaFree(d_particles.pos);
     cudaFree(d_particles.vel);
@@ -636,5 +802,14 @@ void ShapeMatchingGPUSolver::cleanup() {
         cudaFree(d_edges.pf_rest);
         cudaFree(d_edges.damage);
         cudaFree(d_edges.broken);
+    }
+    if (d_cell_hash) {
+        cudaFree(d_cell_hash);
+        cudaFree(d_particle_index);
+        cudaFree(d_cell_hash_sorted);
+        cudaFree(d_particle_index_sorted);
+        cudaFree(d_cell_start);
+        cudaFree(d_cell_end);
+        cudaFree(d_cub_temp);
     }
 }

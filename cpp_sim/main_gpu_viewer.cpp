@@ -345,6 +345,9 @@ int main(int argc, char** argv) {
     gpu_solver.config.knife_pos = make_float3(100, 100, 100);  // 远离
     gpu_solver.config.knife_radius = 0.1f;
     gpu_solver.config.knife_active = 0;
+    gpu_solver.config.self_collision_radius = 0.012f;
+    gpu_solver.config.self_collision_stiffness = 0.8f;
+    gpu_solver.config.self_collision_enabled = 1;
 
     gpu_solver.cutting_update_interval = 50;  // 更频繁的 cutting 更新（交互模式）
 
