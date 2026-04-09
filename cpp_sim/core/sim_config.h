@@ -34,12 +34,14 @@ struct SimConfigYAML {
     // Clusters
     int cluster_rings = 2;
 
-    // Knife
+    // Knife / Tool
     float knife_radius = 0.1f;
     bool knife_radius_auto = false;
     int cutting_interval = 50;
     float alpha_min = 10.0f;
     float aspiration_threshold = 0.3f;
+    std::string tool_mesh_path;     // empty = sphere tool, non-empty = mesh SDF tool
+    int tool_sdf_resolution = 64;   // SDF grid resolution for tool
 
     // Self-collision
     bool self_collision_enabled = true;
@@ -144,6 +146,8 @@ struct SimConfigYAML {
             if (k["cutting_interval"]) cutting_interval = k["cutting_interval"].as<int>();
             if (k["alpha_min"]) alpha_min = k["alpha_min"].as<float>();
             if (k["aspiration_threshold"]) aspiration_threshold = k["aspiration_threshold"].as<float>();
+            if (k["tool_mesh"]) tool_mesh_path = k["tool_mesh"].as<std::string>();
+            if (k["tool_sdf_resolution"]) tool_sdf_resolution = k["tool_sdf_resolution"].as<int>();
         }
 
         // Self-collision

@@ -427,6 +427,7 @@ int main(int argc, char** argv) {
     gpu_solver.config.self_collision_enabled = cfg.self_collision_enabled ? 1 : 0;
     gpu_solver.config.friction_s = cfg.friction_s;
     gpu_solver.config.friction_k = cfg.friction_k;
+    gpu_solver.config.tool_type = cfg.tool_mesh_path.empty() ? 0 : 1;
 
     int substeps = cfg.substeps;
 
@@ -468,9 +469,40 @@ int main(int argc, char** argv) {
                 (float)rigid_mesh.sdf_cell_size.x(),
                 (float)rigid_mesh.sdf_cell_size.y(),
                 (float)rigid_mesh.sdf_cell_size.z());
-            gpu_solver.init_rigid_sdf(rigid_mesh.sdf_data,
+            gpu_solver.init_sdf(gpu_solver.d_rigid_sdf, rigid_mesh.sdf_data,
                 rigid_mesh.sdf_res[0], rigid_mesh.sdf_res[1], rigid_mesh.sdf_res[2],
-                origin, cs);
+                origin, cs, "Bone");
+        }
+    }
+
+    // --- Tool mesh SDF (optional) ---
+    RigidMesh tool_mesh;
+    if (!cfg.tool_mesh_path.empty()) {
+        if (!tool_mesh.load_obj(cfg.tool_mesh_path)) {
+            std::cerr << "Tool mesh加载失败: " << cfg.tool_mesh_path << std::endl;
+            gpu_solver.config.tool_type = 0;  // fallback to sphere
+        } else {
+            // Center tool at origin for local frame SDF
+            Vec3 bmin, bmax;
+            tool_mesh.get_bounds(bmin, bmax);
+            Vec3 center = (bmin + bmax) * 0.5;
+            tool_mesh.translate(-center);
+            std::cout << "Tool centered at origin, original center: ("
+                      << center.x() << ", " << center.y() << ", " << center.z() << ")" << std::endl;
+
+            tool_mesh.compute_sdf(cfg.tool_sdf_resolution, 0.2);
+
+            float3 origin = make_float3(
+                (float)tool_mesh.sdf_origin.x(),
+                (float)tool_mesh.sdf_origin.y(),
+                (float)tool_mesh.sdf_origin.z());
+            float3 cs = make_float3(
+                (float)tool_mesh.sdf_cell_size.x(),
+                (float)tool_mesh.sdf_cell_size.y(),
+                (float)tool_mesh.sdf_cell_size.z());
+            gpu_solver.init_sdf(gpu_solver.d_tool_sdf, tool_mesh.sdf_data,
+                tool_mesh.sdf_res[0], tool_mesh.sdf_res[1], tool_mesh.sdf_res[2],
+                origin, cs, "Tool");
         }
     }
 
@@ -490,6 +522,9 @@ int main(int argc, char** argv) {
     viewer.substeps_per_frame = substeps;
     if (rigid_mesh.num_faces() > 0) {
         viewer.rigid_mesh_render = &rigid_mesh;
+    }
+    if (tool_mesh.num_faces() > 0) {
+        viewer.tool_mesh_render = &tool_mesh;
     }
 
     if (use_tet) {

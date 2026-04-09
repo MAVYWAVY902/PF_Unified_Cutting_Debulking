@@ -1,0 +1,46 @@
+## P(F) Shape Matching - Tumor Debulking with Dissector Tool
+
+name: "Tumor Debulking (Dissector)"
+
+mesh: "../../resources/tumor/tumor_7800.msh"
+
+simulation:
+  dt: auto
+  gravity: [0, -9.81, 0]
+  num_iterations: auto
+  stiffness: 1.0
+  damping: 0.98
+  substeps: auto
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.10
+
+clusters:
+  rings: 2
+
+## Dissector knife tool (instead of default sphere)
+knife:
+  tool_mesh: "../../resources/tools/dissector_uv.obj"
+  tool_sdf_resolution: 64
+  cutting_interval: 50
+  alpha_min: 10.0
+  aspiration_threshold: 0.3
+
+## Rigid object (temporal bone)
+rigid_object:
+  mesh: "../../resources/tbone/tbone_MOD4.obj"
+  collision_thickness: auto
+  friction_s: 0.5
+  friction_k: 0.3
+
+self_collision:
+  enabled: true
+  radius: auto
+  stiffness: 0.8
+
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: true

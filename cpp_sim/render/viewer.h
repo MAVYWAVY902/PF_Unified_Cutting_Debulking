@@ -55,6 +55,9 @@ public:
     // Rigid mesh for rendering (optional)
     RigidMesh* rigid_mesh_render = nullptr;
 
+    // Tool mesh for rendering (optional, moves with knife_pos)
+    RigidMesh* tool_mesh_render = nullptr;
+
     // 当前活跃/移除粒子数（GPU 模式下由 on_step 回调更新）
     int num_active_particles = 0;
     int num_removed_particles = 0;
@@ -245,8 +248,12 @@ public:
             }
             // 始终画粒子点（tet 模式下也画，用于调试）
             _draw_particles(view, proj);
-            // 刀具始终可见，但只有激活后（按 K）才有碰撞
-            _draw_knife(view, proj);
+            // 刀具：mesh tool或sphere
+            if (tool_mesh_render) {
+                _draw_tool_mesh(view, proj);
+            } else {
+                _draw_knife(view, proj);
+            }
 
             glfwSwapBuffers(m_window);
         }
@@ -285,6 +292,8 @@ private:
     int m_wireframe_idx_count = 0;
     GLuint m_rigid_vao = 0, m_rigid_vbo = 0, m_rigid_ibo = 0;
     int m_rigid_idx_count = 0;
+    GLuint m_tool_vao = 0, m_tool_vbo = 0, m_tool_ibo = 0;
+    int m_tool_idx_count = 0;
     GLuint m_point_shader = 0, m_line_shader = 0, m_mesh_shader = 0;
     int m_frame_count_debug = 0;
 
@@ -693,6 +702,64 @@ private:
 
         glBindVertexArray(m_rigid_vao);
         glDrawElements(GL_TRIANGLES, m_rigid_idx_count, GL_UNSIGNED_INT, nullptr);
+        glBindVertexArray(0);
+    }
+
+    void _draw_tool_mesh(const Eigen::Matrix4f& view, const Eigen::Matrix4f& proj) {
+        if (!tool_mesh_render || tool_mesh_render->num_faces() == 0) return;
+
+        // Upload once
+        if (m_tool_vao == 0) {
+            glGenVertexArrays(1, &m_tool_vao);
+            glGenBuffers(1, &m_tool_vbo);
+            glGenBuffers(1, &m_tool_ibo);
+
+            std::vector<float> vdata;
+            std::vector<unsigned int> indices;
+            for (int i = 0; i < tool_mesh_render->num_faces(); i++) {
+                auto& f = tool_mesh_render->faces[i];
+                auto& n = tool_mesh_render->face_normals[i];
+                for (int j = 0; j < 3; j++) {
+                    auto& v = tool_mesh_render->vertices[f[j]];
+                    vdata.push_back((float)v.x());
+                    vdata.push_back((float)v.y());
+                    vdata.push_back((float)v.z());
+                    vdata.push_back((float)n.x());
+                    vdata.push_back((float)n.y());
+                    vdata.push_back((float)n.z());
+                    indices.push_back(i * 3 + j);
+                }
+            }
+            m_tool_idx_count = (int)indices.size();
+
+            glBindVertexArray(m_tool_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, m_tool_vbo);
+            glBufferData(GL_ARRAY_BUFFER, vdata.size() * sizeof(float), vdata.data(), GL_STATIC_DRAW);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_tool_ibo);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), (void*)0);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), (void*)(3*sizeof(float)));
+            glEnableVertexAttribArray(1);
+            glBindVertexArray(0);
+        }
+
+        // Model matrix: translate to knife_pos (tool mesh is centered at origin)
+        Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+        model(0, 3) = (float)knife_pos.x();
+        model(1, 3) = (float)knife_pos.y();
+        model(2, 3) = (float)knife_pos.z();
+
+        Eigen::Matrix4f mvp = proj * view * model;
+
+        glUseProgram(m_mesh_shader);
+        glUniformMatrix4fv(glGetUniformLocation(m_mesh_shader, "uMVP"), 1, GL_FALSE, mvp.data());
+        glUniformMatrix4fv(glGetUniformLocation(m_mesh_shader, "uModel"), 1, GL_FALSE, model.data());
+        glUniform4f(glGetUniformLocation(m_mesh_shader, "uColor"), 0.7f, 0.7f, 0.75f, 1.0f);  // metallic gray
+        glUniform3f(glGetUniformLocation(m_mesh_shader, "uLightDir"), 0.3f, 1.0f, 0.5f);
+
+        glBindVertexArray(m_tool_vao);
+        glDrawElements(GL_TRIANGLES, m_tool_idx_count, GL_UNSIGNED_INT, nullptr);
         glBindVertexArray(0);
     }
 

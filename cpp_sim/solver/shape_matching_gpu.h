@@ -40,15 +40,17 @@ struct SimConfigGPU {
     float self_collision_stiffness;
     int self_collision_enabled;
     // Rigid body friction
-    float friction_s;  // static friction coefficient
-    float friction_k;  // kinetic friction coefficient
+    float friction_s;
+    float friction_k;
+    // Tool type: 0 = sphere (default), 1 = mesh SDF
+    int tool_type;
 };
 
-// Rigid body SDF collision data
-struct RigidSDF {
+// SDF data (used for both rigid body collision and tool collision)
+struct SDFData {
     float* d_sdf;           // [res_x * res_y * res_z] SDF grid on GPU
     int res_x, res_y, res_z;
-    float3 origin;          // bounding box min corner
+    float3 origin;          // bounding box min corner (local frame)
     float3 cell_size;       // per-axis cell size
     int active;
 };
@@ -69,7 +71,8 @@ public:
     ParticlesGPU d_particles;
     ClustersGPU d_clusters;
     EdgesGPU d_edges;
-    RigidSDF d_rigid_sdf = {};
+    SDFData d_rigid_sdf = {};   // bone SDF (static)
+    SDFData d_tool_sdf = {};    // tool SDF (local frame, moves with knife_pos)
     SimConfigGPU config;
 
     int step_count = 0;
@@ -124,10 +127,10 @@ public:
         const std::vector<float>& damage,
         const std::vector<int>& broken);
 
-    // 初始化 rigid body SDF collision
-    void init_rigid_sdf(const std::vector<float>& sdf_data,
-                        int res_x, int res_y, int res_z,
-                        float3 origin, float3 cell_size);
+    // 初始化 SDF (通用: bone or tool)
+    void init_sdf(SDFData& sdf, const std::vector<float>& sdf_data,
+                  int res_x, int res_y, int res_z,
+                  float3 origin, float3 cell_size, const char* label);
 
     // 清理
     void cleanup();
