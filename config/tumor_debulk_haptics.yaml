@@ -1,0 +1,67 @@
+## P(F) Shape Matching - Tumor Debulking with Haptic Device
+
+name: "Tumor Debulking (Haptics)"
+
+mesh: "../../resources/tumor/tumor_7800.msh"
+
+simulation:
+  dt: auto
+  gravity: [0, -9.81, 0]
+  num_iterations: auto
+  stiffness: 1.0
+  damping: 0.98
+  substeps: auto
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.10
+
+clusters:
+  rings: 2
+
+## Dissector tool controlled by haptic device
+knife:
+  tool_mesh: "../../resources/tools/dissector_uv.obj"
+  tool_sdf_resolution: 64
+  cutting_interval: 50
+  alpha_min: 10.0
+  aspiration_threshold: 0.3
+
+## Haply Inverse3 + VersaGrip
+## Inverse3 workspace: ±0.15m (30cm diameter)
+## Tumor size: ~0.03m → scale=0.1 maps 30cm device to 3cm tumor area
+haptics:
+  enabled: true
+  websocket_url: "ws://localhost:10001"
+  workspace_center: [0.0, -0.18, 0.15]    # from chai3d k_workspaceCenter
+  sim_offset: [-0.017, 0.012, 0.000]     # tumor center in sim coords
+  scale: 0.1                              # 30cm device → 3cm tumor area
+  versagrip_correction: true              # apply handle angle correction
+  button_activates_knife: true            # VersaGrip button toggles knife
+  ## Axis mapping: pos_axes[i] = which raw axis maps to sim axis i
+  ## raw axes: 0=x(forward), 1=y(right), 2=z(up) in Haply device frame
+  ## sim axes: 0=X, 1=Y(up), 2=Z
+  ## Try different combinations if directions don't match:
+  ##   [0,2,1] + [1,1,-1]  = X→X, Z→Y(up), -Y→Z  (default, Z-up to Y-up)
+  ##   [1,2,0] + [1,1,1]   = Y→X, Z→Y(up), X→Z   (CardinalSim-like)
+  ##   [0,1,2] + [1,1,1]   = identity (no remap)
+  pos_axes: [0, 2, 1]
+  pos_signs: [1, 1, -1]
+
+## Rigid object (temporal bone)
+rigid_object:
+  mesh: "../../resources/tbone/tbone_MOD4.obj"
+  collision_thickness: auto
+  friction_s: 0.5
+  friction_k: 0.3
+
+self_collision:
+  enabled: true
+  radius: auto
+  stiffness: 0.8
+
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: true

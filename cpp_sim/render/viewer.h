@@ -29,9 +29,12 @@ public:
     bool draw_points = false;   // 绘制粒子点
 
     // 相机设置（公开，可从外部调整）
-    void set_camera(const Eigen::Vector3f& target, float distance) {
+    void set_camera(const Eigen::Vector3f& target, float distance,
+                    float yaw = 0.3f, float pitch = 0.4f) {
         m_cam_target = target;
         m_cam_dist = distance;
+        m_cam_yaw = yaw;
+        m_cam_pitch = pitch;
     }
 
     // 刀具状态

@@ -1,43 +1,38 @@
 ## P(F) Shape Matching - Cube Test Configuration
+## Matches parameters from cube32.msh direct run
 
 name: "Cube Test"
 
-## Tet mesh cube (0.3x0.3x0.3, ~13k vertices)
-mesh: "../../resources/cube/cube_tet.msh"
+## Use xpbd-tissue-sim's cube32 mesh (1m x 1m x 1m, ~21k vertices)
+mesh: "/home/yunxin/xpbd-tissue-sim/resource/cube/cube32.msh"
 
-## Simulation parameters
 simulation:
-  dt: auto
+  dt: 0.005
   gravity: [0, -9.81, 0]
-  num_iterations: auto
-  stiffness: 1.0
+  num_iterations: 8
+  stiffness: 0.85
   damping: 0.98
-  substeps: auto
+  substeps: 4
 
-## Boundary conditions
 boundary:
   floor_y: 0.0
-  fix_bottom: true      # attach bottom to ground
-  fixed_ratio: 0.05     # fix bottom 5% of mesh height
+  fix_bottom: true
+  fixed_ratio: 0.10
 
-## Cluster building
 clusters:
   rings: 2
 
-## Knife / CUSA tool
 knife:
-  radius: auto
+  radius: 0.1
   cutting_interval: 50
   alpha_min: 10.0
   aspiration_threshold: 0.3
 
-## Self-collision
 self_collision:
   enabled: true
-  radius: auto
+  radius: 0.012
   stiffness: 0.8
 
-## Viewer
 viewer:
   draw_surface: true
   draw_wireframe: false

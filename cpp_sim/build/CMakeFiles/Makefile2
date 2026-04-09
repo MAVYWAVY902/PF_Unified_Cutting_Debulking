@@ -68,10 +68,13 @@ all: CMakeFiles/pf_sim_gpu.dir/all
 all: CMakeFiles/pf_sim_gpu_viewer.dir/all
 all: CMakeFiles/verify_gpu.dir/all
 all: CMakeFiles/debug_tumor.dir/all
+all: _deps/hv-build/all
+all: _deps/json-build/all
 .PHONY : all
 
 # The main recursive "preinstall" target.
-preinstall:
+preinstall: _deps/hv-build/preinstall
+preinstall: _deps/json-build/preinstall
 .PHONY : preinstall
 
 # The main recursive "clean" target.
@@ -80,7 +83,40 @@ clean: CMakeFiles/pf_sim_gpu.dir/clean
 clean: CMakeFiles/pf_sim_gpu_viewer.dir/clean
 clean: CMakeFiles/verify_gpu.dir/clean
 clean: CMakeFiles/debug_tumor.dir/clean
+clean: _deps/hv-build/clean
+clean: _deps/json-build/clean
 .PHONY : clean
+
+#=============================================================================
+# Directory level rules for directory _deps/hv-build
+
+# Recursive "all" directory target.
+_deps/hv-build/all: _deps/hv-build/CMakeFiles/hv_static.dir/all
+.PHONY : _deps/hv-build/all
+
+# Recursive "preinstall" directory target.
+_deps/hv-build/preinstall:
+.PHONY : _deps/hv-build/preinstall
+
+# Recursive "clean" directory target.
+_deps/hv-build/clean: _deps/hv-build/CMakeFiles/hv_static.dir/clean
+_deps/hv-build/clean: _deps/hv-build/CMakeFiles/libhv_static.dir/clean
+.PHONY : _deps/hv-build/clean
+
+#=============================================================================
+# Directory level rules for directory _deps/json-build
+
+# Recursive "all" directory target.
+_deps/json-build/all:
+.PHONY : _deps/json-build/all
+
+# Recursive "preinstall" directory target.
+_deps/json-build/preinstall:
+.PHONY : _deps/json-build/preinstall
+
+# Recursive "clean" directory target.
+_deps/json-build/clean:
+.PHONY : _deps/json-build/clean
 
 #=============================================================================
 # Target rules for target CMakeFiles/pf_sim.dir
@@ -89,7 +125,7 @@ clean: CMakeFiles/debug_tumor.dir/clean
 CMakeFiles/pf_sim.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim.dir/build.make CMakeFiles/pf_sim.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim.dir/build.make CMakeFiles/pf_sim.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=4,5 "Built target pf_sim"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=68,69 "Built target pf_sim"
 .PHONY : CMakeFiles/pf_sim.dir/all
 
 # Build rule for subdir invocation for target.
@@ -115,7 +151,7 @@ CMakeFiles/pf_sim.dir/clean:
 CMakeFiles/pf_sim_gpu.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=6,7,8 "Built target pf_sim_gpu"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=70,71,72 "Built target pf_sim_gpu"
 .PHONY : CMakeFiles/pf_sim_gpu.dir/all
 
 # Build rule for subdir invocation for target.
@@ -138,15 +174,15 @@ CMakeFiles/pf_sim_gpu.dir/clean:
 # Target rules for target CMakeFiles/pf_sim_gpu_viewer.dir
 
 # All Build rule for target.
-CMakeFiles/pf_sim_gpu_viewer.dir/all:
+CMakeFiles/pf_sim_gpu_viewer.dir/all: _deps/hv-build/CMakeFiles/hv_static.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=9,10,11 "Built target pf_sim_gpu_viewer"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=73,74,75 "Built target pf_sim_gpu_viewer"
 .PHONY : CMakeFiles/pf_sim_gpu_viewer.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/pf_sim_gpu_viewer.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 3
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 67
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/pf_sim_gpu_viewer.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 0
 .PHONY : CMakeFiles/pf_sim_gpu_viewer.dir/rule
@@ -167,7 +203,7 @@ CMakeFiles/pf_sim_gpu_viewer.dir/clean:
 CMakeFiles/verify_gpu.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=12,13,14 "Built target verify_gpu"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=76,77,78 "Built target verify_gpu"
 .PHONY : CMakeFiles/verify_gpu.dir/all
 
 # Build rule for subdir invocation for target.
@@ -211,6 +247,58 @@ debug_tumor: CMakeFiles/debug_tumor.dir/rule
 CMakeFiles/debug_tumor.dir/clean:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/clean
 .PHONY : CMakeFiles/debug_tumor.dir/clean
+
+#=============================================================================
+# Target rules for target _deps/hv-build/CMakeFiles/hv_static.dir
+
+# All Build rule for target.
+_deps/hv-build/CMakeFiles/hv_static.dir/all:
+	$(MAKE) $(MAKESILENT) -f _deps/hv-build/CMakeFiles/hv_static.dir/build.make _deps/hv-build/CMakeFiles/hv_static.dir/depend
+	$(MAKE) $(MAKESILENT) -f _deps/hv-build/CMakeFiles/hv_static.dir/build.make _deps/hv-build/CMakeFiles/hv_static.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67 "Built target hv_static"
+.PHONY : _deps/hv-build/CMakeFiles/hv_static.dir/all
+
+# Build rule for subdir invocation for target.
+_deps/hv-build/CMakeFiles/hv_static.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 64
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 _deps/hv-build/CMakeFiles/hv_static.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 0
+.PHONY : _deps/hv-build/CMakeFiles/hv_static.dir/rule
+
+# Convenience name for target.
+hv_static: _deps/hv-build/CMakeFiles/hv_static.dir/rule
+.PHONY : hv_static
+
+# clean rule for target.
+_deps/hv-build/CMakeFiles/hv_static.dir/clean:
+	$(MAKE) $(MAKESILENT) -f _deps/hv-build/CMakeFiles/hv_static.dir/build.make _deps/hv-build/CMakeFiles/hv_static.dir/clean
+.PHONY : _deps/hv-build/CMakeFiles/hv_static.dir/clean
+
+#=============================================================================
+# Target rules for target _deps/hv-build/CMakeFiles/libhv_static.dir
+
+# All Build rule for target.
+_deps/hv-build/CMakeFiles/libhv_static.dir/all: _deps/hv-build/CMakeFiles/hv_static.dir/all
+	$(MAKE) $(MAKESILENT) -f _deps/hv-build/CMakeFiles/libhv_static.dir/build.make _deps/hv-build/CMakeFiles/libhv_static.dir/depend
+	$(MAKE) $(MAKESILENT) -f _deps/hv-build/CMakeFiles/libhv_static.dir/build.make _deps/hv-build/CMakeFiles/libhv_static.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num= "Built target libhv_static"
+.PHONY : _deps/hv-build/CMakeFiles/libhv_static.dir/all
+
+# Build rule for subdir invocation for target.
+_deps/hv-build/CMakeFiles/libhv_static.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 64
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 _deps/hv-build/CMakeFiles/libhv_static.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 0
+.PHONY : _deps/hv-build/CMakeFiles/libhv_static.dir/rule
+
+# Convenience name for target.
+libhv_static: _deps/hv-build/CMakeFiles/libhv_static.dir/rule
+.PHONY : libhv_static
+
+# clean rule for target.
+_deps/hv-build/CMakeFiles/libhv_static.dir/clean:
+	$(MAKE) $(MAKESILENT) -f _deps/hv-build/CMakeFiles/libhv_static.dir/build.make _deps/hv-build/CMakeFiles/libhv_static.dir/clean
+.PHONY : _deps/hv-build/CMakeFiles/libhv_static.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

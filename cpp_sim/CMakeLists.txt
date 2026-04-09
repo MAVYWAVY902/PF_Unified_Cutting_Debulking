@@ -19,6 +19,28 @@ find_package(glfw3 3.3 REQUIRED)
 # CUDA
 find_package(CUDAToolkit REQUIRED)
 
+# Optional: Haply Inverse3 haptic device support
+option(ENABLE_HAPTICS "Enable Haply Inverse3 haptic device" OFF)
+if(ENABLE_HAPTICS)
+    include(FetchContent)
+    FetchContent_Declare(hv
+        GIT_REPOSITORY https://github.com/ithewei/libhv
+        GIT_TAG v1.3.2
+        GIT_SHALLOW TRUE
+    )
+    set(BUILD_SHARED OFF CACHE INTERNAL "")
+    set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
+    set(BUILD_UNITTEST OFF CACHE INTERNAL "")
+    set(WITH_OPENSSL OFF CACHE INTERNAL "")
+    FetchContent_MakeAvailable(hv)
+
+    FetchContent_Declare(json
+        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+    )
+    FetchContent_MakeAvailable(json)
+    message(STATUS "Haptics enabled: libhv + nlohmann/json")
+endif()
+
 # ===== CPU 版本 =====
 add_executable(pf_sim main.cpp)
 target_include_directories(pf_sim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -90,6 +112,10 @@ target_compile_options(pf_sim_gpu_viewer PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-O3 -march=native>
     $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
 )
+if(ENABLE_HAPTICS)
+    target_compile_definitions(pf_sim_gpu_viewer PRIVATE HAPTICS_ENABLED)
+    target_link_libraries(pf_sim_gpu_viewer PRIVATE hv_static nlohmann_json::nlohmann_json)
+endif()
 
 # ===== GPU 验证 =====
 add_executable(verify_gpu

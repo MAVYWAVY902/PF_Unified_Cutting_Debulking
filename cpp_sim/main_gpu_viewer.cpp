@@ -9,6 +9,9 @@
 #include "core/cutting_manager.h"
 #include "core/sim_config.h"
 #include "core/rigid_mesh.h"
+#ifdef HAPTICS_ENABLED
+#include "core/haply_device.h"
+#endif
 #include "render/viewer.h"
 #include <iostream>
 #include <vector>
@@ -106,8 +109,10 @@ bool cpu_bfs_split(
 
     for (int i = 0; i < (int)components.size(); i++) {
         if (i == largest_idx) continue;
-        if ((int)components[i].size() < min_fragment_size) {
-            for (int pid : components[i]) cpu_removed[pid] = 1;
+        // Detached fragments: unfix them so gravity pulls them down
+        // They'll be removed later when they fall below the floor
+        for (int pid : components[i]) {
+            cpu_solver.particles[pid].fixed = false;
             any_change = true;
         }
     }
@@ -580,26 +585,50 @@ int main(int argc, char** argv) {
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
 
-        // 边界侵蚀：移除大部分邻居已被移除的孤立粒子
-        if (use_tet && rem > 0) {
-            bool eroded = false;
+        // (边界侵蚀已移除 — 由BFS split统一处理fragment检测)
+
+        // BFS分裂：定期检查断开的fragment，释放它们让重力拉走
+        if (use_tet && rem > 0 && timing_frame % 60 == 0) {
+            bool changed = cpu_bfs_split(
+                gpu_solver, cpu_solver,
+                edge_a, edge_b, edge_pf_rest,
+                cpu_positions, cpu_removed,
+                tet_mesh.vertex_neighbors, 5);
+            if (changed) {
+                // Sync fixed array to GPU (fragments were unfixed)
+                std::vector<int> fixed_arr(N);
+                for (int i = 0; i < N; i++)
+                    fixed_arr[i] = cpu_solver.particles[i].fixed ? 1 : 0;
+                gpu_solver.upload_removed(cpu_removed);
+                // Upload fixed array too
+                cudaMemcpy(gpu_solver.d_particles.fixed, fixed_arr.data(),
+                           N * sizeof(int), cudaMemcpyHostToDevice);
+
+                // 重新计数
+                active = 0; rem = 0;
+                for (int i = 0; i < N; i++) {
+                    if (cpu_removed[i]) rem++; else active++;
+                }
+                viewer.num_active_particles = active;
+                viewer.num_removed_particles = rem;
+                C = (int)cpu_solver.clusters.size();
+                viewer.num_clusters_display = C;
+            }
+        }
+
+        // 清理落到floor以下的粒子
+        if (use_tet) {
+            bool cleaned = false;
             for (int i = 0; i < N; i++) {
                 if (cpu_removed[i]) continue;
-                const auto& nbrs = tet_mesh.vertex_neighbors[i];
-                if (nbrs.empty()) continue;
-                int alive_nbrs = 0;
-                for (int nb : nbrs) {
-                    if (!cpu_removed[nb]) alive_nbrs++;
-                }
-                if ((float)alive_nbrs / nbrs.size() < 0.4f) {
+                if (cpu_positions[i].y < -0.1f) {  // 远低于floor
                     cpu_removed[i] = 1;
                     cpu_solver.particles[i].removed = true;
-                    eroded = true;
+                    cleaned = true;
                 }
             }
-            if (eroded) {
+            if (cleaned) {
                 gpu_solver.upload_removed(cpu_removed);
-                // 重新计数
                 active = 0; rem = 0;
                 for (int i = 0; i < N; i++) {
                     if (cpu_removed[i]) rem++; else active++;
@@ -631,14 +660,19 @@ int main(int argc, char** argv) {
     std::cout << "Bounding box: (" << bb_min.x() << "," << bb_min.y() << "," << bb_min.z()
               << ") → (" << bb_max.x() << "," << bb_max.y() << "," << bb_max.z() << ")" << std::endl;
 
+    // 相机：45度俯视（手术台视角）
+    // yaw=0 → 正面看, pitch=0.75 → ~43度俯角
     viewer.set_camera(
         Eigen::Vector3f((float)center.x(), (float)center.y(), (float)center.z()),
-        (float)(extent * 1.5)
+        (float)(extent * 1.5),
+        0.0f,    // yaw: 正对手术区域
+        0.75f    // pitch: ~43度俯角（类似CardinalSim的45度）
     );
 
-    viewer.substeps_per_frame = 2;  // 减少 substeps 提高帧率
+    viewer.substeps_per_frame = 2;
 
-    viewer.knife_pos = Vec3(bb_max.x() + extent * 5.0, center.y(), center.z());
+    // 刀具初始位置：在手术区域上方，靠近tumor
+    viewer.knife_pos = Vec3(center.x(), bb_max.y() + extent * 0.3, center.z());
     viewer.knife_radius = extent * 0.08;
 
     if (!viewer.init(1280, 720, "P(F) Shape Matching [GPU]")) {
@@ -654,7 +688,54 @@ int main(int argc, char** argv) {
     std::cout << "  P: 暂停  1: 切换面  2: 切换线框  3: 切换粒子点" << std::endl;
     std::cout << "  T: 相机追踪  R: 重置刀具+旋转  ESC: 退出" << std::endl;
 
+    // --- Haptic device (optional) ---
+#ifdef HAPTICS_ENABLED
+    std::unique_ptr<HaplyDevice> haply;
+    if (cfg.haptics_enabled) {
+        haply = std::make_unique<HaplyDevice>();
+        HaplyDevice::Config hcfg;
+        hcfg.ws_url = cfg.haptics_ws_url;
+        hcfg.workspace_center = Vec3(cfg.haptics_workspace_center[0],
+                                      cfg.haptics_workspace_center[1],
+                                      cfg.haptics_workspace_center[2]);
+        hcfg.sim_offset = Vec3(cfg.haptics_sim_offset[0],
+                                cfg.haptics_sim_offset[1],
+                                cfg.haptics_sim_offset[2]);
+        hcfg.scale = cfg.haptics_scale;
+        hcfg.versagrip_correction = cfg.haptics_versagrip_correction;
+        hcfg.button_activates_knife = cfg.haptics_button_activates_knife;
+        for (int i = 0; i < 3; i++) {
+            hcfg.pos_axes[i] = cfg.haptics_pos_axes[i];
+            hcfg.pos_signs[i] = cfg.haptics_pos_signs[i];
+        }
+
+        if (!haply->connect(hcfg)) {
+            std::cerr << "Haply device not connected, using keyboard/mouse" << std::endl;
+            haply.reset();
+        }
+    }
+
+    viewer.on_pre_step = [&]() {
+        if (haply && haply->is_connected()) {
+            Vec3 pos;
+            Eigen::Matrix3d rot;
+            bool button;
+            if (haply->get_state(pos, rot, button)) {
+                viewer.knife_pos = pos;
+                viewer.knife_rot = rot;
+                if (cfg.haptics_button_activates_knife) {
+                    viewer.knife_active = button;
+                }
+            }
+        }
+    };
+#endif
+
     viewer.run();
+
+#ifdef HAPTICS_ENABLED
+    if (haply) haply->disconnect();
+#endif
 
     gpu_solver.cleanup();
     return 0;

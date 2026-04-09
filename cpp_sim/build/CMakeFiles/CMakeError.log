@@ -1,0 +1,150 @@
+Determining if files sys/endian.h exist failed with the following output:
+Change Dir: /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/gmake -f Makefile cmTC_8ff17/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_8ff17.dir/build.make CMakeFiles/cmTC_8ff17.dir/build
+gmake[1]: Entering directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_8ff17.dir/HAVE_SYS_ENDIAN_H.c.o
+/usr/bin/cc    -o CMakeFiles/cmTC_8ff17.dir/HAVE_SYS_ENDIAN_H.c.o -c /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CheckIncludeFiles/HAVE_SYS_ENDIAN_H.c
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CheckIncludeFiles/HAVE_SYS_ENDIAN_H.c:2:10: fatal error: sys/endian.h: No such file or directory
+    2 | #include <sys/endian.h>
+      |          ^~~~~~~~~~~~~~
+compilation terminated.
+gmake[1]: *** [CMakeFiles/cmTC_8ff17.dir/build.make:78: CMakeFiles/cmTC_8ff17.dir/HAVE_SYS_ENDIAN_H.c.o] Error 1
+gmake[1]: Leaving directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+gmake: *** [Makefile:127: cmTC_8ff17/fast] Error 2
+
+
+Source:
+/* */
+#include <sys/endian.h>
+
+
+int main(void){return 0;}
+
+Determining if the gettid exist failed with the following output:
+Change Dir: /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/gmake -f Makefile cmTC_be89b/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_be89b.dir/build.make CMakeFiles/cmTC_be89b.dir/build
+gmake[1]: Entering directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_be89b.dir/CheckSymbolExists.c.o
+/usr/bin/cc    -o CMakeFiles/cmTC_be89b.dir/CheckSymbolExists.c.o -c /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c: In function ‘main’:
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:8:19: error: ‘gettid’ undeclared (first use in this function); did you mean ‘getgid’?
+    8 |   return ((int*)(&gettid))[argc];
+      |                   ^~~~~~
+      |                   getgid
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:8:19: note: each undeclared identifier is reported only once for each function it appears in
+gmake[1]: *** [CMakeFiles/cmTC_be89b.dir/build.make:78: CMakeFiles/cmTC_be89b.dir/CheckSymbolExists.c.o] Error 1
+gmake[1]: Leaving directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+gmake: *** [Makefile:127: cmTC_be89b/fast] Error 2
+
+
+File /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:
+/* */
+#include <unistd.h>
+
+int main(int argc, char** argv)
+{
+  (void)argv;
+#ifndef gettid
+  return ((int*)(&gettid))[argc];
+#else
+  (void)argc;
+  return 0;
+#endif
+}
+Determining if the strlcpy exist failed with the following output:
+Change Dir: /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/gmake -f Makefile cmTC_8be41/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_8be41.dir/build.make CMakeFiles/cmTC_8be41.dir/build
+gmake[1]: Entering directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_8be41.dir/CheckSymbolExists.c.o
+/usr/bin/cc    -o CMakeFiles/cmTC_8be41.dir/CheckSymbolExists.c.o -c /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c: In function ‘main’:
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:8:19: error: ‘strlcpy’ undeclared (first use in this function); did you mean ‘strncpy’?
+    8 |   return ((int*)(&strlcpy))[argc];
+      |                   ^~~~~~~
+      |                   strncpy
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:8:19: note: each undeclared identifier is reported only once for each function it appears in
+gmake[1]: *** [CMakeFiles/cmTC_8be41.dir/build.make:78: CMakeFiles/cmTC_8be41.dir/CheckSymbolExists.c.o] Error 1
+gmake[1]: Leaving directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+gmake: *** [Makefile:127: cmTC_8be41/fast] Error 2
+
+
+File /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:
+/* */
+#include <string.h>
+
+int main(int argc, char** argv)
+{
+  (void)argv;
+#ifndef strlcpy
+  return ((int*)(&strlcpy))[argc];
+#else
+  (void)argc;
+  return 0;
+#endif
+}
+Determining if the strlcat exist failed with the following output:
+Change Dir: /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/gmake -f Makefile cmTC_88706/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_88706.dir/build.make CMakeFiles/cmTC_88706.dir/build
+gmake[1]: Entering directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_88706.dir/CheckSymbolExists.c.o
+/usr/bin/cc    -o CMakeFiles/cmTC_88706.dir/CheckSymbolExists.c.o -c /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c: In function ‘main’:
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:8:19: error: ‘strlcat’ undeclared (first use in this function); did you mean ‘strncat’?
+    8 |   return ((int*)(&strlcat))[argc];
+      |                   ^~~~~~~
+      |                   strncat
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:8:19: note: each undeclared identifier is reported only once for each function it appears in
+gmake[1]: *** [CMakeFiles/cmTC_88706.dir/build.make:78: CMakeFiles/cmTC_88706.dir/CheckSymbolExists.c.o] Error 1
+gmake[1]: Leaving directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+gmake: *** [Makefile:127: cmTC_88706/fast] Error 2
+
+
+File /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:
+/* */
+#include <string.h>
+
+int main(int argc, char** argv)
+{
+  (void)argv;
+#ifndef strlcat
+  return ((int*)(&strlcat))[argc];
+#else
+  (void)argc;
+  return 0;
+#endif
+}
+Determining if the setproctitle exist failed with the following output:
+Change Dir: /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/gmake -f Makefile cmTC_ab3c0/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_ab3c0.dir/build.make CMakeFiles/cmTC_ab3c0.dir/build
+gmake[1]: Entering directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_ab3c0.dir/CheckSymbolExists.c.o
+/usr/bin/cc    -o CMakeFiles/cmTC_ab3c0.dir/CheckSymbolExists.c.o -c /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c: In function ‘main’:
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:8:19: error: ‘setproctitle’ undeclared (first use in this function)
+    8 |   return ((int*)(&setproctitle))[argc];
+      |                   ^~~~~~~~~~~~
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:8:19: note: each undeclared identifier is reported only once for each function it appears in
+gmake[1]: *** [CMakeFiles/cmTC_ab3c0.dir/build.make:78: CMakeFiles/cmTC_ab3c0.dir/CheckSymbolExists.c.o] Error 1
+gmake[1]: Leaving directory '/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp'
+gmake: *** [Makefile:127: cmTC_ab3c0/fast] Error 2
+
+
+File /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/CMakeTmp/CheckSymbolExists.c:
+/* */
+#include <unistd.h>
+
+int main(int argc, char** argv)
+{
+  (void)argv;
+#ifndef setproctitle
+  return ((int*)(&setproctitle))[argc];
+#else
+  (void)argc;
+  return 0;
+#endif
+}

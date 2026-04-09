@@ -111,6 +111,7 @@ pf_sim_gpu_viewer: CMakeFiles/pf_sim_gpu_viewer.dir/build.make
 pf_sim_gpu_viewer: /usr/lib/x86_64-linux-gnu/libGLEW.so
 pf_sim_gpu_viewer: /usr/lib/x86_64-linux-gnu/libglfw.so.3.3
 pf_sim_gpu_viewer: /usr/local/cuda-11.8/lib64/libcudart.so
+pf_sim_gpu_viewer: lib/libhv_static.a
 pf_sim_gpu_viewer: /usr/lib/x86_64-linux-gnu/libGLX.so
 pf_sim_gpu_viewer: /usr/lib/x86_64-linux-gnu/libOpenGL.so
 pf_sim_gpu_viewer: /usr/lib/gcc/x86_64-linux-gnu/11/libgomp.so

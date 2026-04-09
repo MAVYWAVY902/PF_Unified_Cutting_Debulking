@@ -3,15 +3,15 @@
 
 # compile CUDA with /usr/local/cuda-11.8/bin/nvcc
 # compile CXX with /usr/bin/c++
-CUDA_DEFINES = 
+CUDA_DEFINES = -DHAPTICS_ENABLED -DHV_STATICLIB
 
-CUDA_INCLUDES = -I/home/yunxin/pf-shape-matching/cpp_sim -I/home/yunxin/pf-shape-matching/cpp_sim/../third_party/svd3/svd3_cuda -isystem=/usr/include/eigen3 -isystem=/usr/local/cuda-11.8/include
+CUDA_INCLUDES = -I/home/yunxin/pf-shape-matching/cpp_sim -I/home/yunxin/pf-shape-matching/cpp_sim/../third_party/svd3/svd3_cuda -I/home/yunxin/pf-shape-matching/cpp_sim/build/_deps/hv-src/include -I/home/yunxin/pf-shape-matching/cpp_sim/build/_deps/json-src/include -isystem=/usr/include/eigen3 -isystem=/usr/local/cuda-11.8/include
 
 CUDA_FLAGS = -O3 -DNDEBUG --generate-code=arch=compute_70,code=[compute_70,sm_70] --generate-code=arch=compute_75,code=[compute_75,sm_75] --generate-code=arch=compute_80,code=[compute_80,sm_80] --generate-code=arch=compute_86,code=[compute_86,sm_86] -O3 --use_fast_math -std=c++17
 
-CXX_DEFINES = 
+CXX_DEFINES = -DHAPTICS_ENABLED -DHV_STATICLIB
 
-CXX_INCLUDES = -I/home/yunxin/pf-shape-matching/cpp_sim -I/home/yunxin/pf-shape-matching/cpp_sim/../third_party/svd3/svd3_cuda -isystem /usr/include/eigen3 -isystem /usr/local/cuda-11.8/include
+CXX_INCLUDES = -I/home/yunxin/pf-shape-matching/cpp_sim -I/home/yunxin/pf-shape-matching/cpp_sim/../third_party/svd3/svd3_cuda -I/home/yunxin/pf-shape-matching/cpp_sim/build/_deps/hv-src/include -I/home/yunxin/pf-shape-matching/cpp_sim/build/_deps/json-src/include -isystem /usr/include/eigen3 -isystem /usr/local/cuda-11.8/include
 
 CXX_FLAGS = -O3 -DNDEBUG -O3 -march=native -fopenmp -std=gnu++17
 

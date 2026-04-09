@@ -56,6 +56,17 @@ struct SimConfigYAML {
     float friction_s = 0.5f;    // static friction
     float friction_k = 0.3f;    // kinetic friction
 
+    // Haptics (Haply Inverse3 + VersaGrip)
+    bool haptics_enabled = false;
+    std::string haptics_ws_url = "ws://localhost:10001";
+    double haptics_workspace_center[3] = {0.0, -0.18, 0.15};
+    double haptics_sim_offset[3] = {-0.017, 0.012, 0.000};
+    double haptics_scale = 0.1;
+    bool haptics_versagrip_correction = true;
+    bool haptics_button_activates_knife = true;
+    int haptics_pos_axes[3] = {0, 2, 1};       // axis permutation
+    double haptics_pos_signs[3] = {1, 1, -1};  // axis sign flips
+
     // Viewer
     bool draw_surface = true;
     bool draw_wireframe = false;
@@ -177,6 +188,40 @@ struct SimConfigYAML {
                     if (ro["collision_thickness"].as<std::string>() == "auto")
                         rigid_collision_thickness_auto = true;
                 }
+            }
+        }
+
+        // Haptics
+        if (config["haptics"]) {
+            auto h = config["haptics"];
+            if (h["enabled"]) haptics_enabled = h["enabled"].as<bool>();
+            if (h["websocket_url"]) haptics_ws_url = h["websocket_url"].as<std::string>();
+            if (h["workspace_center"]) {
+                auto wc = h["workspace_center"];
+                haptics_workspace_center[0] = wc[0].as<double>();
+                haptics_workspace_center[1] = wc[1].as<double>();
+                haptics_workspace_center[2] = wc[2].as<double>();
+            }
+            if (h["sim_offset"]) {
+                auto so = h["sim_offset"];
+                haptics_sim_offset[0] = so[0].as<double>();
+                haptics_sim_offset[1] = so[1].as<double>();
+                haptics_sim_offset[2] = so[2].as<double>();
+            }
+            if (h["scale"]) haptics_scale = h["scale"].as<double>();
+            if (h["versagrip_correction"]) haptics_versagrip_correction = h["versagrip_correction"].as<bool>();
+            if (h["button_activates_knife"]) haptics_button_activates_knife = h["button_activates_knife"].as<bool>();
+            if (h["pos_axes"]) {
+                auto pa = h["pos_axes"];
+                haptics_pos_axes[0] = pa[0].as<int>();
+                haptics_pos_axes[1] = pa[1].as<int>();
+                haptics_pos_axes[2] = pa[2].as<int>();
+            }
+            if (h["pos_signs"]) {
+                auto ps = h["pos_signs"];
+                haptics_pos_signs[0] = ps[0].as<double>();
+                haptics_pos_signs[1] = ps[1].as<double>();
+                haptics_pos_signs[2] = ps[2].as<double>();
             }
         }
 
