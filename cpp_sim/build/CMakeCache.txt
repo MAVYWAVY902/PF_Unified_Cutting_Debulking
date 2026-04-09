@@ -432,6 +432,9 @@ pf_shape_matching_IS_TOP_LEVEL:STATIC=ON
 //Value Computed by CMake
 pf_shape_matching_SOURCE_DIR:STATIC=/home/yunxin/pf-shape-matching/cpp_sim
 
+//The directory containing a CMake configuration file for yaml-cpp.
+yaml-cpp_DIR:PATH=/home/yunxin/miniconda3/lib/cmake/yaml-cpp
+
 
 ########################
 # INTERNAL cache entries

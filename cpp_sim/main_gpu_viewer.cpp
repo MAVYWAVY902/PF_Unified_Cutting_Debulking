@@ -7,6 +7,7 @@
 #include "core/tet_mesh.h"
 #include "core/pf_calculator.h"
 #include "core/cutting_manager.h"
+#include "core/sim_config.h"
 #include "render/viewer.h"
 #include <iostream>
 #include <vector>
@@ -215,25 +216,53 @@ bool cpu_bfs_split(
 
 int main(int argc, char** argv) {
     std::string input = (argc > 1) ? argv[1] : "10";
-    bool is_number = !input.empty() && std::all_of(input.begin(), input.end(), ::isdigit);
+
+    // 加载配置
+    SimConfigYAML cfg;
+    bool config_loaded = false;
+    if (input.size() > 5 && input.substr(input.size()-5) == ".yaml") {
+        if (!cfg.load(input)) return 1;
+        config_loaded = true;
+        std::cout << "加载配置: " << input << std::endl;
+    }
+
+    // 判断输入类型
+    bool is_mesh = false;
+    if (config_loaded) {
+        is_mesh = !cfg.mesh_path.empty() && !cfg.use_particle_grid;
+    } else {
+        bool is_number = !input.empty() && std::all_of(input.begin(), input.end(), ::isdigit);
+        if (!is_number && input.size() > 4) {
+            is_mesh = true;
+            cfg.mesh_path = input;
+        } else {
+            cfg.use_particle_grid = true;
+            cfg.grid_side = std::atoi(input.c_str());
+        }
+    }
 
     // CPU 端数据（viewer 读取用）
     ShapeMatchingSolver cpu_solver;
     TetMesh tet_mesh;
     bool use_tet = false;
+    double mesh_height = 0.5;
 
-    if (!is_number && input.size() > 4) {
+    if (is_mesh) {
         // Tet mesh 模式
         std::cout << "=== GPU Shape Matching + Viewer (Tet Mesh) ===" << std::endl;
-        if (!tet_mesh.load_msh(input)) {
-            std::cerr << "加载失败: " << input << std::endl;
+        if (!tet_mesh.load_msh(cfg.mesh_path)) {
+            std::cerr << "加载失败: " << cfg.mesh_path << std::endl;
             return 1;
         }
         use_tet = true;
 
-        double min_y = 1e10;
-        for (auto& v : tet_mesh.vertices) min_y = std::min(min_y, v.y());
+        double min_y = 1e10, max_y = -1e10;
+        for (auto& v : tet_mesh.vertices) {
+            min_y = std::min(min_y, v.y());
+            max_y = std::max(max_y, v.y());
+        }
         double y_offset = -min_y + 0.001;
+        mesh_height = max_y - min_y;
 
         for (int i = 0; i < tet_mesh.num_vertices(); i++) {
             Vec3 pos = tet_mesh.vertices[i] + Vec3(0, y_offset, 0);
@@ -243,22 +272,28 @@ int main(int argc, char** argv) {
 
         // 固定底面
         int fixed_count = 0;
-        for (int i = 0; i < cpu_solver.particles.size(); i++) {
-            if (cpu_solver.particles[i].pos.y() < 0.05) {
-                cpu_solver.particles[i].fixed = true;
-                fixed_count++;
+        if (cfg.fix_bottom) {
+            double fixed_threshold = 0.001 + mesh_height * cfg.fixed_ratio;
+            for (int i = 0; i < cpu_solver.particles.size(); i++) {
+                if (cpu_solver.particles[i].pos.y() < fixed_threshold) {
+                    cpu_solver.particles[i].fixed = true;
+                    fixed_count++;
+                }
             }
+            std::cout << "固定底面粒子: " << fixed_count << " / " << cpu_solver.particles.size()
+                      << " (阈值: " << fixed_threshold << ")" << std::endl;
+        } else {
+            std::cout << "底面固定: 关闭" << std::endl;
         }
-        std::cout << "固定底面粒子: " << fixed_count << " 个" << std::endl;
 
-        cpu_solver.clusters = tet_mesh.build_clusters_from_tets(cpu_solver.particles, 2);
+        cpu_solver.clusters = tet_mesh.build_clusters_from_tets(cpu_solver.particles, cfg.cluster_rings);
         std::cout << "粒子: " << cpu_solver.particles.size()
                   << ", 簇: " << cpu_solver.clusters.size() << std::endl;
     } else {
         // 粒子模式
-        int side = std::atoi(input.c_str());
         std::cout << "=== GPU Shape Matching + Viewer (粒子模式) ===" << std::endl;
-        double spacing = 0.02;
+        double spacing = cfg.grid_spacing;
+        int side = cfg.grid_side;
         for (int x = 0; x < side; x++)
             for (int y = 0; y < side; y++)
                 for (int z = 0; z < side; z++)
@@ -311,7 +346,7 @@ int main(int argc, char** argv) {
     // --- 初始化 edges（cutting 用）---
     // 从 CuttingManager 获取边数据
     PFCalculator pf_calc;
-    pf_calc.alpha_min = 10.0f;
+    pf_calc.alpha_min = cfg.alpha_min;
     if (use_tet) {
         pf_calc.init_from_tets(tet_mesh.tets, N);
     } else {
@@ -319,7 +354,7 @@ int main(int argc, char** argv) {
     }
 
     CuttingManager cutting_mgr;
-    cutting_mgr.alpha_min = 10.0f;
+    cutting_mgr.alpha_min = cfg.alpha_min;
     cutting_mgr.tau_low = 0.05f;
     cutting_mgr.init(cpu_solver.clusters, cpu_solver.particles);
 
@@ -334,22 +369,67 @@ int main(int argc, char** argv) {
     int num_edges = (int)edge_a.size();
     std::cout << "边数: " << num_edges << std::endl;
 
+    // --- 计算mesh统计量，用于auto参数 ---
+    float avg_spacing = 0.0f;
+    {
+        int sample = std::min(N, 1000);
+        double total_nn = 0.0; int count = 0;
+        for (int i = 0; i < sample; i++) {
+            float best = 1e10f;
+            for (int j = 0; j < N; j++) {
+                if (j == i) continue;
+                float dx = positions[i].x - positions[j].x;
+                float dy = positions[i].y - positions[j].y;
+                float dz = positions[i].z - positions[j].z;
+                float d2 = dx*dx + dy*dy + dz*dz;
+                if (d2 < best) best = d2;
+            }
+            total_nn += sqrtf(best); count++;
+        }
+        avg_spacing = (float)(total_nn / count);
+    }
+
+    double avg_cluster_membership = 0;
+    {
+        std::vector<int> membership(N, 0);
+        for (auto& c : cpu_solver.clusters)
+            for (int pid : c.particle_ids) membership[pid]++;
+        double sum = 0; int cnt = 0;
+        for (int i = 0; i < N; i++) {
+            if (!cpu_solver.particles[i].fixed && membership[i] > 0) {
+                sum += membership[i]; cnt++;
+            }
+        }
+        avg_cluster_membership = cnt > 0 ? sum / cnt : 1.0;
+    }
+    std::cout << "平均粒子间距: " << avg_spacing
+              << ", cluster membership: " << avg_cluster_membership << std::endl;
+
+    // --- Resolve auto 参数 ---
+    cfg.resolve_auto(avg_spacing, mesh_height, avg_cluster_membership);
+
     // --- 初始化 GPU solver ---
     ShapeMatchingGPUSolver gpu_solver;
-    gpu_solver.config.dt = 0.005f;
-    gpu_solver.config.gravity = make_float3(0, -9.81f, 0);
-    gpu_solver.config.num_iterations = 4;
-    gpu_solver.config.stiffness = 0.6f;
-    gpu_solver.config.damping = 0.98f;
-    gpu_solver.config.floor_y = 0.0f;
-    gpu_solver.config.knife_pos = make_float3(100, 100, 100);  // 远离
-    gpu_solver.config.knife_radius = 0.1f;
+    gpu_solver.config.dt = cfg.dt;
+    gpu_solver.config.gravity = make_float3(cfg.gravity[0], cfg.gravity[1], cfg.gravity[2]);
+    gpu_solver.config.num_iterations = cfg.num_iterations;
+    gpu_solver.config.stiffness = cfg.stiffness;
+    gpu_solver.config.damping = cfg.damping;
+    gpu_solver.config.floor_y = cfg.floor_y;
+    gpu_solver.config.knife_pos = make_float3(100, 100, 100);
+    gpu_solver.config.knife_radius = cfg.knife_radius;
     gpu_solver.config.knife_active = 0;
-    gpu_solver.config.self_collision_radius = 0.012f;
-    gpu_solver.config.self_collision_stiffness = 0.8f;
-    gpu_solver.config.self_collision_enabled = 1;
+    gpu_solver.config.self_collision_radius = cfg.self_collision_radius;
+    gpu_solver.config.self_collision_stiffness = cfg.self_collision_stiffness;
+    gpu_solver.config.self_collision_enabled = cfg.self_collision_enabled ? 1 : 0;
 
-    gpu_solver.cutting_update_interval = 50;  // 更频繁的 cutting 更新（交互模式）
+    int substeps = cfg.substeps;
+
+    gpu_solver.cutting_update_interval = cfg.cutting_interval;
+    gpu_solver.alpha_min = cfg.alpha_min;
+    gpu_solver.aspiration_threshold = cfg.aspiration_threshold;
+
+    cfg.print();
 
     gpu_solver.init(positions, velocities, removed, fixed,
                     cluster_starts, cluster_sizes,
@@ -370,13 +450,17 @@ int main(int argc, char** argv) {
     viewer.particle_damage_array = &cpu_damage;
     viewer.num_clusters_display = C;
 
+    // 同步参数到viewer
+    viewer.knife_radius = gpu_solver.config.knife_radius;
+    viewer.substeps_per_frame = substeps;
+
     if (use_tet) {
         viewer.tet_mesh = &tet_mesh;
-        viewer.draw_surface = true;
-        viewer.draw_wireframe = false;
-        viewer.draw_points = true;
+        viewer.draw_surface = cfg.draw_surface;
+        viewer.draw_wireframe = cfg.draw_wireframe;
+        viewer.draw_points = cfg.draw_points;
     } else {
-        viewer.draw_points = true;
+        viewer.draw_points = cfg.draw_points;
     }
 
     int timing_frame = 0;

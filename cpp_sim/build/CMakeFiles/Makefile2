@@ -67,6 +67,7 @@ all: CMakeFiles/pf_sim.dir/all
 all: CMakeFiles/pf_sim_gpu.dir/all
 all: CMakeFiles/pf_sim_gpu_viewer.dir/all
 all: CMakeFiles/verify_gpu.dir/all
+all: CMakeFiles/debug_tumor.dir/all
 .PHONY : all
 
 # The main recursive "preinstall" target.
@@ -78,6 +79,7 @@ clean: CMakeFiles/pf_sim.dir/clean
 clean: CMakeFiles/pf_sim_gpu.dir/clean
 clean: CMakeFiles/pf_sim_gpu_viewer.dir/clean
 clean: CMakeFiles/verify_gpu.dir/clean
+clean: CMakeFiles/debug_tumor.dir/clean
 .PHONY : clean
 
 #=============================================================================
@@ -87,7 +89,7 @@ clean: CMakeFiles/verify_gpu.dir/clean
 CMakeFiles/pf_sim.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim.dir/build.make CMakeFiles/pf_sim.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim.dir/build.make CMakeFiles/pf_sim.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=1,2 "Built target pf_sim"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=4,5 "Built target pf_sim"
 .PHONY : CMakeFiles/pf_sim.dir/all
 
 # Build rule for subdir invocation for target.
@@ -113,7 +115,7 @@ CMakeFiles/pf_sim.dir/clean:
 CMakeFiles/pf_sim_gpu.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=3,4,5 "Built target pf_sim_gpu"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=6,7,8 "Built target pf_sim_gpu"
 .PHONY : CMakeFiles/pf_sim_gpu.dir/all
 
 # Build rule for subdir invocation for target.
@@ -139,7 +141,7 @@ CMakeFiles/pf_sim_gpu.dir/clean:
 CMakeFiles/pf_sim_gpu_viewer.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=6,7,8 "Built target pf_sim_gpu_viewer"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=9,10,11 "Built target pf_sim_gpu_viewer"
 .PHONY : CMakeFiles/pf_sim_gpu_viewer.dir/all
 
 # Build rule for subdir invocation for target.
@@ -165,7 +167,7 @@ CMakeFiles/pf_sim_gpu_viewer.dir/clean:
 CMakeFiles/verify_gpu.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=9,10,11 "Built target verify_gpu"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=12,13,14 "Built target verify_gpu"
 .PHONY : CMakeFiles/verify_gpu.dir/all
 
 # Build rule for subdir invocation for target.
@@ -183,6 +185,32 @@ verify_gpu: CMakeFiles/verify_gpu.dir/rule
 CMakeFiles/verify_gpu.dir/clean:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/clean
 .PHONY : CMakeFiles/verify_gpu.dir/clean
+
+#=============================================================================
+# Target rules for target CMakeFiles/debug_tumor.dir
+
+# All Build rule for target.
+CMakeFiles/debug_tumor.dir/all:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --progress-dir=/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles --progress-num=1,2,3 "Built target debug_tumor"
+.PHONY : CMakeFiles/debug_tumor.dir/all
+
+# Build rule for subdir invocation for target.
+CMakeFiles/debug_tumor.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 3
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/debug_tumor.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles 0
+.PHONY : CMakeFiles/debug_tumor.dir/rule
+
+# Convenience name for target.
+debug_tumor: CMakeFiles/debug_tumor.dir/rule
+.PHONY : debug_tumor
+
+# clean rule for target.
+CMakeFiles/debug_tumor.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/clean
+.PHONY : CMakeFiles/debug_tumor.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

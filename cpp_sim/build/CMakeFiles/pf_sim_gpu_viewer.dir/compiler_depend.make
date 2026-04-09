@@ -598,6 +598,54 @@ CMakeFiles/pf_sim_gpu_viewer.dir/main_gpu_viewer.cpp.o: ../main_gpu_viewer.cpp \
   /usr/include/c++/11/map \
   /usr/include/c++/11/bits/stl_map.h \
   /usr/include/c++/11/bits/stl_multimap.h \
+  ../core/sim_config.h \
+  /usr/include/yaml-cpp/yaml.h \
+  /usr/include/yaml-cpp/parser.h \
+  /usr/include/c++/11/memory \
+  /usr/include/c++/11/bits/stl_raw_storage_iter.h \
+  /usr/include/c++/11/bits/align.h \
+  /usr/include/c++/11/bits/unique_ptr.h \
+  /usr/include/c++/11/bits/shared_ptr.h \
+  /usr/include/c++/11/bits/shared_ptr_base.h \
+  /usr/include/c++/11/bits/allocated_ptr.h \
+  /usr/include/c++/11/ext/concurrence.h \
+  /usr/include/c++/11/bits/shared_ptr_atomic.h \
+  /usr/include/c++/11/backward/auto_ptr.h \
+  /usr/include/c++/11/pstl/glue_memory_defs.h \
+  /usr/include/yaml-cpp/dll.h \
+  /usr/include/yaml-cpp/emitter.h \
+  /usr/include/yaml-cpp/binary.h \
+  /usr/include/yaml-cpp/emitterdef.h \
+  /usr/include/yaml-cpp/emittermanip.h \
+  /usr/include/yaml-cpp/null.h \
+  /usr/include/yaml-cpp/ostream_wrapper.h \
+  /usr/include/yaml-cpp/emitterstyle.h \
+  /usr/include/yaml-cpp/stlemitter.h \
+  /usr/include/c++/11/list \
+  /usr/include/c++/11/bits/stl_list.h \
+  /usr/include/c++/11/bits/list.tcc \
+  /usr/include/yaml-cpp/exceptions.h \
+  /usr/include/yaml-cpp/mark.h \
+  /usr/include/yaml-cpp/noexcept.h \
+  /usr/include/yaml-cpp/traits.h \
+  /usr/include/yaml-cpp/node/node.h \
+  /usr/include/yaml-cpp/node/detail/iterator_fwd.h \
+  /usr/include/yaml-cpp/node/ptr.h \
+  /usr/include/yaml-cpp/node/type.h \
+  /usr/include/yaml-cpp/node/impl.h \
+  /usr/include/yaml-cpp/node/detail/memory.h \
+  /usr/include/yaml-cpp/node/detail/node.h \
+  /usr/include/yaml-cpp/node/detail/node_ref.h \
+  /usr/include/yaml-cpp/node/detail/node_data.h \
+  /usr/include/yaml-cpp/node/detail/node_iterator.h \
+  /usr/include/c++/11/iterator \
+  /usr/include/c++/11/bits/stream_iterator.h \
+  /usr/include/yaml-cpp/node/iterator.h \
+  /usr/include/yaml-cpp/node/detail/iterator.h \
+  /usr/include/yaml-cpp/node/convert.h \
+  /usr/include/yaml-cpp/node/detail/impl.h \
+  /usr/include/yaml-cpp/node/parse.h \
+  /usr/include/yaml-cpp/node/emit.h \
   ../render/viewer.h \
   /usr/include/GL/glew.h \
   /usr/include/GL/glu.h \
@@ -818,10 +866,618 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
   /usr/include/stdint.h \
   /usr/include/x86_64-linux-gnu/bits/wchar.h \
   /usr/include/x86_64-linux-gnu/bits/stdint-uintn.h \
-  /usr/include/c++/11/cstdio
+  /usr/local/cuda-11.8/include/cub/cub.cuh \
+  /usr/local/cuda-11.8/include/cub/config.cuh \
+  /usr/local/cuda-11.8/include/cub/util_arch.cuh \
+  /usr/local/cuda-11.8/include/cub/util_cpp_dialect.cuh \
+  /usr/local/cuda-11.8/include/cub/util_compiler.cuh \
+  /usr/local/cuda-11.8/include/cub/util_namespace.cuh \
+  /usr/local/cuda-11.8/include/cub/version.cuh \
+  /usr/local/cuda-11.8/include/cub/util_macro.cuh \
+  /usr/local/cuda-11.8/include/cub/util_deprecated.cuh \
+  /usr/local/cuda-11.8/include/cub/block/block_histogram.cuh \
+  /usr/local/cuda-11.8/include/cub/block/specializations/block_histogram_sort.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_radix_sort.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_exchange.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/util_ptx.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/util_type.cuh \
+  /usr/include/c++/11/iostream \
+  /usr/include/c++/11/ostream \
+  /usr/include/c++/11/ios \
+  /usr/include/c++/11/iosfwd \
+  /usr/include/c++/11/bits/stringfwd.h \
+  /usr/include/c++/11/bits/postypes.h \
+  /usr/include/c++/11/cwchar \
+  /usr/include/wchar.h \
+  /usr/include/x86_64-linux-gnu/bits/types/wint_t.h \
+  /usr/include/x86_64-linux-gnu/bits/types/mbstate_t.h \
+  /usr/include/x86_64-linux-gnu/bits/wchar2.h \
+  /usr/include/c++/11/exception \
+  /usr/include/c++/11/bits/exception_ptr.h \
+  /usr/include/c++/11/bits/cxxabi_init_exception.h \
+  /usr/include/c++/11/typeinfo \
+  /usr/include/c++/11/bits/nested_exception.h \
+  /usr/include/c++/11/bits/char_traits.h \
+  /usr/include/c++/11/cstdint \
+  /usr/include/c++/11/bits/localefwd.h \
+  /usr/include/x86_64-linux-gnu/c++/11/bits/c++locale.h \
+  /usr/include/c++/11/clocale \
+  /usr/include/locale.h \
+  /usr/include/x86_64-linux-gnu/bits/locale.h \
+  /usr/include/c++/11/cctype \
+  /usr/include/ctype.h \
+  /usr/include/c++/11/bits/ios_base.h \
+  /usr/include/c++/11/ext/atomicity.h \
+  /usr/include/x86_64-linux-gnu/c++/11/bits/gthr.h \
+  /usr/include/x86_64-linux-gnu/c++/11/bits/gthr-default.h \
+  /usr/include/pthread.h \
+  /usr/include/sched.h \
+  /usr/include/x86_64-linux-gnu/bits/sched.h \
+  /usr/include/x86_64-linux-gnu/bits/types/struct_sched_param.h \
+  /usr/include/x86_64-linux-gnu/bits/cpu-set.h \
+  /usr/include/x86_64-linux-gnu/bits/setjmp.h \
+  /usr/include/x86_64-linux-gnu/bits/types/struct___jmp_buf_tag.h \
+  /usr/include/x86_64-linux-gnu/c++/11/bits/atomic_word.h \
+  /usr/include/x86_64-linux-gnu/sys/single_threaded.h \
+  /usr/include/c++/11/bits/locale_classes.h \
+  /usr/include/c++/11/string \
+  /usr/include/c++/11/bits/ostream_insert.h \
+  /usr/include/c++/11/bits/cxxabi_forced.h \
+  /usr/include/c++/11/bits/stl_function.h \
+  /usr/include/c++/11/backward/binders.h \
+  /usr/include/c++/11/bits/basic_string.h \
+  /usr/include/c++/11/string_view \
+  /usr/include/c++/11/bits/string_view.tcc \
+  /usr/include/c++/11/ext/string_conversions.h \
+  /usr/include/c++/11/cstdio \
+  /usr/include/c++/11/cerrno \
+  /usr/include/errno.h \
+  /usr/include/x86_64-linux-gnu/bits/errno.h \
+  /usr/include/linux/errno.h \
+  /usr/include/x86_64-linux-gnu/asm/errno.h \
+  /usr/include/asm-generic/errno.h \
+  /usr/include/asm-generic/errno-base.h \
+  /usr/include/x86_64-linux-gnu/bits/types/error_t.h \
+  /usr/include/c++/11/bits/charconv.h \
+  /usr/include/c++/11/bits/basic_string.tcc \
+  /usr/include/c++/11/bits/locale_classes.tcc \
+  /usr/include/c++/11/system_error \
+  /usr/include/x86_64-linux-gnu/c++/11/bits/error_constants.h \
+  /usr/include/c++/11/stdexcept \
+  /usr/include/c++/11/streambuf \
+  /usr/include/c++/11/bits/streambuf.tcc \
+  /usr/include/c++/11/bits/basic_ios.h \
+  /usr/include/c++/11/bits/locale_facets.h \
+  /usr/include/c++/11/cwctype \
+  /usr/include/wctype.h \
+  /usr/include/x86_64-linux-gnu/bits/wctype-wchar.h \
+  /usr/include/x86_64-linux-gnu/c++/11/bits/ctype_base.h \
+  /usr/include/c++/11/bits/streambuf_iterator.h \
+  /usr/include/x86_64-linux-gnu/c++/11/bits/ctype_inline.h \
+  /usr/include/c++/11/bits/locale_facets.tcc \
+  /usr/include/c++/11/bits/basic_ios.tcc \
+  /usr/include/c++/11/bits/ostream.tcc \
+  /usr/include/c++/11/istream \
+  /usr/include/c++/11/bits/istream.tcc \
+  /usr/include/c++/11/cfloat \
+  /usr/lib/gcc/x86_64-linux-gnu/11/include/float.h \
+  /usr/local/cuda-11.8/include/cuda_fp16.h \
+  /usr/local/cuda-11.8/include/cuda_fp16.hpp \
+  /usr/local/cuda-11.8/include/cuda_bf16.h \
+  /usr/local/cuda-11.8/include/cuda_bf16.hpp \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/util_debug.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/warp_exchange.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_radix_rank.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_reduce.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_operators.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_scan.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_scan.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/specializations/block_scan_raking.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_raking_layout.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/warp_scan.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/specializations/warp_scan_shfl.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/specializations/warp_scan_smem.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_load.cuh \
+  /usr/include/c++/11/iterator \
+  /usr/include/c++/11/bits/stream_iterator.h \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_store.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/specializations/block_scan_warp_scans.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/radix_rank_sort_operations.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_discontinuity.cuh \
+  /usr/local/cuda-11.8/include/cub/block/specializations/block_histogram_atomic.cuh \
+  /usr/local/cuda-11.8/include/cub/block/block_load.cuh \
+  /usr/local/cuda-11.8/include/cub/iterator/cache_modified_input_iterator.cuh \
+  /usr/local/cuda-11.8/include/cub/util_device.cuh \
+  /usr/local/cuda-11.8/include/cub/detail/device_synchronize.cuh \
+  /usr/local/cuda-11.8/include/cub/detail/exec_check_disable.cuh \
+  /usr/include/c++/11/atomic \
+  /usr/include/c++/11/bits/atomic_base.h \
+  /usr/include/c++/11/bits/atomic_lockfree_defines.h \
+  /usr/include/c++/11/array \
+  /usr/include/c++/11/cassert \
+  /usr/local/cuda-11.8/include/cub/block/block_merge_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/thread/thread_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/util_math.cuh \
+  /usr/local/cuda-11.8/include/cub/block/block_reduce.cuh \
+  /usr/local/cuda-11.8/include/cub/block/specializations/block_reduce_raking.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/warp_reduce.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/specializations/warp_reduce_shfl.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/specializations/warp_reduce_smem.cuh \
+  /usr/local/cuda-11.8/include/cub/block/specializations/block_reduce_raking_commutative_only.cuh \
+  /usr/local/cuda-11.8/include/cub/block/specializations/block_reduce_warp_reductions.cuh \
+  /usr/local/cuda-11.8/include/cub/block/block_store.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_merge_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_merge_sort.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_merge_sort.cuh \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/detail/core/util.h \
+  /usr/local/cuda-11.8/include/cuda_occupancy.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config.h \
+  /usr/local/cuda-11.8/include/thrust/version.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/config.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/simple_defines.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/compiler.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/cpp_dialect.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/cpp_compatibility.h \
+  /usr/include/c++/11/cstddef \
+  /usr/local/cuda-11.8/include/thrust/detail/config/deprecated.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/host_system.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/device_system.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/host_device.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/debug.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/forceinline.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/exec_check_disable.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/global_workarounds.h \
+  /usr/local/cuda-11.8/include/thrust/detail/config/namespace.h \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/config.h \
+  /usr/local/cuda-11.8/include/thrust/type_traits/is_contiguous_iterator.h \
+  /usr/local/cuda-11.8/include/thrust/detail/type_traits.h \
+  /usr/local/cuda-11.8/include/thrust/detail/type_traits/has_trivial_assign.h \
+  /usr/local/cuda-11.8/include/thrust/detail/type_traits/pointer_traits.h \
+  /usr/local/cuda-11.8/include/thrust/detail/type_traits/is_metafunction_defined.h \
+  /usr/local/cuda-11.8/include/thrust/detail/type_traits/has_nested_type.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/iterator_traits.h \
+  /usr/local/cuda-11.8/include/thrust/type_traits/void_t.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_traversal_tags.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/host_system_tag.h \
+  /usr/local/cuda-11.8/include/thrust/system/cpp/detail/execution_policy.h \
+  /usr/local/cuda-11.8/include/thrust/system/detail/sequential/execution_policy.h \
+  /usr/local/cuda-11.8/include/thrust/detail/execution_policy.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/device_system_tag.h \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/detail/execution_policy.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/any_system_tag.h \
+  /usr/local/cuda-11.8/include/thrust/detail/allocator_aware_execution_policy.h \
+  /usr/local/cuda-11.8/include/thrust/detail/execute_with_allocator_fwd.h \
+  /usr/local/cuda-11.8/include/thrust/detail/execute_with_dependencies.h \
+  /usr/local/cuda-11.8/include/thrust/detail/cpp11_required.h \
+  /usr/local/cuda-11.8/include/thrust/detail/type_deduction.h \
+  /usr/local/cuda-11.8/include/thrust/detail/preprocessor.h \
+  /usr/local/cuda-11.8/include/thrust/type_traits/remove_cvref.h \
+  /usr/include/c++/11/version \
+  /usr/include/c++/11/tuple \
+  /usr/include/c++/11/bits/uses_allocator.h \
+  /usr/include/c++/11/bits/invoke.h \
+  /usr/local/cuda-11.8/include/thrust/detail/alignment.h \
+  /usr/local/cuda-11.8/include/thrust/detail/dependencies_aware_execution_policy.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_traits.inl \
+  /usr/local/cuda-11.8/include/thrust/iterator/iterator_categories.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_category_with_system_and_traversal.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/universal_categories.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_category_to_traversal.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_category_to_system.h \
+  /usr/local/cuda-11.8/include/thrust/detail/raw_pointer_cast.h \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/detail/util.h \
+  /usr/local/cuda-11.8/include/thrust/system_error.h \
+  /usr/local/cuda-11.8/include/thrust/system/error_code.h \
+  /usr/local/cuda-11.8/include/thrust/system/detail/errno.h \
+  /usr/local/cuda-11.8/include/thrust/system/detail/error_category.inl \
+  /usr/local/cuda-11.8/include/thrust/functional.h \
+  /usr/include/c++/11/functional \
+  /usr/include/c++/11/bits/refwrap.h \
+  /usr/include/c++/11/bits/std_function.h \
+  /usr/include/c++/11/unordered_map \
+  /usr/include/c++/11/ext/aligned_buffer.h \
+  /usr/include/c++/11/bits/hashtable.h \
+  /usr/include/c++/11/bits/hashtable_policy.h \
+  /usr/include/c++/11/bits/enable_special_members.h \
+  /usr/include/c++/11/bits/node_handle.h \
+  /usr/include/c++/11/bits/unordered_map.h \
+  /usr/include/c++/11/bits/erase_if.h \
+  /usr/include/c++/11/bits/stl_algo.h \
+  /usr/include/c++/11/bits/algorithmfwd.h \
+  /usr/include/c++/11/bits/stl_heap.h \
+  /usr/include/c++/11/bits/stl_tempbuf.h \
+  /usr/include/c++/11/bits/uniform_int_dist.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/placeholder.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/actor.h \
+  /usr/local/cuda-11.8/include/thrust/tuple.h \
+  /usr/local/cuda-11.8/include/thrust/detail/tuple.inl \
+  /usr/local/cuda-11.8/include/thrust/detail/swap.h \
+  /usr/local/cuda-11.8/include/thrust/pair.h \
+  /usr/local/cuda-11.8/include/thrust/detail/pair.inl \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/value.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/composite.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/operators/assignment_operator.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/operators/operator_adaptors.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/argument.h \
+  /usr/local/cuda-11.8/include/thrust/detail/raw_reference_cast.h \
+  /usr/local/cuda-11.8/include/thrust/detail/tuple_transform.h \
+  /usr/local/cuda-11.8/include/thrust/detail/tuple_meta_transform.h \
+  /usr/local/cuda-11.8/include/thrust/type_traits/integer_sequence.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/tuple_of_iterator_references.h \
+  /usr/local/cuda-11.8/include/thrust/detail/reference_forward_declaration.h \
+  /usr/local/cuda-11.8/include/thrust/detail/use_default.h \
+  /usr/local/cuda-11.8/include/thrust/detail/type_traits/result_of_adaptable_function.h \
+  /usr/local/cuda-11.8/include/thrust/detail/type_traits/function_traits.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/actor.inl \
+  /usr/local/cuda-11.8/include/thrust/type_traits/logical_metafunctions.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional.inl \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/operators.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/operators/arithmetic_operators.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/operators/relational_operators.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/operators/logical_operators.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/operators/bitwise_operators.h \
+  /usr/local/cuda-11.8/include/thrust/detail/functional/operators/compound_assignment_operators.h \
+  /usr/include/c++/11/cstring \
+  /usr/local/cuda-11.8/include/thrust/system/detail/error_code.inl \
+  /usr/local/cuda-11.8/include/thrust/system/detail/error_condition.inl \
+  /usr/local/cuda-11.8/include/thrust/system/system_error.h \
+  /usr/local/cuda-11.8/include/thrust/system/detail/system_error.inl \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/error.h \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/detail/guarded_driver_types.h \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/detail/error.inl \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/detail/guarded_cuda_runtime_api.h \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/detail/core/triple_chevron_launch.h \
+  /usr/local/cuda-11.8/include/thrust/system/cuda/detail/core/alignment.h \
+  /usr/local/cuda-11.8/include/thrust/detail/integer_math.h \
+  /usr/local/cuda-11.8/include/cub/device/device_histogram.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_histogram.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_histogram.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/grid/grid_queue.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_search.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_partition.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_select_if.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_scan.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_scan.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/single_pass_scan_operators.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_select_if.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_three_way_partition.cuh \
+  /usr/local/cuda-11.8/include/cub/agent/agent_three_way_partition.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_radix_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_radix_sort.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_radix_sort_histogram.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_radix_sort_onesweep.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_radix_sort_upsweep.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_radix_sort_downsweep.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/grid/grid_even_share.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/grid/grid_mapping.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_reduce.cuh \
+  /usr/local/cuda-11.8/include/cub/iterator/arg_index_input_iterator.cuh \
+  /usr/local/cuda-11.8/include/thrust/iterator/iterator_facade.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_facade_category.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/is_iterator_category.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/distance_from_result.h \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_reduce.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_reduce.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_reduce_by_key.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_reduce_by_key.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/iterator/constant_input_iterator.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_run_length_encode.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_rle.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_rle.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_scan.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_scan_by_key.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_scan_by_key.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_segmented_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_segmented_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/agent/agent_segmented_radix_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/detail/temporary_storage.cuh \
+  /usr/local/cuda-11.8/include/cub/detail/device_double_buffer.cuh \
+  /usr/local/cuda-11.8/include/cub/agent/agent_sub_warp_merge_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/warp/warp_load.cuh \
+  /usr/local/cuda-11.8/include/cub/warp/warp_merge_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/warp/warp_store.cuh \
+  /usr/local/cuda-11.8/include/thrust/iterator/counting_iterator.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/iterator_adaptor.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_adaptor_base.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/counting_iterator.inl \
+  /usr/local/cuda-11.8/include/thrust/detail/numeric_traits.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/reverse_iterator.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/reverse_iterator_base.h \
+  /usr/local/cuda-11.8/include/thrust/iterator/detail/reverse_iterator.inl \
+  /usr/local/cuda-11.8/include/cub/device/device_segmented_radix_sort.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_segmented_reduce.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_select.cuh \
+  /usr/local/cuda-11.8/include/cub/device/device_spmv.cuh \
+  /usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_spmv_orig.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_segment_fixup.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_spmv_orig.cuh \
+  /usr/local/cuda-11.8/targets/x86_64-linux/include/cub/iterator/counting_input_iterator.cuh \
+  /usr/local/cuda-11.8/include/cub/iterator/cache_modified_output_iterator.cuh \
+  /usr/local/cuda-11.8/include/cub/iterator/discard_output_iterator.cuh \
+  /usr/local/cuda-11.8/include/cub/iterator/tex_obj_input_iterator.cuh \
+  /usr/local/cuda-11.8/include/cub/iterator/tex_ref_input_iterator.cuh \
+  /usr/local/cuda-11.8/include/cub/iterator/transform_input_iterator.cuh \
+  /usr/local/cuda-11.8/include/cub/util_allocator.cuh \
+  /usr/include/c++/11/set \
+  /usr/include/c++/11/bits/stl_tree.h \
+  /usr/include/c++/11/bits/stl_set.h \
+  /usr/include/c++/11/bits/stl_multiset.h \
+  /usr/include/c++/11/map \
+  /usr/include/c++/11/bits/stl_map.h \
+  /usr/include/c++/11/bits/stl_multimap.h \
+  /usr/local/cuda-11.8/include/cub/host/mutex.cuh \
+  /usr/include/c++/11/mutex \
+  /usr/include/c++/11/chrono \
+  /usr/include/c++/11/ratio \
+  /usr/include/c++/11/ctime \
+  /usr/include/c++/11/bits/parse_numbers.h \
+  /usr/include/c++/11/bits/std_mutex.h \
+  /usr/include/c++/11/bits/unique_lock.h
 
 
-/usr/local/cuda-11.8/include/cuda.h:
+/usr/include/c++/11/bits/unique_lock.h:
+
+/usr/include/c++/11/bits/std_mutex.h:
+
+/usr/include/c++/11/mutex:
+
+/usr/local/cuda-11.8/include/cub/iterator/tex_ref_input_iterator.cuh:
+
+/usr/local/cuda-11.8/include/cub/iterator/tex_obj_input_iterator.cuh:
+
+/usr/local/cuda-11.8/include/cub/iterator/discard_output_iterator.cuh:
+
+/usr/local/cuda-11.8/include/cub/iterator/cache_modified_output_iterator.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_spmv_orig.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/device_segmented_reduce.cuh:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/reverse_iterator.inl:
+
+/usr/local/cuda-11.8/include/thrust/iterator/reverse_iterator.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/numeric_traits.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/counting_iterator.inl:
+
+/usr/local/cuda-11.8/include/cub/util_allocator.cuh:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_adaptor_base.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/iterator_adaptor.h:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_reduce_by_key.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_reduce.cuh:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/is_iterator_category.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_radix_sort_downsweep.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_radix_sort_onesweep.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_reduce_by_key.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/device_radix_sort.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_select_if.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/single_pass_scan_operators.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_select_if.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/grid/grid_queue.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_histogram.cuh:
+
+/usr/local/cuda-11.8/include/thrust/detail/integer_math.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_facade_category.h:
+
+/usr/local/cuda-11.8/include/thrust/system/cuda/detail/guarded_cuda_runtime_api.h:
+
+/usr/local/cuda-11.8/include/thrust/system/cuda/error.h:
+
+/usr/local/cuda-11.8/include/thrust/system/system_error.h:
+
+/usr/local/cuda-11.8/include/thrust/system/detail/error_condition.inl:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/operators/bitwise_operators.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/operators/logical_operators.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional.inl:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/actor.inl:
+
+/usr/local/cuda-11.8/include/thrust/detail/use_default.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/raw_reference_cast.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/argument.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/operators/assignment_operator.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_rle.cuh:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/value.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/swap.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/tuple.inl:
+
+/usr/local/cuda-11.8/include/thrust/tuple.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/actor.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/placeholder.h:
+
+/usr/local/cuda-11.8/include/thrust/functional.h:
+
+/usr/local/cuda-11.8/include/thrust/system/detail/error_category.inl:
+
+/usr/local/cuda-11.8/include/thrust/system/error_code.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/raw_pointer_cast.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_category_to_system.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/universal_categories.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/iterator_categories.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_traits.inl:
+
+/usr/local/cuda-11.8/include/thrust/type_traits/remove_cvref.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/type_deduction.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/cpp11_required.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/execute_with_allocator_fwd.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/any_system_tag.h:
+
+/usr/local/cuda-11.8/include/thrust/system/cuda/detail/execution_policy.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/execution_policy.h:
+
+/usr/local/cuda-11.8/include/thrust/system/detail/sequential/execution_policy.h:
+
+/usr/local/cuda-11.8/include/thrust/system/cpp/detail/execution_policy.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/host_system_tag.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_traversal_tags.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/grid/grid_mapping.cuh:
+
+/usr/local/cuda-11.8/include/thrust/iterator/iterator_traits.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/type_traits/pointer_traits.h:
+
+/usr/local/cuda-11.8/include/thrust/type_traits/is_contiguous_iterator.h:
+
+/usr/local/cuda-11.8/include/cub/device/device_select.cuh:
+
+/usr/local/cuda-11.8/include/thrust/system/cuda/config.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/debug.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/deprecated.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/compiler.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config.h:
+
+/usr/local/cuda-11.8/include/cuda_occupancy.h:
+
+/usr/local/cuda-11.8/include/cub/device/device_histogram.cuh:
+
+/usr/local/cuda-11.8/include/thrust/system/cuda/detail/core/util.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_merge_sort.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_merge_sort.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/device_merge_sort.cuh:
+
+/usr/local/cuda-11.8/include/cub/block/block_store.cuh:
+
+/usr/local/cuda-11.8/include/cub/block/specializations/block_reduce_warp_reductions.cuh:
+
+/usr/local/cuda-11.8/include/cub/block/specializations/block_reduce_raking_commutative_only.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/specializations/warp_reduce_smem.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/iterator/constant_input_iterator.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/warp_reduce.cuh:
+
+/usr/local/cuda-11.8/include/cub/block/specializations/block_reduce_raking.cuh:
+
+/usr/local/cuda-11.8/include/cub/thread/thread_sort.cuh:
+
+/usr/local/cuda-11.8/include/cub/detail/exec_check_disable.cuh:
+
+/usr/local/cuda-11.8/include/cub/util_device.cuh:
+
+/usr/local/cuda-11.8/include/cub/block/specializations/block_histogram_atomic.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_discontinuity.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/specializations/block_scan_warp_scans.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/device_reduce.cuh:
+
+/usr/local/cuda-11.8/include/thrust/detail/dependencies_aware_execution_policy.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_store.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/specializations/warp_scan_shfl.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_raking_layout.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_scan.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/device_run_length_encode.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_load.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_scan.cuh:
+
+/usr/local/cuda-11.8/include/cub/agent/agent_segmented_radix_sort.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_radix_rank.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/warp_exchange.cuh:
+
+/usr/local/cuda-11.8/include/cuda_bf16.hpp:
+
+/usr/local/cuda-11.8/include/cuda_bf16.h:
+
+/usr/local/cuda-11.8/include/cuda_fp16.hpp:
+
+/usr/local/cuda-11.8/include/cuda_fp16.h:
+
+/usr/lib/gcc/x86_64-linux-gnu/11/include/float.h:
+
+/usr/local/cuda-11.8/include/thrust/version.h:
+
+/usr/include/c++/11/cfloat:
+
+/usr/local/cuda-11.8/include/thrust/system/detail/errno.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/util_type.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/util_ptx.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/util_debug.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_exchange.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/block_radix_sort.cuh:
+
+/usr/local/cuda-11.8/include/cub/block/block_histogram.cuh:
+
+/usr/local/cuda-11.8/include/cub/device/device_partition.cuh:
+
+/usr/local/cuda-11.8/include/cub/util_deprecated.cuh:
+
+/usr/local/cuda-11.8/include/cub/util_macro.cuh:
+
+/usr/local/cuda-11.8/include/cub/version.cuh:
+
+/usr/local/cuda-11.8/include/cub/util_namespace.cuh:
+
+/usr/local/cuda-11.8/include/cub/util_compiler.cuh:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/forceinline.h:
+
+/usr/local/cuda-11.8/include/cub/util_cpp_dialect.cuh:
+
+/usr/local/cuda-11.8/include/thrust/system/detail/system_error.inl:
 
 /usr/local/cuda-11.8/include/crt/cudacc_ext.h:
 
@@ -830,6 +1486,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/local/cuda-11.8/include/texture_indirect_functions.h:
 
 /usr/local/cuda-11.8/include/texture_fetch_functions.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/device_system.h:
 
 /usr/local/cuda-11.8/include/crt/sm_90_rt.h:
 
@@ -847,9 +1505,11 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/local/cuda-11.8/include/sm_20_intrinsics.hpp:
 
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_reduce.cuh:
+
 /usr/local/cuda-11.8/include/sm_20_intrinsics.h:
 
-/usr/local/cuda-11.8/include/sm_60_atomic_functions.hpp:
+/usr/local/cuda-11.8/include/cub/device/device_segmented_sort.cuh:
 
 /usr/local/cuda-11.8/include/sm_35_atomic_functions.h:
 
@@ -860,6 +1520,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/local/cuda-11.8/include/sm_20_atomic_functions.h:
 
 /usr/local/cuda-11.8/include/crt/device_double_functions.h:
+
+/usr/local/cuda-11.8/include/thrust/system/cuda/detail/error.inl:
 
 /usr/local/cuda-11.8/include/device_atomic_functions.hpp:
 
@@ -873,17 +1535,121 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/local/cuda-11.8/include/crt/common_functions.h:
 
+/usr/local/cuda-11.8/include/cub/iterator/arg_index_input_iterator.cuh:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/tuple_of_iterator_references.h:
+
 ../solver/shape_matching_gpu.cu:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_histogram.cuh:
 
 /usr/include/GL/glew.h:
 
+/usr/local/cuda-11.8/include/cub/cub.cuh:
+
 ../render/viewer.h:
+
+/usr/include/yaml-cpp/node/emit.h:
+
+/usr/include/yaml-cpp/node/parse.h:
+
+/usr/include/yaml-cpp/node/detail/impl.h:
+
+/usr/include/yaml-cpp/node/convert.h:
+
+/usr/include/c++/11/bits/stream_iterator.h:
+
+/usr/include/c++/11/iterator:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/specializations/warp_reduce_shfl.cuh:
+
+/usr/include/yaml-cpp/node/detail/node_iterator.h:
+
+/usr/include/yaml-cpp/node/detail/node_data.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_search.cuh:
+
+/usr/include/yaml-cpp/node/detail/node_ref.h:
+
+/usr/local/cuda-11.8/include/sm_60_atomic_functions.hpp:
+
+/usr/include/yaml-cpp/node/detail/memory.h:
+
+/usr/local/cuda-11.8/include/cub/util_arch.cuh:
+
+/usr/include/yaml-cpp/node/type.h:
+
+/usr/include/yaml-cpp/node/ptr.h:
+
+/usr/local/cuda-11.8/include/cub/block/block_merge_sort.cuh:
+
+/usr/local/cuda-11.8/include/cuda.h:
+
+/usr/include/yaml-cpp/node/detail/iterator_fwd.h:
+
+/usr/include/yaml-cpp/node/node.h:
+
+/usr/include/yaml-cpp/traits.h:
+
+/usr/include/yaml-cpp/mark.h:
+
+/usr/include/c++/11/bits/stl_list.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_radix_sort_upsweep.cuh:
+
+/usr/include/yaml-cpp/stlemitter.h:
+
+/usr/include/yaml-cpp/null.h:
+
+/usr/include/yaml-cpp/emittermanip.h:
+
+/usr/local/cuda-11.8/include/thrust/type_traits/void_t.h:
+
+/usr/include/yaml-cpp/binary.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/reverse_iterator_base.h:
+
+/usr/include/yaml-cpp/dll.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/host_system.h:
+
+/usr/include/c++/11/pstl/glue_memory_defs.h:
+
+/usr/include/c++/11/bits/shared_ptr_atomic.h:
+
+/usr/include/c++/11/ext/concurrence.h:
+
+/usr/include/c++/11/bits/shared_ptr.h:
+
+/usr/include/c++/11/bits/unique_ptr.h:
+
+/usr/include/c++/11/bits/align.h:
+
+/usr/include/c++/11/bits/stl_raw_storage_iter.h:
+
+/usr/include/c++/11/memory:
+
+/usr/include/yaml-cpp/parser.h:
+
+/usr/include/yaml-cpp/node/detail/iterator.h:
+
+/usr/include/yaml-cpp/yaml.h:
+
+../core/sim_config.h:
+
+/usr/local/cuda-11.8/include/cub/warp/warp_store.cuh:
 
 /usr/include/c++/11/bits/stl_multimap.h:
 
 /usr/include/c++/11/bits/stl_map.h:
 
+/usr/local/cuda-11.8/include/thrust/system/cuda/detail/guarded_driver_types.h:
+
+/usr/local/cuda-11.8/include/thrust/system_error.h:
+
 /usr/include/x86_64-linux-gnu/c++/11/bits/c++io.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/host_device.h:
 
 /usr/include/c++/11/fstream:
 
@@ -903,6 +1669,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/deque:
 
+/usr/include/yaml-cpp/noexcept.h:
+
 /usr/include/c++/11/queue:
 
 /usr/include/c++/11/bits/stl_multiset.h:
@@ -921,6 +1689,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Eigenvalues/MatrixBaseEigenvalues.h:
 
+/usr/include/yaml-cpp/node/detail/node.h:
+
 /usr/include/eigen3/Eigen/src/Eigenvalues/GeneralizedEigenSolver.h:
 
 /usr/include/eigen3/Eigen/src/Eigenvalues/ComplexEigenSolver.h:
@@ -937,6 +1707,10 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Geometry/AlignedBox.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/config/global_workarounds.h:
+
+/usr/include/c++/11/backward/auto_ptr.h:
+
 /usr/include/x86_64-linux-gnu/bits/types/__FILE.h:
 
 /usr/include/eigen3/Eigen/src/Geometry/ParametrizedLine.h:
@@ -948,6 +1722,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/c++/11/debug/assertions.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512bwintrin.h:
+
+/usr/local/cuda-11.8/include/cub/warp/warp_load.cuh:
 
 /usr/include/eigen3/Eigen/src/Core/PlainObjectBase.h:
 
@@ -961,6 +1737,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/typeinfo:
 
+/usr/include/c++/11/bits/shared_ptr_base.h:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/amxtileintrin.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/vpclmulqdqintrin.h:
@@ -972,6 +1750,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/c++/11/initializer_list:
 
 ../core/particles.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/simple_defines.h:
 
 /usr/include/c++/11/bits/codecvt.h:
 
@@ -993,6 +1773,12 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512vpopcntdqintrin.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/functional/operators/compound_assignment_operators.h:
+
+/usr/local/cuda-11.8/include/cub/util_math.cuh:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/specializations/warp_scan_smem.cuh:
+
 /usr/local/cuda-11.8/include/crt/device_double_functions.hpp:
 
 /usr/include/eigen3/Eigen/src/Core/MapBase.h:
@@ -1000,6 +1786,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx5124vnniwintrin.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512ifmavlintrin.h:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_three_way_partition.cuh:
 
 /usr/include/alloca.h:
 
@@ -1012,6 +1800,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512cdintrin.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/wbnoinvdintrin.h:
+
+/usr/local/cuda-11.8/include/thrust/iterator/counting_iterator.h:
 
 /usr/include/c++/11/bits/ptr_traits.h:
 
@@ -1077,11 +1867,17 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512vldqintrin.h:
 
+/usr/local/cuda-11.8/include/cub/agent/agent_sub_warp_merge_sort.cuh:
+
+/usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_category_with_system_and_traversal.h:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/tmmintrin.h:
 
 /usr/local/cuda-11.8/include/builtin_types.h:
 
 /usr/include/c++/11/bits/unordered_map.h:
+
+/usr/local/cuda-11.8/include/cub/block/specializations/block_histogram_sort.cuh:
 
 /usr/local/cuda-11.8/include/crt/sm_80_rt.hpp:
 
@@ -1095,13 +1891,21 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/lzcntintrin.h:
 
+/usr/include/c++/11/list:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/mmintrin.h:
 
 /usr/include/eigen3/Eigen/src/Core/util/ConfigureVectorization.h:
 
+/usr/local/cuda-11.8/include/thrust/system/cuda/detail/util.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/type_traits.h:
+
 /usr/include/c++/11/tr1/poly_hermite.tcc:
 
 /usr/include/c++/11/tr1/legendre_function.tcc:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/radix_rank_sort_operations.cuh:
 
 /usr/include/x86_64-linux-gnu/c++/11/bits/c++config.h:
 
@@ -1115,9 +1919,13 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/QR/ColPivHouseholderQR.h:
 
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_scan.cuh:
+
 /usr/include/c++/11/bits/memoryfwd.h:
 
 /usr/include/c++/11/bits/stl_function.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/type_traits/has_trivial_assign.h:
 
 /usr/include/c++/11/tr1/beta_function.tcc:
 
@@ -1125,7 +1933,11 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/tr1/bessel_function.tcc:
 
+/usr/local/cuda-11.8/include/thrust/detail/config/cpp_dialect.h:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512bf16vlintrin.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/execute_with_dependencies.h:
 
 /usr/include/c++/11/atomic:
 
@@ -1148,6 +1960,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/c++/11/bits/cpp_type_traits.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avxvnniintrin.h:
+
+/usr/include/yaml-cpp/exceptions.h:
 
 /usr/include/c++/11/cctype:
 
@@ -1195,6 +2009,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/vector:
 
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_rle.cuh:
+
 /usr/include/x86_64-linux-gnu/bits/types/wint_t.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/shaintrin.h:
@@ -1204,6 +2020,10 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/local/cuda-11.8/include/channel_descriptor.h:
 
 /usr/include/eigen3/Eigen/src/Cholesky/LDLT.h:
+
+/usr/include/yaml-cpp/emitterdef.h:
+
+/usr/include/yaml-cpp/emitter.h:
 
 /usr/include/c++/11/exception:
 
@@ -1229,6 +2049,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/CommaInitializer.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/config/cpp_compatibility.h:
+
 /usr/include/x86_64-linux-gnu/bits/atomic_wide_counter.h:
 
 /usr/include/eigen3/Eigen/src/Core/products/TriangularMatrixMatrix.h:
@@ -1245,6 +2067,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/x86_64-linux-gnu/bits/libm-simd-decl-stubs.h:
 
+/usr/include/yaml-cpp/node/impl.h:
+
 /usr/include/c++/11/string_view:
 
 /usr/include/eigen3/Eigen/src/Jacobi/Jacobi.h:
@@ -1257,6 +2081,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/LU/Determinant.h:
 
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_scan_by_key.cuh:
+
 /usr/include/c++/11/bits/specfun.h:
 
 /usr/local/cuda-11.8/include/driver_types.h:
@@ -1267,13 +2093,21 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/Map.h:
 
+/usr/local/cuda-11.8/include/thrust/system/detail/error_code.inl:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/serializeintrin.h:
 
 /usr/include/eigen3/Eigen/src/Core/ConditionEstimator.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/type_traits/has_nested_type.h:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512pfintrin.h:
 
 /usr/include/c++/11/bits/stl_relops.h:
+
+/usr/local/cuda-11.8/include/thrust/system/cuda/detail/core/alignment.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/warp/warp_scan.cuh:
 
 /usr/include/limits.h:
 
@@ -1291,6 +2125,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/util/IntegralConstant.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/allocator_aware_execution_policy.h:
+
 /usr/include/c++/11/bits/predefined_ops.h:
 
 /usr/include/x86_64-linux-gnu/bits/typesizes.h:
@@ -1307,6 +2143,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/bits/stl_algobase.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/functional/composite.h:
+
 /usr/include/c++/11/complex:
 
 /usr/include/x86_64-linux-gnu/bits/math-vector.h:
@@ -1320,6 +2158,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/eigen3/Eigen/src/Core/GenericPacketMath.h:
 
 /usr/local/cuda-11.8/include/cuda_runtime.h:
+
+/usr/local/cuda-11.8/include/cub/detail/device_synchronize.cuh:
 
 /usr/include/c++/11/ext/numeric_traits.h:
 
@@ -1339,11 +2179,15 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 ../main_gpu_viewer.cpp:
 
+/usr/include/c++/11/bits/list.tcc:
+
 /usr/include/x86_64-linux-gnu/c++/11/bits/gthr.h:
 
 /usr/include/x86_64-linux-gnu/bits/timesize.h:
 
 /usr/include/eigen3/Eigen/src/Core/Solve.h:
+
+/usr/local/cuda-11.8/include/cub/device/device_segmented_radix_sort.cuh:
 
 /usr/include/c++/11/limits:
 
@@ -1352,6 +2196,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/c++/11/bits/vector.tcc:
 
 /usr/include/c++/11/bits/stl_bvector.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/tuple_transform.h:
 
 /usr/include/x86_64-linux-gnu/bits/mathcalls-narrow.h:
 
@@ -1373,11 +2219,15 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/string.h:
 
+/usr/include/c++/11/version:
+
 /usr/local/cuda-11.8/include/vector_functions.hpp:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/popcntintrin.h:
 
 /usr/include/x86_64-linux-gnu/sys/cdefs.h:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_spmv_orig.cuh:
 
 /usr/include/eigen3/Eigen/src/Core/DiagonalProduct.h:
 
@@ -1401,6 +2251,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/x86_64-linux-gnu/bits/types/__sigset_t.h:
 
+/usr/local/cuda-11.8/include/thrust/iterator/iterator_facade.h:
+
 /usr/include/eigen3/Eigen/src/Core/Product.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512vnniintrin.h:
@@ -1417,6 +2269,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/x86_64-linux-gnu/bits/posix2_lim.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/pair.inl:
+
 /usr/include/c++/11/bits/basic_string.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/clock_t.h:
@@ -1428,6 +2282,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/c++/11/bits/stl_construct.h:
 
 /usr/include/eigen3/Eigen/src/Core/ReturnByValue.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/config.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/pmmintrin.h:
 
@@ -1447,6 +2303,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/climits:
 
+/usr/local/cuda-11.8/include/thrust/detail/tuple_meta_transform.h:
+
 /usr/include/x86_64-linux-gnu/bits/floatn.h:
 
 /usr/local/cuda-11.8/include/vector_functions.h:
@@ -1463,6 +2321,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/tr1/exp_integral.tcc:
 
+/usr/local/cuda-11.8/include/thrust/iterator/detail/iterator_category_to_traversal.h:
+
 /usr/include/c++/11/ext/alloc_traits.h:
 
 /usr/include/x86_64-linux-gnu/bits/sched.h:
@@ -1470,6 +2330,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/c++/11/bits/unordered_set.h:
 
 /usr/include/c++/11/bits/stl_vector.h:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_radix_sort.cuh:
 
 /usr/include/c++/11/cstddef:
 
@@ -1485,9 +2347,13 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/x86_64-linux-gnu/c++/11/bits/error_constants.h:
 
+/usr/local/cuda-11.8/include/cub/host/mutex.cuh:
+
 /usr/local/cuda-11.8/include/device_atomic_functions.h:
 
 ../solver/shape_matching_cpu.h:
+
+/usr/local/cuda-11.8/include/thrust/type_traits/logical_metafunctions.h:
 
 /usr/include/eigen3/Eigen/Dense:
 
@@ -1517,6 +2383,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/bits/functexcept.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/type_traits/result_of_adaptable_function.h:
+
 /usr/include/eigen3/Eigen/src/Core/products/GeneralMatrixVector.h:
 
 /usr/include/eigen3/Eigen/src/Core/CwiseTernaryOp.h:
@@ -1525,7 +2393,13 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/x86_64-linux-gnu/bits/mathcalls-helper-functions.h:
 
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/grid/grid_even_share.cuh:
+
+/usr/local/cuda-11.8/include/thrust/pair.h:
+
 /usr/include/stdlib.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/block/specializations/block_scan_raking.cuh:
 
 /usr/local/cuda-11.8/include/sm_60_atomic_functions.h:
 
@@ -1555,6 +2429,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/x86_64-linux-gnu/bits/stdint-intn.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/functional/operators/arithmetic_operators.h:
+
 /usr/include/eigen3/Eigen/src/Core/Redux.h:
 
 /usr/include/c++/11/set:
@@ -1562,6 +2438,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/eigen3/Eigen/src/Geometry/Transform.h:
 
 /usr/include/x86_64-linux-gnu/gnu/stubs.h:
+
+/usr/local/cuda-11.8/include/cub/block/block_reduce.cuh:
 
 /usr/include/eigen3/Eigen/src/plugins/IndexedViewMethods.h:
 
@@ -1573,9 +2451,13 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/tbmintrin.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/config/exec_check_disable.h:
+
 ../core/pf_calculator.h:
 
 /usr/include/eigen3/Eigen/src/Core/Select.h:
+
+/usr/local/cuda-11.8/include/cub/device/device_spmv.cuh:
 
 /usr/include/c++/11/bits/cxxabi_init_exception.h:
 
@@ -1588,6 +2470,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/lib/gcc/x86_64-linux-gnu/11/include/stdint.h:
 
 /usr/include/c++/11/clocale:
+
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_segmented_sort.cuh:
 
 /usr/include/x86_64-linux-gnu/bits/pthreadtypes.h:
 
@@ -1609,6 +2493,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/StlIterators.h:
 
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_scan_by_key.cuh:
+
 /usr/include/eigen3/Eigen/src/misc/Image.h:
 
 /usr/include/sched.h:
@@ -1618,6 +2504,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/x86_64-linux-gnu/bits/types/struct_sched_param.h:
 
 /usr/include/asm-generic/errno.h:
+
+/usr/include/yaml-cpp/emitterstyle.h:
 
 /usr/include/time.h:
 
@@ -1641,11 +2529,15 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/bits/ostream_insert.h:
 
+/usr/local/cuda-11.8/include/thrust/iterator/detail/distance_from_result.h:
+
 /usr/include/x86_64-linux-gnu/bits/types/__fpos_t.h:
 
 /usr/include/c++/11/backward/binders.h:
 
 /usr/include/c++/11/bits/string_view.tcc:
+
+/usr/local/cuda-11.8/include/cub/iterator/transform_input_iterator.cuh:
 
 /usr/include/x86_64-linux-gnu/bits/iscanonical.h:
 
@@ -1655,6 +2547,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/cstdio:
 
+/usr/local/cuda-11.8/include/cub/iterator/cache_modified_input_iterator.cuh:
+
 /usr/include/stdio.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/__fpos64_t.h:
@@ -1662,6 +2556,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512vlbwintrin.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/cookie_io_functions_t.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/functional/operators/operator_adaptors.h:
 
 /usr/include/c++/11/cerrno:
 
@@ -1703,6 +2599,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/x86_64-linux-gnu/bits/types/error_t.h:
 
+/usr/local/cuda-11.8/include/cub/config.cuh:
+
 /usr/include/c++/11/bits/exception_ptr.h:
 
 /usr/include/math.h:
@@ -1716,6 +2614,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/local/cuda-11.8/include/device_launch_parameters.h:
 
 /usr/include/c++/11/bits/basic_string.tcc:
+
+/usr/include/yaml-cpp/ostream_wrapper.h:
 
 /usr/include/eigen3/Eigen/src/Core/StableNorm.h:
 
@@ -1753,6 +2653,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/c++/11/bits/basic_ios.tcc:
 
+/usr/local/cuda-11.8/include/cub/agent/agent_three_way_partition.cuh:
+
 /usr/include/c++/11/bits/enable_special_members.h:
 
 /usr/include/c++/11/ostream:
@@ -1760,6 +2662,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/lib/gcc/x86_64-linux-gnu/11/include/prfchwintrin.h:
 
 /usr/include/eigen3/Eigen/src/Core/VectorBlock.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/iterator/counting_input_iterator.cuh:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/keylockerintrin.h:
 
@@ -1772,6 +2676,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/eigen3/Eigen/src/Core/util/MKL_support.h:
 
 /usr/include/c++/11/bits/refwrap.h:
+
+/usr/include/c++/11/bits/allocated_ptr.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512dqintrin.h:
 
@@ -1792,6 +2698,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/x86_64-linux-gnu/bits/types/timer_t.h:
 
 /usr/include/c++/11/bits/std_function.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/thread/thread_operators.cuh:
 
 /usr/include/c++/11/bits/stl_tempbuf.h:
 
@@ -1821,13 +2729,19 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/x86_64-linux-gnu/bits/string_fortified.h:
 
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_radix_sort_histogram.cuh:
+
 /usr/include/c++/11/algorithm:
 
 /usr/include/eigen3/Eigen/src/Core/util/Constants.h:
 
+/usr/include/yaml-cpp/node/iterator.h:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/bmi2intrin.h:
 
 /usr/include/eigen3/Eigen/src/Geometry/Translation.h:
+
+/usr/local/cuda-11.8/include/cub/detail/temporary_storage.cuh:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/sgxintrin.h:
 
@@ -1839,17 +2753,27 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/util/StaticAssert.h:
 
+/usr/local/cuda-11.8/include/cub/block/block_load.cuh:
+
 /usr/include/eigen3/Eigen/src/Core/util/Memory.h:
 
 /usr/include/eigen3/Eigen/src/Core/util/SymbolicIndex.h:
 
 /usr/include/eigen3/Eigen/src/Core/SolverBase.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/functional/operators.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/alignment.h:
+
 /usr/include/eigen3/Eigen/src/Core/NumTraits.h:
 
 /usr/include/eigen3/Eigen/src/plugins/CommonCwiseUnaryOps.h:
 
 /usr/include/eigen3/Eigen/src/Core/functors/BinaryFunctors.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/type_traits/function_traits.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/type_traits/is_metafunction_defined.h:
 
 /usr/include/linux/limits.h:
 
@@ -1860,6 +2784,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/eigen3/Eigen/src/Core/arch/AVX/TypeCasting.h:
 
 /usr/include/eigen3/Eigen/src/Core/MathFunctionsImpl.h:
+
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_segment_fixup.cuh:
 
 /usr/include/eigen3/Eigen/Geometry:
 
@@ -1881,6 +2807,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/IndexedView.h:
 
+/usr/local/cuda-11.8/targets/x86_64-linux/include/cub/agent/agent_reduce.cuh:
+
 /usr/include/eigen3/Eigen/src/Core/arch/SSE/TypeCasting.h:
 
 /usr/include/eigen3/Eigen/src/Core/arch/AVX/PacketMath.h:
@@ -1897,6 +2825,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/Visitor.h:
 
+/usr/local/cuda-11.8/include/cub/device/dispatch/dispatch_scan.cuh:
+
 /usr/include/eigen3/Eigen/src/Core/arch/AVX/MathFunctions.h:
 
 /usr/include/eigen3/Eigen/src/Core/arch/Default/Half.h:
@@ -1908,6 +2838,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/lib/gcc/x86_64-linux-gnu/11/include/uintrintrin.h:
 
 /usr/include/eigen3/Eigen/src/Core/functors/NullaryFunctors.h:
+
+/usr/local/cuda-11.8/include/cub/detail/device_double_buffer.cuh:
 
 /usr/include/eigen3/Eigen/src/Core/functors/StlFunctors.h:
 
@@ -1953,6 +2885,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/NoAlias.h:
 
+/usr/local/cuda-11.8/include/thrust/type_traits/integer_sequence.h:
+
 /usr/lib/gcc/x86_64-linux-gnu/11/include/mwaitintrin.h:
 
 /usr/include/eigen3/Eigen/src/Core/CwiseBinaryOp.h:
@@ -1969,6 +2903,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/Dot.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/functional/operators/relational_operators.h:
+
 /usr/local/cuda-11.8/include/crt/math_functions.h:
 
 /usr/include/x86_64-linux-gnu/sys/single_threaded.h:
@@ -1976,6 +2912,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/lib/gcc/x86_64-linux-gnu/11/include/waitpkgintrin.h:
 
 /usr/include/eigen3/Eigen/src/Core/Ref.h:
+
+/usr/local/cuda-11.8/include/cub/device/device_scan.cuh:
 
 /usr/include/eigen3/Eigen/src/Core/Reshaped.h:
 
@@ -2007,6 +2945,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/products/GeneralMatrixMatrixTriangular.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/preprocessor.h:
+
 /usr/include/eigen3/Eigen/src/Core/products/SelfadjointMatrixVector.h:
 
 /usr/include/eigen3/Eigen/src/Eigenvalues/RealQZ.h:
@@ -2029,11 +2969,15 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/Core/VectorwiseOp.h:
 
+/usr/local/cuda-11.8/include/thrust/iterator/detail/device_system_tag.h:
+
 /usr/include/x86_64-linux-gnu/bits/timex.h:
 
 /usr/include/eigen3/Eigen/src/Core/arch/Default/ConjHelper.h:
 
 /usr/include/eigen3/Eigen/src/Core/PartialReduxEvaluator.h:
+
+/usr/local/cuda-11.8/include/thrust/system/cuda/detail/core/triple_chevron_launch.h:
 
 /usr/lib/gcc/x86_64-linux-gnu/11/include/avx512bf16intrin.h:
 
@@ -2081,13 +3025,19 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 
 /usr/include/eigen3/Eigen/src/SVD/BDCSVD.h:
 
+/usr/local/cuda-11.8/include/thrust/detail/reference_forward_declaration.h:
+
 /usr/include/eigen3/Eigen/src/Geometry/OrthoMethods.h:
+
+/usr/local/cuda-11.8/include/cub/warp/warp_merge_sort.cuh:
 
 /usr/include/eigen3/Eigen/src/Geometry/EulerAngles.h:
 
 /usr/include/eigen3/Eigen/src/Geometry/Homogeneous.h:
 
 /usr/include/eigen3/Eigen/src/Geometry/Quaternion.h:
+
+/usr/local/cuda-11.8/include/thrust/detail/config/namespace.h:
 
 /usr/include/eigen3/Eigen/src/Geometry/AngleAxis.h:
 

@@ -168,6 +168,43 @@ verify_gpu/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/build
 .PHONY : verify_gpu/fast
 
+#=============================================================================
+# Target rules for targets named debug_tumor
+
+# Build rule for target.
+debug_tumor: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 debug_tumor
+.PHONY : debug_tumor
+
+# fast build rule for target.
+debug_tumor/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/build
+.PHONY : debug_tumor/fast
+
+debug_tumor.o: debug_tumor.cpp.o
+.PHONY : debug_tumor.o
+
+# target to build an object file
+debug_tumor.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/debug_tumor.cpp.o
+.PHONY : debug_tumor.cpp.o
+
+debug_tumor.i: debug_tumor.cpp.i
+.PHONY : debug_tumor.i
+
+# target to preprocess a source file
+debug_tumor.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/debug_tumor.cpp.i
+.PHONY : debug_tumor.cpp.i
+
+debug_tumor.s: debug_tumor.cpp.s
+.PHONY : debug_tumor.s
+
+# target to generate assembly for a file
+debug_tumor.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/debug_tumor.cpp.s
+.PHONY : debug_tumor.cpp.s
+
 main.o: main.cpp.o
 .PHONY : main.o
 
@@ -248,6 +285,7 @@ solver/shape_matching_gpu.cu.o:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/solver/shape_matching_gpu.cu.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/solver/shape_matching_gpu.cu.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/solver/shape_matching_gpu.cu.o
 .PHONY : solver/shape_matching_gpu.cu.o
 
 solver/shape_matching_gpu.i: solver/shape_matching_gpu.cu.i
@@ -258,6 +296,7 @@ solver/shape_matching_gpu.cu.i:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/solver/shape_matching_gpu.cu.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/solver/shape_matching_gpu.cu.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/solver/shape_matching_gpu.cu.i
 .PHONY : solver/shape_matching_gpu.cu.i
 
 solver/shape_matching_gpu.s: solver/shape_matching_gpu.cu.s
@@ -268,6 +307,7 @@ solver/shape_matching_gpu.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/solver/shape_matching_gpu.cu.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/solver/shape_matching_gpu.cu.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/solver/shape_matching_gpu.cu.s
 .PHONY : solver/shape_matching_gpu.cu.s
 
 verify_gpu.o: verify_gpu.cpp.o
@@ -302,10 +342,14 @@ help:
 	@echo "... depend"
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
+	@echo "... debug_tumor"
 	@echo "... pf_sim"
 	@echo "... pf_sim_gpu"
 	@echo "... pf_sim_gpu_viewer"
 	@echo "... verify_gpu"
+	@echo "... debug_tumor.o"
+	@echo "... debug_tumor.i"
+	@echo "... debug_tumor.s"
 	@echo "... main.o"
 	@echo "... main.i"
 	@echo "... main.s"

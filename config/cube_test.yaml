@@ -1,0 +1,44 @@
+## P(F) Shape Matching - Cube Test Configuration
+
+name: "Cube Test"
+
+## Tet mesh cube (0.3x0.3x0.3, ~13k vertices)
+mesh: "../../resources/cube/cube_tet.msh"
+
+## Simulation parameters
+simulation:
+  dt: auto
+  gravity: [0, -9.81, 0]
+  num_iterations: auto
+  stiffness: 1.0
+  damping: 0.98
+  substeps: auto
+
+## Boundary conditions
+boundary:
+  floor_y: 0.0
+  fix_bottom: true      # attach bottom to ground
+  fixed_ratio: 0.05     # fix bottom 5% of mesh height
+
+## Cluster building
+clusters:
+  rings: 2
+
+## Knife / CUSA tool
+knife:
+  radius: auto
+  cutting_interval: 50
+  alpha_min: 10.0
+  aspiration_threshold: 0.3
+
+## Self-collision
+self_collision:
+  enabled: true
+  radius: auto
+  stiffness: 0.8
+
+## Viewer
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: false
