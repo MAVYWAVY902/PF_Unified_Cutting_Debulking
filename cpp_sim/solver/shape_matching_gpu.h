@@ -33,6 +33,7 @@ struct SimConfigGPU {
     float damping;
     float floor_y;
     float3 knife_pos;
+    float knife_rot[9];  // 3x3 rotation matrix (row-major): local→world
     float knife_radius;
     int knife_active;
     // Self-collision
@@ -73,6 +74,7 @@ public:
     EdgesGPU d_edges;
     SDFData d_rigid_sdf = {};   // bone SDF (static)
     SDFData d_tool_sdf = {};    // tool SDF (local frame, moves with knife_pos)
+    float* d_knife_rot = nullptr;  // [9] rotation matrix on GPU
     SimConfigGPU config;
 
     int step_count = 0;

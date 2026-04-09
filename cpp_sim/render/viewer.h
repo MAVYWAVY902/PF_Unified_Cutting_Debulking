@@ -36,6 +36,7 @@ public:
 
     // 刀具状态
     Vec3 knife_pos = Vec3(0, 0.3, 0.09);
+    Eigen::Matrix3d knife_rot = Eigen::Matrix3d::Identity();  // tool rotation
     double knife_radius = 0.03;
     bool knife_active = false;
 
@@ -744,8 +745,13 @@ private:
             glBindVertexArray(0);
         }
 
-        // Model matrix: translate to knife_pos (tool mesh is centered at origin)
+        // Model matrix: rotation + translation (tool mesh centered at origin)
         Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+        // Fill rotation block
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                model(r, c) = (float)knife_rot(r, c);
+        // Translation
         model(0, 3) = (float)knife_pos.x();
         model(1, 3) = (float)knife_pos.y();
         model(2, 3) = (float)knife_pos.z();
@@ -755,7 +761,7 @@ private:
         glUseProgram(m_mesh_shader);
         glUniformMatrix4fv(glGetUniformLocation(m_mesh_shader, "uMVP"), 1, GL_FALSE, mvp.data());
         glUniformMatrix4fv(glGetUniformLocation(m_mesh_shader, "uModel"), 1, GL_FALSE, model.data());
-        glUniform4f(glGetUniformLocation(m_mesh_shader, "uColor"), 0.7f, 0.7f, 0.75f, 1.0f);  // metallic gray
+        glUniform4f(glGetUniformLocation(m_mesh_shader, "uColor"), 0.7f, 0.7f, 0.75f, 1.0f);
         glUniform3f(glGetUniformLocation(m_mesh_shader, "uLightDir"), 0.3f, 1.0f, 0.5f);
 
         glBindVertexArray(m_tool_vao);
@@ -913,7 +919,7 @@ private:
     }
 
     // ---- GLFW Callbacks ----
-    static void key_callback(GLFWwindow* w, int key, int /*scancode*/, int action, int /*mods*/) {
+    static void key_callback(GLFWwindow* w, int key, int /*scancode*/, int action, int mods) {
         auto* self = (Viewer*)glfwGetWindowUserPointer(w);
         if (key == GLFW_KEY_SPACE) {
             self->m_space_held = (action != GLFW_RELEASE);
@@ -921,12 +927,32 @@ private:
         if (action == GLFW_PRESS) {
             if (key == GLFW_KEY_P) self->m_paused = !self->m_paused;
             if (key == GLFW_KEY_K) self->knife_active = !self->knife_active;
-            if (key == GLFW_KEY_R) self->knife_pos = Vec3(0.09, 0.3, 0.09);
+            if (key == GLFW_KEY_R && !(mods & GLFW_MOD_SHIFT)) {
+                self->knife_pos = Vec3(0.09, 0.3, 0.09);
+                self->knife_rot = Eigen::Matrix3d::Identity();
+            }
             if (key == GLFW_KEY_1) self->draw_surface = !self->draw_surface;
             if (key == GLFW_KEY_2) self->draw_wireframe = !self->draw_wireframe;
             if (key == GLFW_KEY_3) self->draw_points = !self->draw_points;
             if (key == GLFW_KEY_T) self->m_track_object = !self->m_track_object;
             if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(w, GLFW_TRUE);
+        }
+        // Tool rotation: X/Y/Z keys (body frame, hold to rotate, Shift for reverse)
+        if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+            double angle = (mods & GLFW_MOD_SHIFT) ? -0.05 : 0.05;  // ~3 degrees
+            Eigen::Matrix3d dR;
+            if (key == GLFW_KEY_X) {
+                dR = Eigen::AngleAxisd(angle, Eigen::Vector3d::UnitX()).toRotationMatrix();
+                self->knife_rot = self->knife_rot * dR;  // 右乘 = body frame
+            }
+            if (key == GLFW_KEY_Y) {
+                dR = Eigen::AngleAxisd(angle, Eigen::Vector3d::UnitY()).toRotationMatrix();
+                self->knife_rot = self->knife_rot * dR;
+            }
+            if (key == GLFW_KEY_Z) {
+                dR = Eigen::AngleAxisd(angle, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+                self->knife_rot = self->knife_rot * dR;
+            }
         }
     }
 

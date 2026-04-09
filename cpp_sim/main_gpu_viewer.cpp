@@ -420,6 +420,9 @@ int main(int argc, char** argv) {
     gpu_solver.config.damping = cfg.damping;
     gpu_solver.config.floor_y = cfg.floor_y;
     gpu_solver.config.knife_pos = make_float3(100, 100, 100);
+    // Identity rotation
+    float identity_rot[9] = {1,0,0, 0,1,0, 0,0,1};
+    memcpy(gpu_solver.config.knife_rot, identity_rot, 9 * sizeof(float));
     gpu_solver.config.knife_radius = cfg.knife_radius;
     gpu_solver.config.knife_active = 0;
     gpu_solver.config.self_collision_radius = cfg.self_collision_radius;
@@ -547,6 +550,10 @@ int main(int argc, char** argv) {
             (float)viewer.knife_pos.x(),
             (float)viewer.knife_pos.y(),
             (float)viewer.knife_pos.z());
+        // Sync rotation (row-major 3x3)
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                gpu_solver.config.knife_rot[r * 3 + c] = (float)viewer.knife_rot(r, c);
         gpu_solver.config.knife_radius = (float)viewer.knife_radius;
         gpu_solver.config.knife_active = viewer.knife_active ? 1 : 0;
 
@@ -643,8 +650,9 @@ int main(int argc, char** argv) {
     std::cout << "\n按键:" << std::endl;
     std::cout << "  LMB: 旋转  RMB: 平移  滚轮: 缩放" << std::endl;
     std::cout << "  K: 开关刀具  Space+鼠标: 移动刀具  Space+滚轮: 前后" << std::endl;
+    std::cout << "  X/Y/Z: 旋转刀具 (Shift+X/Y/Z: 反向)" << std::endl;
     std::cout << "  P: 暂停  1: 切换面  2: 切换线框  3: 切换粒子点" << std::endl;
-    std::cout << "  T: 相机追踪  R: 重置刀具  ESC: 退出" << std::endl;
+    std::cout << "  T: 相机追踪  R: 重置刀具+旋转  ESC: 退出" << std::endl;
 
     viewer.run();
 

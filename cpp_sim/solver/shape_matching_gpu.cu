@@ -661,21 +661,38 @@ __global__ void sdf_collision_kernel(
     }
 }
 
+// Apply R^T (transpose/inverse of rotation) to a vector
+__device__ float3 apply_rot_transpose(const float* R, float3 v) {
+    return make_float3(
+        R[0]*v.x + R[3]*v.y + R[6]*v.z,  // R^T row 0 = R column 0
+        R[1]*v.x + R[4]*v.y + R[7]*v.z,
+        R[2]*v.x + R[5]*v.y + R[8]*v.z);
+}
+
+// Apply R (forward rotation) to a vector
+__device__ float3 apply_rot(const float* R, float3 v) {
+    return make_float3(
+        R[0]*v.x + R[1]*v.y + R[2]*v.z,
+        R[3]*v.x + R[4]*v.y + R[5]*v.z,
+        R[6]*v.x + R[7]*v.y + R[8]*v.z);
+}
+
 // Tool SDF collision: transform particle to tool local frame, query SDF
 __global__ void tool_sdf_collision_kernel(
     float3* pred_pos, int* removed, int* fixed,
     float* sdf, int res_x, int res_y, int res_z,
     float3 sdf_origin, float3 sdf_cell_size,
-    float3 tool_pos, int N)
+    float3 tool_pos, const float* tool_rot, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i] || fixed[i]) return;
 
-    // Transform to tool local frame (translation only, no rotation for now)
-    float3 p_local = make_float3(
+    // Transform to tool local frame: p_local = R^T * (p_world - tool_pos)
+    float3 d = make_float3(
         pred_pos[i].x - tool_pos.x,
         pred_pos[i].y - tool_pos.y,
         pred_pos[i].z - tool_pos.z);
+    float3 p_local = apply_rot_transpose(tool_rot, d);
 
     // Map to grid coordinates
     float gx = (p_local.x - sdf_origin.x) / sdf_cell_size.x - 0.5f;
@@ -712,11 +729,14 @@ __global__ void tool_sdf_collision_kernel(
     if (len < 1e-10f) return;
     nx /= len; ny /= len; nz /= len;
 
-    // Push in world frame (no rotation, gradient direction is same)
+    // Transform gradient from local frame to world frame: n_world = R * n_local
+    float3 n_local = make_float3(nx, ny, nz);
+    float3 n_world = apply_rot(tool_rot, n_local);
+
     float push = -dist;
-    pred_pos[i].x += push * nx;
-    pred_pos[i].y += push * ny;
-    pred_pos[i].z += push * nz;
+    pred_pos[i].x += push * n_world.x;
+    pred_pos[i].y += push * n_world.y;
+    pred_pos[i].z += push * n_world.z;
 }
 
 // Tool SDF damage: compute distance from edge midpoint to tool surface
@@ -725,7 +745,7 @@ __global__ void tool_sdf_damage_kernel(
     int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
     float* sdf, int res_x, int res_y, int res_z,
     float3 sdf_origin, float3 sdf_cell_size,
-    float3 tool_pos, float alpha_min, int num_edges)
+    float3 tool_pos, const float* tool_rot, float alpha_min, int num_edges)
 {
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
     if (eid >= num_edges || broken[eid]) return;
@@ -733,11 +753,12 @@ __global__ void tool_sdf_damage_kernel(
     int a = edge_a[eid], b = edge_b[eid];
     if (removed[a] || removed[b]) return;
 
-    // Edge midpoint in world → local frame
-    float3 mid;
-    mid.x = (pred_pos[a].x + pred_pos[b].x) * 0.5f - tool_pos.x;
-    mid.y = (pred_pos[a].y + pred_pos[b].y) * 0.5f - tool_pos.y;
-    mid.z = (pred_pos[a].z + pred_pos[b].z) * 0.5f - tool_pos.z;
+    // Edge midpoint in world → local frame: R^T * (mid_world - tool_pos)
+    float3 mid_world = make_float3(
+        (pred_pos[a].x + pred_pos[b].x) * 0.5f - tool_pos.x,
+        (pred_pos[a].y + pred_pos[b].y) * 0.5f - tool_pos.y,
+        (pred_pos[a].z + pred_pos[b].z) * 0.5f - tool_pos.z);
+    float3 mid = apply_rot_transpose(tool_rot, mid_world);
 
     // Map to grid
     float gx = (mid.x - sdf_origin.x) / sdf_cell_size.x - 0.5f;
@@ -787,15 +808,16 @@ __global__ void tool_sdf_aspirate_kernel(
     float3* pred_pos, float* particle_damage, int* removed,
     float* sdf, int res_x, int res_y, int res_z,
     float3 sdf_origin, float3 sdf_cell_size,
-    float3 tool_pos, float threshold, int N)
+    float3 tool_pos, const float* tool_rot, float threshold, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i]) return;
 
-    float3 p_local = make_float3(
+    float3 d = make_float3(
         pred_pos[i].x - tool_pos.x,
         pred_pos[i].y - tool_pos.y,
         pred_pos[i].z - tool_pos.z);
+    float3 p_local = apply_rot_transpose(tool_rot, d);
 
     float gx = (p_local.x - sdf_origin.x) / sdf_cell_size.x - 0.5f;
     float gy = (p_local.y - sdf_origin.y) / sdf_cell_size.y - 0.5f;
@@ -890,7 +912,7 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
             d_edges.pf_rest, d_edges.damage, d_edges.broken,
             d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
             d_tool_sdf.origin, d_tool_sdf.cell_size,
-            config.knife_pos, alpha_min, E);
+            config.knife_pos, d_knife_rot, alpha_min, E);
     } else {
         update_edge_damage_kernel<<<blocks_e, 256>>>(
             d_particles.predicted_pos, d_particles.removed,
@@ -920,7 +942,7 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
             d_particles.predicted_pos, d_particles.damage, d_particles.removed,
             d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
             d_tool_sdf.origin, d_tool_sdf.cell_size,
-            config.knife_pos, aspiration_threshold, N);
+            config.knife_pos, d_knife_rot, aspiration_threshold, N);
     } else {
         aspirate_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_particles.damage, d_particles.removed,
@@ -934,6 +956,12 @@ void ShapeMatchingGPUSolver::step() {
     int N = d_particles.N;
     int C = d_clusters.num_clusters;
     int blocks_n = (N + 255) / 256;
+
+    // Upload knife rotation to GPU
+    if (!d_knife_rot) {
+        CUDA_CHECK(cudaMalloc(&d_knife_rot, 9 * sizeof(float)));
+    }
+    CUDA_CHECK(cudaMemcpy(d_knife_rot, config.knife_rot, 9 * sizeof(float), cudaMemcpyHostToDevice));
 
     // 1. Predict
     predict_kernel<<<blocks_n, 256>>>(
@@ -954,7 +982,7 @@ void ShapeMatchingGPUSolver::step() {
         tool_sdf_collision_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
             d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
-            d_tool_sdf.origin, d_tool_sdf.cell_size, config.knife_pos, N);
+            d_tool_sdf.origin, d_tool_sdf.cell_size, config.knife_pos, d_knife_rot, N);
     }
 
     // 2b. Rigid SDF collision
@@ -1010,7 +1038,7 @@ void ShapeMatchingGPUSolver::step() {
             tool_sdf_collision_kernel<<<blocks_n, 256>>>(
                 d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
                 d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
-                d_tool_sdf.origin, d_tool_sdf.cell_size, config.knife_pos, N);
+                d_tool_sdf.origin, d_tool_sdf.cell_size, config.knife_pos, d_knife_rot, N);
         }
 
         // Rigid SDF collision (每次迭代)
