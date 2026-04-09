@@ -41,6 +41,8 @@ self_collision:
 rigid_object:
   mesh: "../../resources/tbone/tbone_MOD4.obj"
   collision_thickness: auto   # auto = 0.8x avg_spacing
+  friction_s: 0.5             # static friction coefficient
+  friction_k: 0.3             # kinetic friction coefficient
 
 ## Viewer
 viewer:

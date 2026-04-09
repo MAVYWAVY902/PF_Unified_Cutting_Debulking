@@ -425,6 +425,8 @@ int main(int argc, char** argv) {
     gpu_solver.config.self_collision_radius = cfg.self_collision_radius;
     gpu_solver.config.self_collision_stiffness = cfg.self_collision_stiffness;
     gpu_solver.config.self_collision_enabled = cfg.self_collision_enabled ? 1 : 0;
+    gpu_solver.config.friction_s = cfg.friction_s;
+    gpu_solver.config.friction_k = cfg.friction_k;
 
     int substeps = cfg.substeps;
 

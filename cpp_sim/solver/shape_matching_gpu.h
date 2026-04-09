@@ -39,6 +39,9 @@ struct SimConfigGPU {
     float self_collision_radius;
     float self_collision_stiffness;
     int self_collision_enabled;
+    // Rigid body friction
+    float friction_s;  // static friction coefficient
+    float friction_k;  // kinetic friction coefficient
 };
 
 // Rigid body SDF collision data

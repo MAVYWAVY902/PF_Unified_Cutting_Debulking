@@ -585,11 +585,13 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
 
 // ============== Rigid Body SDF Collision ==============
 
-// SDF collision kernel: trilinear interpolation + push out
+// SDF collision kernel: trilinear interpolation + push out + friction
 __global__ void sdf_collision_kernel(
-    float3* pred_pos, int* removed, int* fixed,
+    float3* pred_pos, float3* old_pos, int* removed, int* fixed,
     float* sdf, int res_x, int res_y, int res_z,
-    float3 origin, float3 cell_size, int N)
+    float3 origin, float3 cell_size,
+    float mu_s, float mu_k,  // static and kinetic friction coefficients
+    int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i] || fixed[i]) return;
@@ -663,6 +665,34 @@ __global__ void sdf_collision_kernel(
     pred_pos[i].x += push * nx;
     pred_pos[i].y += push * ny;
     pred_pos[i].z += push * nz;
+
+    // Coulomb friction: reduce tangential sliding
+    if (mu_s > 0.0f || mu_k > 0.0f) {
+        // Displacement this step
+        float3 dp = make_float3(pred_pos[i].x - old_pos[i].x,
+                                pred_pos[i].y - old_pos[i].y,
+                                pred_pos[i].z - old_pos[i].z);
+
+        // Tangential component (remove normal part)
+        float dp_n = dp.x*nx + dp.y*ny + dp.z*nz;
+        float3 dp_t = make_float3(dp.x - dp_n*nx, dp.y - dp_n*ny, dp.z - dp_n*nz);
+        float len_t = sqrtf(dp_t.x*dp_t.x + dp_t.y*dp_t.y + dp_t.z*dp_t.z);
+
+        if (len_t > 1e-10f) {
+            if (len_t < mu_s * push) {
+                // Static friction: cancel all tangential motion
+                pred_pos[i].x -= dp_t.x;
+                pred_pos[i].y -= dp_t.y;
+                pred_pos[i].z -= dp_t.z;
+            } else {
+                // Kinetic friction: reduce tangential motion
+                float reduce = fminf(mu_k * push / len_t, 1.0f);
+                pred_pos[i].x -= dp_t.x * reduce;
+                pred_pos[i].y -= dp_t.y * reduce;
+                pred_pos[i].z -= dp_t.z * reduce;
+            }
+        }
+    }
 }
 
 // SDF debug: count particles inside rigid body
@@ -742,9 +772,11 @@ void ShapeMatchingGPUSolver::step() {
     // 2b. Rigid SDF collision
     if (d_rigid_sdf.active && d_rigid_sdf.d_sdf) {
         sdf_collision_kernel<<<blocks_n, 256>>>(
-            d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
+            d_particles.predicted_pos, d_particles.old_pos,
+            d_particles.removed, d_particles.fixed,
             d_rigid_sdf.d_sdf, d_rigid_sdf.res_x, d_rigid_sdf.res_y, d_rigid_sdf.res_z,
-            d_rigid_sdf.origin, d_rigid_sdf.cell_size, N);
+            d_rigid_sdf.origin, d_rigid_sdf.cell_size,
+            config.friction_s, config.friction_k, N);
     }
 
     // 3. Jacobi 迭代
@@ -787,9 +819,11 @@ void ShapeMatchingGPUSolver::step() {
         // Rigid SDF collision (每次迭代)
         if (d_rigid_sdf.active && d_rigid_sdf.d_sdf) {
             sdf_collision_kernel<<<blocks_n, 256>>>(
-                d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
+                d_particles.predicted_pos, d_particles.old_pos,
+                d_particles.removed, d_particles.fixed,
                 d_rigid_sdf.d_sdf, d_rigid_sdf.res_x, d_rigid_sdf.res_y, d_rigid_sdf.res_z,
-                d_rigid_sdf.origin, d_rigid_sdf.cell_size, N);
+                d_rigid_sdf.origin, d_rigid_sdf.cell_size,
+                config.friction_s, config.friction_k, N);
         }
     }
 

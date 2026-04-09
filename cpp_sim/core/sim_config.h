@@ -51,6 +51,8 @@ struct SimConfigYAML {
     std::string rigid_mesh_path;
     float rigid_collision_thickness = 0.0f;  // 0 = auto
     bool rigid_collision_thickness_auto = false;
+    float friction_s = 0.5f;    // static friction
+    float friction_k = 0.3f;    // kinetic friction
 
     // Viewer
     bool draw_surface = true;
@@ -162,6 +164,8 @@ struct SimConfigYAML {
         if (config["rigid_object"]) {
             auto ro = config["rigid_object"];
             if (ro["mesh"]) rigid_mesh_path = ro["mesh"].as<std::string>();
+            if (ro["friction_s"]) friction_s = ro["friction_s"].as<float>();
+            if (ro["friction_k"]) friction_k = ro["friction_k"].as<float>();
             if (ro["collision_thickness"]) {
                 try {
                     rigid_collision_thickness = ro["collision_thickness"].as<float>();
