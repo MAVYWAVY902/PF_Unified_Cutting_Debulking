@@ -583,6 +583,144 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
         config.knife_pos, config.knife_radius, aspiration_threshold, N);
 }
 
+// ============== Rigid Body SDF Collision ==============
+
+// SDF collision kernel: trilinear interpolation + push out
+__global__ void sdf_collision_kernel(
+    float3* pred_pos, int* removed, int* fixed,
+    float* sdf, int res_x, int res_y, int res_z,
+    float3 origin, float3 cell_size, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i]) return;
+
+    float3 p = pred_pos[i];
+
+    // Map to grid coordinates (continuous)
+    float gx = (p.x - origin.x) / cell_size.x - 0.5f;
+    float gy = (p.y - origin.y) / cell_size.y - 0.5f;
+    float gz = (p.z - origin.z) / cell_size.z - 0.5f;
+
+    // Clamp to grid bounds
+    if (gx < 0 || gx >= res_x - 1 || gy < 0 || gy >= res_y - 1 || gz < 0 || gz >= res_z - 1)
+        return;  // outside SDF grid, no collision
+
+    // Integer cell + fractional
+    int ix = (int)floorf(gx), iy = (int)floorf(gy), iz = (int)floorf(gz);
+    float fx = gx - ix, fy = gy - iy, fz = gz - iz;
+
+    // Trilinear interpolation of SDF
+    #define SDF_IDX(x,y,z) sdf[(z)*res_x*res_y + (y)*res_x + (x)]
+    float c000 = SDF_IDX(ix,   iy,   iz  );
+    float c100 = SDF_IDX(ix+1, iy,   iz  );
+    float c010 = SDF_IDX(ix,   iy+1, iz  );
+    float c110 = SDF_IDX(ix+1, iy+1, iz  );
+    float c001 = SDF_IDX(ix,   iy,   iz+1);
+    float c101 = SDF_IDX(ix+1, iy,   iz+1);
+    float c011 = SDF_IDX(ix,   iy+1, iz+1);
+    float c111 = SDF_IDX(ix+1, iy+1, iz+1);
+
+    float c00 = c000*(1-fx) + c100*fx;
+    float c10 = c010*(1-fx) + c110*fx;
+    float c01 = c001*(1-fx) + c101*fx;
+    float c11 = c011*(1-fx) + c111*fx;
+    float c0 = c00*(1-fy) + c10*fy;
+    float c1 = c01*(1-fy) + c11*fy;
+    float dist = c0*(1-fz) + c1*fz;
+
+    if (dist >= 0.0f) return;  // outside rigid body, no collision
+
+    // Inside (dist < 0): compute gradient of SDF for push direction
+    // Central differences
+    float eps = 1.0f;  // one grid cell
+    float gx_m = gx - eps, gx_p = gx + eps;
+    float gy_m = gy - eps, gy_p = gy + eps;
+    float gz_m = gz - eps, gz_p = gz + eps;
+
+    // Clamp gradient sample positions
+    gx_m = fmaxf(gx_m, 0.0f); gx_p = fminf(gx_p, (float)(res_x - 1) - 0.01f);
+    gy_m = fmaxf(gy_m, 0.0f); gy_p = fminf(gy_p, (float)(res_y - 1) - 0.01f);
+    gz_m = fmaxf(gz_m, 0.0f); gz_p = fminf(gz_p, (float)(res_z - 1) - 0.01f);
+
+    // Sample SDF at offset positions (nearest-neighbor for speed)
+    #define SDF_SAMPLE(gx_, gy_, gz_) SDF_IDX( \
+        min(max((int)(gx_), 0), res_x-1), \
+        min(max((int)(gy_), 0), res_y-1), \
+        min(max((int)(gz_), 0), res_z-1))
+
+    float nx = SDF_SAMPLE(gx_p, gy, gz) - SDF_SAMPLE(gx_m, gy, gz);
+    float ny = SDF_SAMPLE(gx, gy_p, gz) - SDF_SAMPLE(gx, gy_m, gz);
+    float nz = SDF_SAMPLE(gx, gy, gz_p) - SDF_SAMPLE(gx, gy, gz_m);
+    #undef SDF_SAMPLE
+    #undef SDF_IDX
+
+    float len = sqrtf(nx*nx + ny*ny + nz*nz);
+    if (len < 1e-10f) return;
+    nx /= len; ny /= len; nz /= len;
+
+    // Push particle to surface: move by |dist| along gradient
+    float push = -dist;  // dist is negative, push is positive
+    pred_pos[i].x += push * nx;
+    pred_pos[i].y += push * ny;
+    pred_pos[i].z += push * nz;
+}
+
+// SDF debug: count particles inside rigid body
+__global__ void sdf_debug_kernel(
+    float3* positions, int* removed, int* fixed,
+    float* sdf, int res_x, int res_y, int res_z,
+    float3 origin, float3 cell_size, int N,
+    int* counts)  // [0]=inside, [1]=near(sdf<0.001)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i]) return;
+
+    float3 p = positions[i];
+    float gx = (p.x - origin.x) / cell_size.x - 0.5f;
+    float gy = (p.y - origin.y) / cell_size.y - 0.5f;
+    float gz = (p.z - origin.z) / cell_size.z - 0.5f;
+
+    if (gx < 0 || gx >= res_x - 1 || gy < 0 || gy >= res_y - 1 || gz < 0 || gz >= res_z - 1)
+        return;
+
+    int ix = (int)floorf(gx), iy = (int)floorf(gy), iz = (int)floorf(gz);
+    float fx = gx - ix, fy = gy - iy, fz = gz - iz;
+
+    #define SDF_IDX(x,y,z) sdf[(z)*res_x*res_y + (y)*res_x + (x)]
+    float c00 = SDF_IDX(ix,iy,iz)*(1-fx) + SDF_IDX(ix+1,iy,iz)*fx;
+    float c10 = SDF_IDX(ix,iy+1,iz)*(1-fx) + SDF_IDX(ix+1,iy+1,iz)*fx;
+    float c01 = SDF_IDX(ix,iy,iz+1)*(1-fx) + SDF_IDX(ix+1,iy,iz+1)*fx;
+    float c11 = SDF_IDX(ix,iy+1,iz+1)*(1-fx) + SDF_IDX(ix+1,iy+1,iz+1)*fx;
+    float dist = (c00*(1-fy)+c10*fy)*(1-fz) + (c01*(1-fy)+c11*fy)*fz;
+    #undef SDF_IDX
+
+    if (dist < 0.0f) atomicAdd(&counts[0], 1);
+    if (dist < 0.001f) atomicAdd(&counts[1], 1);
+}
+
+void ShapeMatchingGPUSolver::init_rigid_sdf(
+    const std::vector<float>& sdf_data,
+    int res_x, int res_y, int res_z,
+    float3 origin, float3 cell_size)
+{
+    d_rigid_sdf.res_x = res_x;
+    d_rigid_sdf.res_y = res_y;
+    d_rigid_sdf.res_z = res_z;
+    d_rigid_sdf.origin = origin;
+    d_rigid_sdf.cell_size = cell_size;
+    d_rigid_sdf.active = 1;
+
+    int total = res_x * res_y * res_z;
+    CUDA_CHECK(cudaMalloc(&d_rigid_sdf.d_sdf, total * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_rigid_sdf.d_sdf, sdf_data.data(),
+                           total * sizeof(float), cudaMemcpyHostToDevice));
+
+    int inside = 0;
+    for (int i = 0; i < total; i++) if (sdf_data[i] < 0) inside++;
+    printf("[GPU] Rigid SDF: %dx%dx%d, cell=(%.5f,%.5f,%.5f), %d/%d inside voxels\n",
+           res_x, res_y, res_z, cell_size.x, cell_size.y, cell_size.z, inside, total);
+}
+
 void ShapeMatchingGPUSolver::step() {
     int N = d_particles.N;
     int C = d_clusters.num_clusters;
@@ -600,6 +738,14 @@ void ShapeMatchingGPUSolver::step() {
         d_particles.predicted_pos,
         d_particles.removed, d_particles.fixed,
         config.floor_y, config.knife_pos, config.knife_radius, config.knife_active, N);
+
+    // 2b. Rigid SDF collision
+    if (d_rigid_sdf.active && d_rigid_sdf.d_sdf) {
+        sdf_collision_kernel<<<blocks_n, 256>>>(
+            d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
+            d_rigid_sdf.d_sdf, d_rigid_sdf.res_x, d_rigid_sdf.res_y, d_rigid_sdf.res_z,
+            d_rigid_sdf.origin, d_rigid_sdf.cell_size, N);
+    }
 
     // 3. Jacobi 迭代
     for (int iter = 0; iter < config.num_iterations; iter++) {
@@ -637,6 +783,29 @@ void ShapeMatchingGPUSolver::step() {
             d_particles.predicted_pos,
             d_particles.removed, d_particles.fixed,
             config.floor_y, config.knife_pos, config.knife_radius, config.knife_active, N);
+
+        // Rigid SDF collision (每次迭代)
+        if (d_rigid_sdf.active && d_rigid_sdf.d_sdf) {
+            sdf_collision_kernel<<<blocks_n, 256>>>(
+                d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
+                d_rigid_sdf.d_sdf, d_rigid_sdf.res_x, d_rigid_sdf.res_y, d_rigid_sdf.res_z,
+                d_rigid_sdf.origin, d_rigid_sdf.cell_size, N);
+        }
+    }
+
+    // SDF collision debug (every 500 steps)
+    if (d_rigid_sdf.active && d_rigid_sdf.d_sdf && (step_count % 500 == 0)) {
+        int* d_counts;
+        cudaMalloc(&d_counts, 2 * sizeof(int));
+        cudaMemset(d_counts, 0, 2 * sizeof(int));
+        sdf_debug_kernel<<<blocks_n, 256>>>(
+            d_particles.pos, d_particles.removed, d_particles.fixed,
+            d_rigid_sdf.d_sdf, d_rigid_sdf.res_x, d_rigid_sdf.res_y, d_rigid_sdf.res_z,
+            d_rigid_sdf.origin, d_rigid_sdf.cell_size, N, d_counts);
+        int h[2]; cudaMemcpy(h, d_counts, 2*sizeof(int), cudaMemcpyDeviceToHost);
+        cudaFree(d_counts);
+        fprintf(stderr, "[Step %d] SDF collision: %d inside, %d near (sdf<0.001)\n",
+                step_count, h[0], h[1]);
     }
 
     // 4. Cutting pipeline（每 cutting_update_interval 步）

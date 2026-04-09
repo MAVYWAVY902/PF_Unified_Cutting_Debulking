@@ -3,6 +3,7 @@
 #include "../core/particles.h"
 #include "../core/cluster.h"
 #include "../core/tet_mesh.h"
+#include "../core/rigid_mesh.h"
 #include "../solver/shape_matching_cpu.h"
 
 #include <GL/glew.h>
@@ -50,6 +51,9 @@ public:
 
     // GPU 模式：外部 damage 数组（替代 cutting_mgr->get_particle_damage）
     std::vector<float>* particle_damage_array = nullptr;
+
+    // Rigid mesh for rendering (optional)
+    RigidMesh* rigid_mesh_render = nullptr;
 
     // 当前活跃/移除粒子数（GPU 模式下由 on_step 回调更新）
     int num_active_particles = 0;
@@ -233,6 +237,9 @@ public:
             Eigen::Matrix4f proj = _projection_matrix();
 
             _draw_grid(view, proj);
+            if (rigid_mesh_render) {
+                _draw_rigid_mesh(view, proj);
+            }
             if (tet_mesh) {
                 _draw_surface(view, proj);
             }
@@ -276,6 +283,8 @@ private:
     int m_surface_idx_count = 0;
     GLuint m_wireframe_vao = 0, m_wireframe_vbo = 0, m_wireframe_ebo = 0;
     int m_wireframe_idx_count = 0;
+    GLuint m_rigid_vao = 0, m_rigid_vbo = 0, m_rigid_ibo = 0;
+    int m_rigid_idx_count = 0;
     GLuint m_point_shader = 0, m_line_shader = 0, m_mesh_shader = 0;
     int m_frame_count_debug = 0;
 
@@ -631,6 +640,60 @@ private:
 
             glDisable(GL_POLYGON_OFFSET_LINE);
         }
+    }
+
+    void _draw_rigid_mesh(const Eigen::Matrix4f& view, const Eigen::Matrix4f& proj) {
+        if (!rigid_mesh_render || rigid_mesh_render->num_faces() == 0) return;
+
+        // Upload rigid mesh data (once or if changed)
+        if (m_rigid_vao == 0) {
+            glGenVertexArrays(1, &m_rigid_vao);
+            glGenBuffers(1, &m_rigid_vbo);
+            glGenBuffers(1, &m_rigid_ibo);
+
+            // Build vertex + normal data
+            std::vector<float> vdata;
+            std::vector<unsigned int> indices;
+            for (int i = 0; i < rigid_mesh_render->num_faces(); i++) {
+                auto& f = rigid_mesh_render->faces[i];
+                auto& n = rigid_mesh_render->face_normals[i];
+                for (int j = 0; j < 3; j++) {
+                    auto& v = rigid_mesh_render->vertices[f[j]];
+                    vdata.push_back((float)v.x());
+                    vdata.push_back((float)v.y());
+                    vdata.push_back((float)v.z());
+                    vdata.push_back((float)n.x());
+                    vdata.push_back((float)n.y());
+                    vdata.push_back((float)n.z());
+                    indices.push_back(i * 3 + j);
+                }
+            }
+            m_rigid_idx_count = (int)indices.size();
+
+            glBindVertexArray(m_rigid_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, m_rigid_vbo);
+            glBufferData(GL_ARRAY_BUFFER, vdata.size() * sizeof(float), vdata.data(), GL_STATIC_DRAW);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_rigid_ibo);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+            glEnableVertexAttribArray(1);
+            glBindVertexArray(0);
+        }
+
+        Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+        Eigen::Matrix4f mvp = proj * view * model;
+
+        glUseProgram(m_mesh_shader);
+        glUniformMatrix4fv(glGetUniformLocation(m_mesh_shader, "uMVP"), 1, GL_FALSE, mvp.data());
+        glUniformMatrix4fv(glGetUniformLocation(m_mesh_shader, "uModel"), 1, GL_FALSE, model.data());
+        glUniform4f(glGetUniformLocation(m_mesh_shader, "uColor"), 0.9f, 0.9f, 0.85f, 1.0f);  // bone color: off-white
+        glUniform3f(glGetUniformLocation(m_mesh_shader, "uLightDir"), 0.3f, 1.0f, 0.5f);
+
+        glBindVertexArray(m_rigid_vao);
+        glDrawElements(GL_TRIANGLES, m_rigid_idx_count, GL_UNSIGNED_INT, nullptr);
+        glBindVertexArray(0);
     }
 
     // ---- 绘制 ----

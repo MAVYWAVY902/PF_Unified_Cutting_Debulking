@@ -47,6 +47,11 @@ struct SimConfigYAML {
     bool self_collision_radius_auto = false;
     float self_collision_stiffness = 0.8f;
 
+    // Rigid objects
+    std::string rigid_mesh_path;
+    float rigid_collision_thickness = 0.0f;  // 0 = auto
+    bool rigid_collision_thickness_auto = false;
+
     // Viewer
     bool draw_surface = true;
     bool draw_wireframe = false;
@@ -153,6 +158,20 @@ struct SimConfigYAML {
             if (sc["stiffness"]) self_collision_stiffness = sc["stiffness"].as<float>();
         }
 
+        // Rigid objects
+        if (config["rigid_object"]) {
+            auto ro = config["rigid_object"];
+            if (ro["mesh"]) rigid_mesh_path = ro["mesh"].as<std::string>();
+            if (ro["collision_thickness"]) {
+                try {
+                    rigid_collision_thickness = ro["collision_thickness"].as<float>();
+                } catch (...) {
+                    if (ro["collision_thickness"].as<std::string>() == "auto")
+                        rigid_collision_thickness_auto = true;
+                }
+            }
+        }
+
         // Viewer
         if (config["viewer"]) {
             auto v = config["viewer"];
@@ -181,6 +200,10 @@ struct SimConfigYAML {
         }
         if (self_collision_radius_auto) {
             self_collision_radius = avg_spacing * 0.45f;
+        }
+        if (rigid_collision_thickness_auto || (rigid_collision_thickness == 0.0f && !rigid_mesh_path.empty())) {
+            rigid_collision_thickness = avg_spacing * 0.8f;
+            rigid_collision_thickness_auto = false;
         }
     }
 

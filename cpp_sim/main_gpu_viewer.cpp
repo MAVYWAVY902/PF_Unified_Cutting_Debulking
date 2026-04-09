@@ -8,6 +8,7 @@
 #include "core/pf_calculator.h"
 #include "core/cutting_manager.h"
 #include "core/sim_config.h"
+#include "core/rigid_mesh.h"
 #include "render/viewer.h"
 #include <iostream>
 #include <vector>
@@ -246,6 +247,7 @@ int main(int argc, char** argv) {
     TetMesh tet_mesh;
     bool use_tet = false;
     double mesh_height = 0.5;
+    double deformable_y_offset = 0.0;
 
     if (is_mesh) {
         // Tet mesh 模式
@@ -262,6 +264,7 @@ int main(int argc, char** argv) {
             max_y = std::max(max_y, v.y());
         }
         double y_offset = -min_y + 0.001;
+        deformable_y_offset = y_offset;
         mesh_height = max_y - min_y;
 
         for (int i = 0; i < tet_mesh.num_vertices(); i++) {
@@ -439,6 +442,36 @@ int main(int argc, char** argv) {
         gpu_solver.init_edges(edge_a, edge_b, edge_pf_rest);
     }
 
+    // --- Rigid mesh collision ---
+    RigidMesh rigid_mesh;
+    if (!cfg.rigid_mesh_path.empty()) {
+        if (!rigid_mesh.load_obj(cfg.rigid_mesh_path)) {
+            std::cerr << "Rigid mesh加载失败: " << cfg.rigid_mesh_path << std::endl;
+        } else {
+            // 和deformable mesh做同样的y_offset，保持相对坐标
+            if (deformable_y_offset != 0.0) {
+                rigid_mesh.translate(Vec3(0, deformable_y_offset, 0));
+                std::cout << "Rigid mesh y_offset: " << deformable_y_offset << std::endl;
+            }
+
+            // 生成SDF (CPU, 128分辨率)
+            rigid_mesh.compute_sdf(128, 0.1);
+
+            // 上传到GPU
+            float3 origin = make_float3(
+                (float)rigid_mesh.sdf_origin.x(),
+                (float)rigid_mesh.sdf_origin.y(),
+                (float)rigid_mesh.sdf_origin.z());
+            float3 cs = make_float3(
+                (float)rigid_mesh.sdf_cell_size.x(),
+                (float)rigid_mesh.sdf_cell_size.y(),
+                (float)rigid_mesh.sdf_cell_size.z());
+            gpu_solver.init_rigid_sdf(rigid_mesh.sdf_data,
+                rigid_mesh.sdf_res[0], rigid_mesh.sdf_res[1], rigid_mesh.sdf_res[2],
+                origin, cs);
+        }
+    }
+
     // --- CPU 端 buffers（GPU → CPU 下载用）---
     std::vector<float3> cpu_positions(N);
     std::vector<int> cpu_removed(N, 0);
@@ -453,6 +486,9 @@ int main(int argc, char** argv) {
     // 同步参数到viewer
     viewer.knife_radius = gpu_solver.config.knife_radius;
     viewer.substeps_per_frame = substeps;
+    if (rigid_mesh.num_faces() > 0) {
+        viewer.rigid_mesh_render = &rigid_mesh;
+    }
 
     if (use_tet) {
         viewer.tet_mesh = &tet_mesh;

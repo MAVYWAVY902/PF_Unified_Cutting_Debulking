@@ -37,6 +37,11 @@ self_collision:
   radius: auto          # "auto" = 0.45x avg_spacing, or float
   stiffness: 0.8
 
+## Rigid object (temporal bone)
+rigid_object:
+  mesh: "../../resources/tbone/tbone_MOD4.obj"
+  collision_thickness: auto   # auto = 0.8x avg_spacing
+
 ## Viewer
 viewer:
   draw_surface: true

@@ -568,6 +568,7 @@ CMakeFiles/pf_sim_gpu_viewer.dir/main_gpu_viewer.cpp.o: \
  /usr/include/yaml-cpp/node/convert.h \
  /usr/include/yaml-cpp/node/detail/impl.h \
  /usr/include/yaml-cpp/node/parse.h /usr/include/yaml-cpp/node/emit.h \
+ /home/yunxin/pf-shape-matching/cpp_sim/core/rigid_mesh.h \
  /home/yunxin/pf-shape-matching/cpp_sim/render/viewer.h \
  /usr/include/GL/glew.h /usr/include/GL/glu.h /usr/include/GL/gl.h \
  /usr/include/GLFW/glfw3.h

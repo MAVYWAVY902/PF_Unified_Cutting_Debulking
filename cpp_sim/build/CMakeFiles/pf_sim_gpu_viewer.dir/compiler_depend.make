@@ -646,6 +646,7 @@ CMakeFiles/pf_sim_gpu_viewer.dir/main_gpu_viewer.cpp.o: ../main_gpu_viewer.cpp \
   /usr/include/yaml-cpp/node/detail/impl.h \
   /usr/include/yaml-cpp/node/parse.h \
   /usr/include/yaml-cpp/node/emit.h \
+  ../core/rigid_mesh.h \
   ../render/viewer.h \
   /usr/include/GL/glew.h \
   /usr/include/GL/glu.h \
@@ -2986,6 +2987,8 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o: ../solver/shape
 /usr/include/x86_64-linux-gnu/bits/wctype-wchar.h:
 
 /usr/include/eigen3/Eigen/src/Core/ArrayWrapper.h:
+
+../core/rigid_mesh.h:
 
 /usr/include/eigen3/Eigen/src/Core/util/ReenableStupidWarnings.h:
 
