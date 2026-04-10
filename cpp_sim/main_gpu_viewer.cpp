@@ -109,10 +109,8 @@ bool cpu_bfs_split(
 
     for (int i = 0; i < (int)components.size(); i++) {
         if (i == largest_idx) continue;
-        // Detached fragments: unfix them so gravity pulls them down
-        // They'll be removed later when they fall below the floor
-        for (int pid : components[i]) {
-            cpu_solver.particles[pid].fixed = false;
+        if ((int)components[i].size() < min_fragment_size) {
+            for (int pid : components[i]) cpu_removed[pid] = 1;
             any_change = true;
         }
     }
@@ -585,58 +583,7 @@ int main(int argc, char** argv) {
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
 
-        // (边界侵蚀已移除 — 由BFS split统一处理fragment检测)
-
-        // BFS分裂：定期检查断开的fragment，释放它们让重力拉走
-        if (use_tet && rem > 0 && timing_frame % 60 == 0) {
-            bool changed = cpu_bfs_split(
-                gpu_solver, cpu_solver,
-                edge_a, edge_b, edge_pf_rest,
-                cpu_positions, cpu_removed,
-                tet_mesh.vertex_neighbors, 5);
-            if (changed) {
-                // Sync fixed array to GPU (fragments were unfixed)
-                std::vector<int> fixed_arr(N);
-                for (int i = 0; i < N; i++)
-                    fixed_arr[i] = cpu_solver.particles[i].fixed ? 1 : 0;
-                gpu_solver.upload_removed(cpu_removed);
-                // Upload fixed array too
-                cudaMemcpy(gpu_solver.d_particles.fixed, fixed_arr.data(),
-                           N * sizeof(int), cudaMemcpyHostToDevice);
-
-                // 重新计数
-                active = 0; rem = 0;
-                for (int i = 0; i < N; i++) {
-                    if (cpu_removed[i]) rem++; else active++;
-                }
-                viewer.num_active_particles = active;
-                viewer.num_removed_particles = rem;
-                C = (int)cpu_solver.clusters.size();
-                viewer.num_clusters_display = C;
-            }
-        }
-
-        // 清理落到floor以下的粒子
-        if (use_tet) {
-            bool cleaned = false;
-            for (int i = 0; i < N; i++) {
-                if (cpu_removed[i]) continue;
-                if (cpu_positions[i].y < -0.1f) {  // 远低于floor
-                    cpu_removed[i] = 1;
-                    cpu_solver.particles[i].removed = true;
-                    cleaned = true;
-                }
-            }
-            if (cleaned) {
-                gpu_solver.upload_removed(cpu_removed);
-                active = 0; rem = 0;
-                for (int i = 0; i < N; i++) {
-                    if (cpu_removed[i]) rem++; else active++;
-                }
-                viewer.num_active_particles = active;
-                viewer.num_removed_particles = rem;
-            }
-        }
+        // (边界侵蚀已删除 — 它会持续蚕食fragment边缘导致fragment缩小)
 
         timing_frame++;
 
