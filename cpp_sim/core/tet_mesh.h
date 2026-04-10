@@ -101,13 +101,7 @@ struct TetMesh {
     }
 
     // 根据 removed 粒子重建表面（debulk 后调用）
-    // 算法：
-    //   - 4-alive tet（所有4顶点alive）→ 贡献全部4个face，alive_count++
-    //   - 3-alive tet（1个顶点removed）→ 贡献"alive face"（不含removed顶点的那个），dead_count++
-    //   - <3 alive → 跳过
-    // Face是surface的条件：
-    //   - alive_count == 1 (alive volume边界)
-    //   - 或 alive_count == 0 且 dead_count >= 1 (原始表面被partial tet保留)
+    // 原理：跳过含 removed 顶点的四面体，重新算哪些面是表面
     void rebuild_surface_faces(const Particles& particles) {
         surface_faces.clear();
 
@@ -118,91 +112,61 @@ struct TetMesh {
             return (int64_t)a * 100000LL * 100000LL + (int64_t)b * 100000LL + c;
         };
 
+        // 记录每个面的出现次数、原始顶点顺序、以及第四个顶点（用于法线方向）
         struct FaceInfo {
             std::array<int,3> verts;
-            int fourth;       // 第四顶点（用于法线方向，优先来自alive tet）
-            int alive_count;  // 4-alive tet的贡献数
-            int dead_count;   // 3-alive tet的贡献数
-            bool fourth_from_alive;  // fourth是否来自4-alive tet
+            int fourth;  // 所在 tet 的第四个顶点
+            int count;
         };
         std::unordered_map<int64_t, FaceInfo> face_map;
         face_map.reserve(tets.size() * 2);
 
         for (const auto& tet : tets) {
-            int n_alive = 0;
-            int removed_idx = -1;
+            bool has_removed = false;
             for (int j = 0; j < 4; j++) {
-                if (particles[tet[j]].removed) {
-                    removed_idx = j;
-                } else {
-                    n_alive++;
-                }
+                if (particles[tet[j]].removed) { has_removed = true; break; }
             }
+            if (has_removed) continue;
 
-            if (n_alive == 4) {
-                // 4-alive tet: 全部4个face都贡献
-                int v[4] = {tet[0], tet[1], tet[2], tet[3]};
-                int face_indices[4][3] = {
-                    {v[0], v[1], v[2]},  // fourth = v[3]
-                    {v[0], v[1], v[3]},  // fourth = v[2]
-                    {v[0], v[2], v[3]},  // fourth = v[1]
-                    {v[1], v[2], v[3]}   // fourth = v[0]
-                };
-                int fourth[4] = {v[3], v[2], v[1], v[0]};
+            int v[4] = {tet[0], tet[1], tet[2], tet[3]};
+            // 4 个面，每个面的第四个顶点是不在面上的那个
+            int face_indices[4][3] = {
+                {v[0], v[1], v[2]},  // fourth = v[3]
+                {v[0], v[1], v[3]},  // fourth = v[2]
+                {v[0], v[2], v[3]},  // fourth = v[1]
+                {v[1], v[2], v[3]}   // fourth = v[0]
+            };
+            int fourth[4] = {v[3], v[2], v[1], v[0]};
 
-                for (int fi = 0; fi < 4; fi++) {
-                    auto key = encode_face(face_indices[fi][0], face_indices[fi][1], face_indices[fi][2]);
-                    auto it = face_map.find(key);
-                    if (it == face_map.end()) {
-                        face_map[key] = {{face_indices[fi][0], face_indices[fi][1], face_indices[fi][2]},
-                                         fourth[fi], 1, 0, true};
-                    } else {
-                        it->second.alive_count++;
-                        // alive tet的fourth优先（用于正确法线方向）
-                        if (!it->second.fourth_from_alive) {
-                            it->second.fourth = fourth[fi];
-                            it->second.fourth_from_alive = true;
-                        }
-                    }
-                }
-            } else if (n_alive == 3) {
-                // 3-alive tet: 只贡献不含removed顶点的那个face
-                int verts[3], idx = 0;
-                for (int j = 0; j < 4; j++) {
-                    if (j != removed_idx) verts[idx++] = tet[j];
-                }
-                int fourth = tet[removed_idx];  // removed顶点作为第四点
-
-                auto key = encode_face(verts[0], verts[1], verts[2]);
+            for (int fi = 0; fi < 4; fi++) {
+                auto key = encode_face(face_indices[fi][0], face_indices[fi][1], face_indices[fi][2]);
                 auto it = face_map.find(key);
                 if (it == face_map.end()) {
-                    face_map[key] = {{verts[0], verts[1], verts[2]}, fourth, 0, 1, false};
+                    face_map[key] = {{face_indices[fi][0], face_indices[fi][1], face_indices[fi][2]},
+                                     fourth[fi], 1};
                 } else {
-                    it->second.dead_count++;
-                    // alive tet的fourth优先；如果还没有alive来源，用这个dead来源
+                    it->second.count++;
                 }
             }
-            // n_alive < 3: 跳过
         }
 
-        surface_faces.reserve(face_map.size() / 2);
+        surface_faces.reserve(face_map.size() / 3);
         for (auto& [key, info] : face_map) {
-            bool is_surface = (info.alive_count == 1) ||
-                              (info.alive_count == 0 && info.dead_count >= 1);
-            if (!is_surface) continue;
-
-            // 法线方向修正：normal应指向远离fourth的方向
-            Vec3 v0 = vertices[info.verts[0]];
-            Vec3 v1 = vertices[info.verts[1]];
-            Vec3 v2 = vertices[info.verts[2]];
-            Vec3 v3 = vertices[info.fourth];
-            Vec3 normal = (v1 - v0).cross(v2 - v0);
-            if (normal.dot(v3 - v0) > 0) {
-                std::swap(info.verts[1], info.verts[2]);
+            if (info.count == 1) {
+                // 内联法线方向修正（避免 O(faces × tets) 的 _fix_face_orientations）
+                Vec3 v0 = vertices[info.verts[0]];
+                Vec3 v1 = vertices[info.verts[1]];
+                Vec3 v2 = vertices[info.verts[2]];
+                Vec3 v3 = vertices[info.fourth];
+                Vec3 normal = (v1 - v0).cross(v2 - v0);
+                if (normal.dot(v3 - v0) > 0) {
+                    std::swap(info.verts[1], info.verts[2]);
+                }
+                surface_faces.push_back(info.verts);
             }
-            surface_faces.push_back(info.verts);
         }
 
+        // 直接计算法线（不再调用 _fix_face_orientations）
         face_normals.resize(surface_faces.size());
         for (int i = 0; i < (int)surface_faces.size(); i++) {
             const auto& f = surface_faces[i];
