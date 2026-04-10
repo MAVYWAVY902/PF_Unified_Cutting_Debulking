@@ -583,7 +583,33 @@ int main(int argc, char** argv) {
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
 
-        // (边界侵蚀已删除 — 它会持续蚕食fragment边缘导致fragment缩小)
+        // 边界侵蚀：移除大部分邻居已被移除的孤立粒子
+        if (use_tet && rem > 0) {
+            bool eroded = false;
+            for (int i = 0; i < N; i++) {
+                if (cpu_removed[i]) continue;
+                const auto& nbrs = tet_mesh.vertex_neighbors[i];
+                if (nbrs.empty()) continue;
+                int alive_nbrs = 0;
+                for (int nb : nbrs) {
+                    if (!cpu_removed[nb]) alive_nbrs++;
+                }
+                if ((float)alive_nbrs / nbrs.size() < 0.4f) {
+                    cpu_removed[i] = 1;
+                    cpu_solver.particles[i].removed = true;
+                    eroded = true;
+                }
+            }
+            if (eroded) {
+                gpu_solver.upload_removed(cpu_removed);
+                active = 0; rem = 0;
+                for (int i = 0; i < N; i++) {
+                    if (cpu_removed[i]) rem++; else active++;
+                }
+                viewer.num_active_particles = active;
+                viewer.num_removed_particles = rem;
+            }
+        }
 
         timing_frame++;
 
