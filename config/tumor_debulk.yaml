@@ -3,7 +3,7 @@
 name: "Tumor Debulking"
 
 ## Mesh
-mesh: "../../resources/tumor/tumor_7800.msh"  # relative to build dir
+mesh: "../../resources/tumor/tumor_7800_dense.msh"  # 35k particles, 184k tets
 
 ## Simulation parameters
 simulation:
