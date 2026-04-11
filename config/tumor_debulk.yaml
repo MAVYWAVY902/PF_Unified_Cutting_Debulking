@@ -3,15 +3,15 @@
 name: "Tumor Debulking"
 
 ## Mesh
-mesh: "../../resources/tumor/tumor_7800.msh"  # relative to build dir
+mesh: "../../resources/tumor/tumor_7800.msh"  # 35k particles, 184k tets
 
 ## Simulation parameters
 simulation:
   dt: auto              # "auto" = scale by mesh height, or float (e.g. 0.001)
   gravity: [0, -9.81, 0]
-  num_iterations: auto  # "auto" = scale by cluster overlap, or int (e.g. 16)
+  num_iterations: 40    # 更多迭代 → 更stiff
   stiffness: 1.0        # shape matching stiffness [0, 1]
-  damping: 0.98         # velocity damping per step
+  damping: 0.88         # 之前0.98，降低 → 更快吸收震荡（不再duang duang）
   substeps: auto        # "auto" = compute from dt, or int (e.g. 20)
 
 ## Boundary conditions

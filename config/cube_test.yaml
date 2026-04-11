@@ -3,16 +3,16 @@
 
 name: "Cube Test"
 
-## Use xpbd-tissue-sim's cube32 mesh (1m x 1m x 1m, ~21k vertices)
-mesh: "/home/yunxin/xpbd-tissue-sim/resource/cube/cube32.msh"
+## Dense cube (1m x 1m x 1m, ~31k vertices, 158k tets)
+mesh: "../../resources/cube/cube_dense.msh"
 
 simulation:
   dt: 0.005
   gravity: [0, -9.81, 0]
-  num_iterations: 4
-  stiffness: 0.6
-  damping: 0.98
-  substeps: 4
+  num_iterations: 16    # 之前4，更多迭代 → 更stiff
+  stiffness: 1.0        # 之前0.6，满stiffness
+  damping: 0.88         # 之前0.98，降低 → 快速吸收震荡
+  substeps: 8           # 之前4，更细时间步 → 更稳定
 
 boundary:
   floor_y: 0.0
