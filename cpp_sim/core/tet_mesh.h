@@ -31,6 +31,9 @@ struct TetMesh {
     // 每个顶点的邻居（共享四面体的顶点）
     std::vector<std::vector<int>> vertex_neighbors;
 
+    // 每个顶点所属的tet索引列表（用于orphan检测）
+    std::vector<std::vector<int>> vertex_to_tets;
+
     int num_vertices() const { return (int)vertices.size(); }
     int num_tets() const { return (int)tets.size(); }
     int num_surface_faces() const { return (int)surface_faces.size(); }
@@ -92,6 +95,14 @@ struct TetMesh {
 
         // 构建邻居关系
         _build_vertex_neighbors();
+
+        // 构建顶点→tet索引
+        vertex_to_tets.assign(vertices.size(), {});
+        for (int ti = 0; ti < (int)tets.size(); ti++) {
+            for (int j = 0; j < 4; j++) {
+                vertex_to_tets[tets[ti][j]].push_back(ti);
+            }
+        }
 
         std::cout << "加载 tet mesh: " << num_vertices() << " 顶点, "
                   << num_tets() << " 四面体, "

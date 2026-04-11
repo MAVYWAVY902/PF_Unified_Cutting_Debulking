@@ -250,8 +250,10 @@ public:
             if (tet_mesh) {
                 _draw_surface(view, proj);
             }
-            // 始终画粒子点（tet 模式下也画，用于调试）
-            _draw_particles(view, proj);
+            // 粒子点（按3键toggle）
+            if (draw_points) {
+                _draw_particles(view, proj);
+            }
             // 刀具：mesh tool或sphere
             if (tool_mesh_render) {
                 _draw_tool_mesh(view, proj);

@@ -31,28 +31,20 @@ bool cpu_bfs_split(
     std::vector<float>& edge_pf_rest,
     std::vector<float3>& cpu_positions,
     std::vector<int>& cpu_removed,
-    const std::vector<std::vector<int>>& vertex_neighbors,  // tet mesh 完整邻接
+    const TetMesh& tet_mesh,
     int min_fragment_size = 5)
 {
     int N = cpu_solver.particles.size();
+    int E = (int)edge_a.size();
+    bool any_change = false;
 
     // 1. 下载边状态
     std::vector<int> edge_broken;
     std::vector<float> edge_damage;
     gpu_solver.download_edge_broken(edge_broken);
     gpu_solver.download_edge_damage(edge_damage);
-    int E = (int)edge_a.size();
 
-    // 2. 构建粒子 → 簇映射
-    int C = (int)cpu_solver.clusters.size();
-    std::vector<int> particle_to_cluster(N, -1);
-    for (int ci = 0; ci < C; ci++) {
-        for (int pid : cpu_solver.clusters[ci].particle_ids) {
-            particle_to_cluster[pid] = ci;
-        }
-    }
-
-    // 3. 构建 broken 边集合（快速查找）
+    // 2. 构建 broken 边集合
     auto edge_key = [](int a, int b) -> int64_t {
         if (a > b) std::swap(a, b);
         return (int64_t)a * 100000LL + b;
@@ -64,40 +56,36 @@ bool cpu_bfs_split(
         }
     }
 
-    // 4. 全局连通分量分析：找活跃粒子中的连通分量
-    //    使用 mesh 邻接（vertex_neighbors），减去 broken edges
-    //    小于 min_fragment_size 的分量 → 移除
-    bool any_change = false;
-
-    // 构建全局 alive 集合
-    std::unordered_set<int> alive_global;
-    for (int i = 0; i < N; i++) {
-        if (!cpu_removed[i]) alive_global.insert(i);
-    }
-
-    // 全局 BFS
-    std::unordered_set<int> visited;
+    // 3. BFS用vertex_neighbors作为图，跳过broken edges和removed粒子
+    //    旧BFS的逻辑 — 在视觉fragmentation方面更准确
+    std::vector<int> component_id(N, -1);
     std::vector<std::vector<int>> components;
-    for (int pid : alive_global) {
-        if (visited.count(pid)) continue;
-        std::vector<int> comp;
+
+    for (int seed = 0; seed < N; seed++) {
+        if (cpu_removed[seed] || component_id[seed] != -1) continue;
+
+        int comp_idx = (int)components.size();
+        components.push_back({});
+        auto& comp = components.back();
+
         std::queue<int> q;
-        q.push(pid);
-        visited.insert(pid);
+        q.push(seed);
+        component_id[seed] = comp_idx;
+
         while (!q.empty()) {
             int v = q.front(); q.pop();
             comp.push_back(v);
-            if (v < (int)vertex_neighbors.size()) {
-                for (int nb : vertex_neighbors[v]) {
-                    if (!alive_global.count(nb)) continue;
-                    if (visited.count(nb)) continue;
+
+            if (v < (int)tet_mesh.vertex_neighbors.size()) {
+                for (int nb : tet_mesh.vertex_neighbors[v]) {
+                    if (cpu_removed[nb]) continue;
+                    if (component_id[nb] != -1) continue;
                     if (broken_edge_set.count(edge_key(v, nb))) continue;
-                    visited.insert(nb);
+                    component_id[nb] = comp_idx;
                     q.push(nb);
                 }
             }
         }
-        components.push_back(std::move(comp));
     }
 
     // 找最大分量，其余标记为 removed
@@ -107,113 +95,29 @@ bool cpu_bfs_split(
             largest_idx = i;
     }
 
+    // 删除所有非主体（最大）组件
     for (int i = 0; i < (int)components.size(); i++) {
         if (i == largest_idx) continue;
-        if ((int)components[i].size() < min_fragment_size) {
-            for (int pid : components[i]) cpu_removed[pid] = 1;
-            any_change = true;
-        }
+        for (int pid : components[i]) cpu_removed[pid] = 1;
+        any_change = true;
     }
-
-    // 重建簇（移除只剩 <2 活跃粒子的簇）
-    std::vector<Cluster> new_clusters;
-    int kept = 0, shrunk = 0, tiny = 0;
-    for (int ci = 0; ci < C; ci++) {
-        auto& cluster = cpu_solver.clusters[ci];
-        std::vector<int> alive_ids;
-        for (int pid : cluster.particle_ids) {
-            if (!cpu_removed[pid]) alive_ids.push_back(pid);
-        }
-        if ((int)alive_ids.size() < 2) {
-            for (int pid : alive_ids) { cpu_removed[pid] = 1; any_change = true; }
-            tiny++;
-            continue;
-        }
-        if (alive_ids.size() != cluster.particle_ids.size()) {
-            Cluster nc;
-            nc.particle_ids = alive_ids;
-            nc.init(cpu_solver.particles);
-            new_clusters.push_back(std::move(nc));
-            any_change = true;
-            shrunk++;
-        } else {
-            new_clusters.push_back(cluster);  // copy, 不能 move（可能 return false 不赋值回去）
-            kept++;
-        }
-    }
-    printf("[SPLIT DEBUG] C=%d kept=%d shrunk=%d tiny=%d new_clusters=%d components=%d removed_by_bfs=%d\n",
-           C, kept, shrunk, tiny, (int)new_clusters.size(), (int)components.size(),
-           (int)std::count(cpu_removed.begin(), cpu_removed.end(), 1));
 
     if (!any_change) return false;
 
-    // 5. 更新簇列表
-    cpu_solver.clusters = std::move(new_clusters);
-    // 移除只有 0-1 个粒子的簇
-    cpu_solver.clusters.erase(
-        std::remove_if(cpu_solver.clusters.begin(), cpu_solver.clusters.end(),
-            [](const Cluster& c) { return c.particle_ids.size() < 2; }),
-        cpu_solver.clusters.end());
-
-    // 6. 同步 particles removed 状态（BFS 中可能新标记了 removed）
+    // 同步 particles.removed 状态
     for (int i = 0; i < N; i++) {
         cpu_solver.particles[i].removed = (cpu_removed[i] != 0);
-        cpu_solver.particles[i].pos = Vec3(
-            cpu_positions[i].x, cpu_positions[i].y, cpu_positions[i].z);
     }
 
-    // 7. 剪枝边（移除断裂的和涉及 removed 粒子的）
-    std::vector<int> new_edge_a, new_edge_b;
-    std::vector<float> new_pf_rest, new_damage;
-    std::vector<int> new_broken;
-    for (int ei = 0; ei < E; ei++) {
-        if (edge_broken[ei]) continue;
-        if (cpu_removed[edge_a[ei]] || cpu_removed[edge_b[ei]]) continue;
-        new_edge_a.push_back(edge_a[ei]);
-        new_edge_b.push_back(edge_b[ei]);
-        new_pf_rest.push_back(edge_pf_rest[ei]);
-        new_damage.push_back(edge_damage[ei]);
-        new_broken.push_back(0);
-    }
-
-    // 8. 重新打包 CSR
-    int new_C = (int)cpu_solver.clusters.size();
-    std::vector<int> csr_starts(new_C), csr_sizes(new_C);
-    std::vector<int> csr_pids;
-    std::vector<float3> csr_offsets;
-    std::vector<float3> csr_cm(new_C);
-
-    int offset = 0;
-    for (int ci = 0; ci < new_C; ci++) {
-        csr_starts[ci] = offset;
-        csr_sizes[ci] = (int)cpu_solver.clusters[ci].particle_ids.size();
-        for (int j = 0; j < csr_sizes[ci]; j++) {
-            csr_pids.push_back(cpu_solver.clusters[ci].particle_ids[j]);
-            csr_offsets.push_back(make_float3(
-                (float)cpu_solver.clusters[ci].rest_offsets[j].x(),
-                (float)cpu_solver.clusters[ci].rest_offsets[j].y(),
-                (float)cpu_solver.clusters[ci].rest_offsets[j].z()));
-        }
-        csr_cm[ci] = make_float3(
-            (float)cpu_solver.clusters[ci].rest_cm.x(),
-            (float)cpu_solver.clusters[ci].rest_cm.y(),
-            (float)cpu_solver.clusters[ci].rest_cm.z());
-        offset += csr_sizes[ci];
-    }
-
-    // 9. 上传到 GPU
+    // 上传 removed 到 GPU
+    // 不重建 clusters — cluster_solve_kernel 在 runtime 跳过 removed 粒子
+    // 不重建 edges — 让 GPU 边的 broken/removed 自己处理
     gpu_solver.upload_removed(cpu_removed);
-    gpu_solver.reupload_clusters(csr_starts, csr_sizes, csr_pids, csr_offsets, csr_cm);
-    gpu_solver.reupload_edges(new_edge_a, new_edge_b, new_pf_rest, new_damage, new_broken);
 
-    // 更新 CPU 端边数据
-    edge_a = std::move(new_edge_a);
-    edge_b = std::move(new_edge_b);
-    edge_pf_rest = std::move(new_pf_rest);
-
-    printf("[SPLIT] clusters: %d, edges: %d, removed: %d\n",
-           new_C, (int)edge_a.size(),
-           (int)std::count(cpu_removed.begin(), cpu_removed.end(), 1));
+    int total_removed = (int)std::count(cpu_removed.begin(), cpu_removed.end(), 1);
+    printf("[SPLIT] components=%d removed=%d (kept main, dropped %d)\n",
+           (int)components.size(), total_removed,
+           (int)components.size() - 1);
 
     return true;
 }
@@ -583,24 +487,40 @@ int main(int argc, char** argv) {
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
 
-        // 边界侵蚀：移除大部分邻居已被移除的孤立粒子
+        // Orphan清理：迭代移除不属于任何4-alive tet的粒子
+        // 移除一批orphan后，新出现的orphan也要清理（cascade到稳定）
         if (use_tet && rem > 0) {
-            bool eroded = false;
-            for (int i = 0; i < N; i++) {
-                if (cpu_removed[i]) continue;
-                const auto& nbrs = tet_mesh.vertex_neighbors[i];
-                if (nbrs.empty()) continue;
-                int alive_nbrs = 0;
-                for (int nb : nbrs) {
-                    if (!cpu_removed[nb]) alive_nbrs++;
+            int total_orphans = 0;
+            int iter = 0;
+            for (; iter < 20; iter++) {
+                int round_orphans = 0;
+                for (int i = 0; i < N; i++) {
+                    if (cpu_removed[i]) continue;
+                    const auto& my_tets = tet_mesh.vertex_to_tets[i];
+                    if (my_tets.empty()) continue;
+
+                    bool has_alive_tet = false;
+                    for (int ti : my_tets) {
+                        const auto& t = tet_mesh.tets[ti];
+                        bool all_alive = true;
+                        for (int j = 0; j < 4; j++) {
+                            if (cpu_removed[t[j]]) { all_alive = false; break; }
+                        }
+                        if (all_alive) { has_alive_tet = true; break; }
+                    }
+
+                    if (!has_alive_tet) {
+                        cpu_removed[i] = 1;
+                        cpu_solver.particles[i].removed = true;
+                        round_orphans++;
+                    }
                 }
-                if ((float)alive_nbrs / nbrs.size() < 0.4f) {
-                    cpu_removed[i] = 1;
-                    cpu_solver.particles[i].removed = true;
-                    eroded = true;
-                }
+                total_orphans += round_orphans;
+                if (round_orphans == 0) break;  // 收敛
             }
-            if (eroded) {
+            if (total_orphans > 0) {
+                if (timing_frame % 60 == 0)
+                    printf("[ORPHAN] removed %d in %d iters\n", total_orphans, iter+1);
                 gpu_solver.upload_removed(cpu_removed);
                 active = 0; rem = 0;
                 for (int i = 0; i < N; i++) {
@@ -608,6 +528,25 @@ int main(int argc, char** argv) {
                 }
                 viewer.num_active_particles = active;
                 viewer.num_removed_particles = rem;
+            }
+        }
+
+        // BFS连通分量分析：删除所有非主体（最大）组件 fragments
+        if (use_tet && rem > 0 && timing_frame % 30 == 0) {
+            bool changed = cpu_bfs_split(
+                gpu_solver, cpu_solver,
+                edge_a, edge_b, edge_pf_rest,
+                cpu_positions, cpu_removed,
+                tet_mesh, 5);
+            if (changed) {
+                active = 0; rem = 0;
+                for (int i = 0; i < N; i++) {
+                    if (cpu_removed[i]) rem++; else active++;
+                }
+                viewer.num_active_particles = active;
+                viewer.num_removed_particles = rem;
+                C = (int)cpu_solver.clusters.size();
+                viewer.num_clusters_display = C;
             }
         }
 
@@ -646,7 +585,7 @@ int main(int argc, char** argv) {
 
     // 刀具初始位置：在手术区域上方，靠近tumor
     viewer.knife_pos = Vec3(center.x(), bb_max.y() + extent * 0.3, center.z());
-    viewer.knife_radius = extent * 0.08;
+    // knife_radius 已经在前面从YAML config同步过 (line 431)，不再覆盖
 
     if (!viewer.init(1280, 720, "P(F) Shape Matching [GPU]")) {
         std::cerr << "Viewer 初始化失败" << std::endl;

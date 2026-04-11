@@ -26,7 +26,7 @@ clusters:
 
 ## Knife / CUSA tool
 knife:
-  radius: auto          # "auto" = 8x avg_spacing, or float
+  radius: 0.002         # 2mm tool tip (was auto ~5.2mm)
   cutting_interval: 50  # update damage every N steps
   alpha_min: 10.0       # P(F) sigmoid steepness
   aspiration_threshold: 0.3  # remove particles with damage > this
@@ -48,4 +48,4 @@ rigid_object:
 viewer:
   draw_surface: true
   draw_wireframe: false
-  draw_points: true
+  draw_points: false   # 关闭粒子点 — debulk时只看mesh更直观
