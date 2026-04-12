@@ -22,6 +22,7 @@ def init_warp_arrays(vertices: np.ndarray, fixed_mask: np.ndarray, device="cuda:
         "pred_pos": wp.array(vertices, dtype=wp.vec3, device=device, requires_grad=True),
         "old_pos": wp.array(vertices, dtype=wp.vec3, device=device, requires_grad=True),
         "damage": wp.zeros(N, dtype=wp.float32, device=device, requires_grad=True),
+        "damage_int": wp.zeros(N, dtype=wp.int32, device=device),      # scratch for atomic_max
         "alpha": wp.ones(N, dtype=wp.float32, device=device, requires_grad=True),
         "fixed": wp.array(fixed_mask, dtype=wp.int32, device=device),  # int, no grad
         "deltas": wp.zeros(N, dtype=wp.vec3, device=device, requires_grad=True),

@@ -11,6 +11,7 @@ from .kernels import (
 from .pf_damage import (
     update_edge_damage_kernel,
     update_particle_damage_kernel,
+    finalize_particle_damage_kernel,
     update_soft_removal_kernel,
 )
 
@@ -35,9 +36,18 @@ class ShapeMatchingSolver:
         self.stiffness = 0.6
         self.damping = 0.98
         self.floor_y = 0.0
+        self.substeps = 1  # number of substeps per step() call
 
-        # Knife
-        self.knife_pos = wp.vec3(100.0, 100.0, 100.0)
+        # Knife — wp.array for differentiability (gradient flows through wp.Tape)
+        self.knife_pos = wp.array(
+            [wp.vec3(100.0, 100.0, 100.0)],
+            dtype=wp.vec3, device=device, requires_grad=True,
+        )
+        self.knife_rot = wp.mat33(
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0,
+        )  # tool rotation (local→world), identity = no rotation
         self.knife_radius = 0.1
         self.knife_active = 0
 
@@ -50,8 +60,14 @@ class ShapeMatchingSolver:
         self.step_count = 0
 
     def step(self):
-        """One simulation timestep."""
+        """One simulation timestep (may contain multiple substeps)."""
+        for _sub in range(self.substeps):
+            self._substep()
+
+    def _substep(self):
+        """One physics substep. dt_sub = self.dt / self.substeps."""
         N = self.N
+        dt_sub = self.dt / float(self.substeps)
 
         # 1. Predict
         wp.launch(
@@ -61,7 +77,7 @@ class ShapeMatchingSolver:
                 self.p["pos"], self.p["vel"],
                 self.p["pred_pos"], self.p["old_pos"],
                 self.p["alpha"], self.p["fixed"],
-                self.gravity, self.dt, self.damping,
+                self.gravity, dt_sub, self.damping,
             ],
             device=self.device,
         )
@@ -145,15 +161,28 @@ class ShapeMatchingSolver:
                 device=self.device,
             )
 
-            # Particle damage aggregation
+            # Particle damage aggregation (differentiable: atomic_add mean + softplus)
+            # Pass 1: accumulate edge damage to particles via atomic_add
+            damage_sum = wp.zeros(N, dtype=wp.float32, device=self.device, requires_grad=True)
+            damage_count = wp.zeros(N, dtype=wp.float32, device=self.device, requires_grad=True)
+
             wp.launch(
                 update_particle_damage_kernel,
                 dim=num_edges,
                 inputs=[
-                    self.p["damage"], self.p["alpha"],
+                    damage_sum, damage_count,
+                    self.p["alpha"],
                     self.e["a"], self.e["b"],
                     self.e["damage"],
                 ],
+                device=self.device,
+            )
+
+            # Pass 2: finalize mean + monotonic softplus update
+            wp.launch(
+                finalize_particle_damage_kernel,
+                dim=N,
+                inputs=[damage_sum, damage_count, self.p["damage"]],
                 device=self.device,
             )
 
@@ -169,7 +198,7 @@ class ShapeMatchingSolver:
             )
 
         # 5. Update velocity
-        inv_dt = 1.0 / self.dt
+        inv_dt = 1.0 / dt_sub
         wp.launch(
             update_velocity_kernel,
             dim=N,
@@ -183,6 +212,13 @@ class ShapeMatchingSolver:
         )
 
         self.step_count += 1
+
+    def set_knife_pos(self, x, y, z):
+        """Set knife position. Creates a new wp.array to preserve grad tracking."""
+        self.knife_pos = wp.array(
+            [wp.vec3(x, y, z)],
+            dtype=wp.vec3, device=self.device, requires_grad=True,
+        )
 
     def get_positions_numpy(self):
         """Download positions to CPU numpy array."""

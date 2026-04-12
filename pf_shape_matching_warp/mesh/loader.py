@@ -142,7 +142,7 @@ def build_edges(vertices: np.ndarray, cluster_particle_ids: list, vertex_neighbo
             avg_spacing += dists.min()
             count += 1
     avg_spacing /= max(count, 1)
-    max_edge_len = avg_spacing * 1.8
+    max_edge_len = avg_spacing * 2.5  # match C++ cutting_manager.h
 
     # Collect unique edges within distance threshold
     edge_set = set()

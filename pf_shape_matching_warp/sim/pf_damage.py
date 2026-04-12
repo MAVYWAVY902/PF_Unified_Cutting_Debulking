@@ -4,6 +4,10 @@ Mirrors cutting kernels from shape_matching_gpu.cu.
 import warp as wp
 
 
+# Scale factor for int-encoded float atomic max (damage range [0, 1])
+DAMAGE_INT_SCALE = float(1000000)
+
+
 # ============== Edge Damage (P(F) computation) ==============
 
 @wp.kernel
@@ -14,7 +18,7 @@ def update_edge_damage_kernel(
     edge_b: wp.array(dtype=wp.int32),
     pf_rest: wp.array(dtype=wp.float32),
     edge_damage: wp.array(dtype=wp.float32),
-    knife_pos: wp.vec3,
+    knife_pos: wp.array(dtype=wp.vec3),
     knife_radius: float,
     alpha_min: float,
 ):
@@ -33,45 +37,64 @@ def update_edge_damage_kernel(
     pb = pred_pos[b]
     mid = (pa + pb) * 0.5
 
-    # Distance from midpoint to knife center
-    diff = mid - knife_pos
-    dist_to_center = wp.length(diff)
+    # Safe distance: sqrt(|x|^2 + eps^2) — always > 0, bounded gradient
+    kp = knife_pos[0]
+    diff = mid - kp
+    dist_sq = wp.dot(diff, diff)
+    dist_to_center = wp.sqrt(dist_sq + 1.0e-8)
 
     # Only update edges near knife (3x radius)
     if dist_to_center > knife_radius * 3.0:
         return
 
-    # Edge half-length (circumsphere radius)
+    # Edge half-length (circumsphere radius), also safe
     edge_vec = pa - pb
-    radius = wp.length(edge_vec) * 0.5
-    if radius < 1.0e-10:
+    edge_len_sq = wp.dot(edge_vec, edge_vec)
+    radius = wp.sqrt(edge_len_sq + 1.0e-8) * 0.5
+    if radius < 1.0e-4:
         return
 
     # P(F) using knife SURFACE distance (not center)
     intruder_dist = dist_to_center - knife_radius
     sdist = intruder_dist - radius
-    pf = 1.0 / (1.0 + wp.exp(-alpha_min * sdist / radius))
+    # Clamp sigmoid argument to prevent float32 overflow
+    exp_arg = wp.clamp(-alpha_min * sdist / radius, -50.0, 50.0)
+    pf = 1.0 / (1.0 + wp.exp(exp_arg))
 
     # Damage update (monotonic: only increase)
+    # Use smooth max instead of conditional write — Warp tape cannot differentiate
+    # through conditional array writes (if target > current: array[i] = target).
+    # smooth_max(a, b) = a + softplus(b - a) where softplus(x) = log(1+exp(x))
     rest = pf_rest[eid]
     if rest > 0.01:
-        target = wp.max(0.0, 1.0 - pf / rest)
+        target = 1.0 - pf / rest
+        # Smooth clamp to [0, inf): softplus(target) ≈ max(0, target)
+        target_clamped = wp.log(1.0 + wp.exp(wp.clamp(20.0 * target, -50.0, 50.0))) / 20.0
+        # Smooth monotonic update: softplus(new - old) ≈ max(0, new - old)
         current = edge_damage[eid]
-        if target > current:
-            edge_damage[eid] = target
+        dmg_diff = target_clamped - current
+        increment = wp.log(1.0 + wp.exp(wp.clamp(20.0 * dmg_diff, -50.0, 50.0))) / 20.0
+        edge_damage[eid] = current + increment
 
 
 # ============== Particle Damage Aggregation ==============
+# Differentiable version: atomic_add (mean) instead of atomic_max.
+# Mean is differentiable via wp.Tape(); max (int-scaled) is not.
+# Slightly more conservative than max (mean < max), but enables
+# end-to-end gradient flow: reward → alpha → damage → edge_damage → knife_pos → action.
 
 @wp.kernel
 def update_particle_damage_kernel(
-    particle_damage: wp.array(dtype=wp.float32),
+    particle_damage_sum: wp.array(dtype=wp.float32),
+    particle_damage_count: wp.array(dtype=wp.float32),
     alpha: wp.array(dtype=wp.float32),
     edge_a: wp.array(dtype=wp.int32),
     edge_b: wp.array(dtype=wp.int32),
     edge_damage: wp.array(dtype=wp.float32),
 ):
-    """Per-edge: propagate edge damage to both endpoint particles (monotonic max)."""
+    """Per-edge: accumulate edge damage to endpoint particles via atomic_add.
+    Differentiable — gradients flow through wp.atomic_add.
+    """
     eid = wp.tid()
 
     a = edge_a[eid]
@@ -83,13 +106,32 @@ def update_particle_damage_kernel(
     if val <= 0.0:
         return
 
-    # Atomic max via atomic_add trick: only write if larger
-    # Warp doesn't have atomic_max for float, use atomic_add approach
-    # Since damage is monotonic, we just check and write (small race OK)
-    if val > particle_damage[a]:
-        particle_damage[a] = val
-    if val > particle_damage[b]:
-        particle_damage[b] = val
+    wp.atomic_add(particle_damage_sum, a, val)
+    wp.atomic_add(particle_damage_count, a, 1.0)
+    wp.atomic_add(particle_damage_sum, b, val)
+    wp.atomic_add(particle_damage_count, b, 1.0)
+
+
+@wp.kernel
+def finalize_particle_damage_kernel(
+    particle_damage_sum: wp.array(dtype=wp.float32),
+    particle_damage_count: wp.array(dtype=wp.float32),
+    particle_damage: wp.array(dtype=wp.float32),
+):
+    """Compute mean damage per particle. Monotonic: only increase.
+    damage[i] = max(damage[i], sum[i] / count[i])
+    The max here is a per-particle scalar op (not atomic), fine for differentiability.
+    """
+    i = wp.tid()
+    cnt = particle_damage_count[i]
+    if cnt < 0.5:
+        return
+    mean_dmg = particle_damage_sum[i] / cnt
+    # Differentiable monotonic update: softplus approximation of max(0, new - old)
+    # softplus(x) = log(1 + exp(k*x)) / k, but clamp arg to prevent overflow
+    diff = mean_dmg - particle_damage[i]
+    sp_arg = wp.clamp(20.0 * diff, -50.0, 50.0)
+    particle_damage[i] = particle_damage[i] + wp.log(1.0 + wp.exp(sp_arg)) / 20.0
 
 
 # ============== Soft Removal (Differentiable) ==============
@@ -112,5 +154,6 @@ def update_soft_removal_kernel(
         return
 
     d = damage[i]
-    # Sigmoid soft mask
-    alpha[i] = 1.0 / (1.0 + wp.exp(sharpness * (d - threshold)))
+    # Sigmoid soft mask (clamp exp arg to prevent overflow)
+    exp_arg = wp.clamp(sharpness * (d - threshold), -50.0, 50.0)
+    alpha[i] = 1.0 / (1.0 + wp.exp(exp_arg))

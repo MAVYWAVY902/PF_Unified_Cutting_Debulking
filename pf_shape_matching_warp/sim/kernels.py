@@ -39,7 +39,7 @@ def collision_kernel(
     alpha: wp.array(dtype=wp.float32),
     fixed: wp.array(dtype=wp.int32),
     floor_y: float,
-    knife_pos: wp.vec3,
+    knife_pos: wp.array(dtype=wp.vec3),
     knife_radius: float,
     knife_active: int,
 ):
@@ -53,12 +53,15 @@ def collision_kernel(
     if p[1] < floor_y:
         p = wp.vec3(p[0], floor_y, p[2])
 
-    # Knife sphere SDF
+    # Knife sphere SDF with safe distance (gradient-stable at origin)
+    # safe_dist = sqrt(|diff|^2 + eps^2) — always > 0, bounded gradient
     if knife_active == 1:
-        diff = p - knife_pos
-        dist = wp.length(diff)
-        if dist < knife_radius and dist > 1.0e-10:
-            p = knife_pos + diff * (knife_radius / dist)
+        kp = knife_pos[0]
+        diff = p - kp
+        dist_sq = wp.dot(diff, diff)
+        safe_dist = wp.sqrt(dist_sq + 1.0e-8)
+        if dist_sq < knife_radius * knife_radius:
+            p = kp + diff * (knife_radius / safe_dist)
 
     pred_pos[i] = p
 
@@ -177,9 +180,12 @@ def cluster_solve_kernel(
         a22 = a22 + pz * qz
 
     # 3. SVD -> Rotation R = U * V^T
-    A = wp.mat33(a00, a01, a02,
-                 a10, a11, a12,
-                 a20, a21, a22)
+    # Add small regularization to prevent singular/near-singular matrices
+    # which cause NaN in SVD backward pass
+    eps = 1.0e-6
+    A = wp.mat33(a00 + eps, a01,       a02,
+                 a10,       a11 + eps,  a12,
+                 a20,       a21,        a22 + eps)
 
     U, sigma, V = wp.svd3(A)
     R = U * wp.transpose(V)

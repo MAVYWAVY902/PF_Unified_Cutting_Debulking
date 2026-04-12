@@ -62,7 +62,7 @@ def main():
 
     # Phase 2: Activate knife at center of cube
     print("\nActivating knife at cube center...")
-    solver.knife_pos = wp.vec3(0.5, 0.5, 0.5)
+    solver.set_knife_pos(0.5, 0.5, 0.5)
     solver.knife_radius = 0.15
     solver.knife_active = 1
 

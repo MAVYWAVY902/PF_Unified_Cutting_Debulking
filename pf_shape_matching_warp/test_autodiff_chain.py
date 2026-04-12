@@ -67,7 +67,7 @@ def sum_alpha_loss(alpha: wp.array(dtype=wp.float32), loss: wp.array(dtype=wp.fl
     wp.atomic_add(loss, 0, alpha[i])
 
 # Set knife
-solver.knife_pos = wp.vec3(0.5, 0.5, 0.5)
+solver.set_knife_pos(0.5, 0.5, 0.5)
 solver.knife_radius = 0.15
 solver.knife_active = 1
 

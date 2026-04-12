@@ -47,7 +47,7 @@ def run_forward_and_loss(solver, knife_x, knife_y, knife_z, num_steps=20):
     """Run simulation with given knife position, return loss scalar.
     Loss = sum of particle damage (proxy for volume removed).
     """
-    solver.knife_pos = wp.vec3(knife_x, knife_y, knife_z)
+    solver.set_knife_pos(knife_x, knife_y, knife_z)
     solver.knife_radius = 0.15
     solver.knife_active = 1
 
@@ -94,9 +94,6 @@ def main():
     solver.cutting_update_interval = 10
     num_steps = 20
 
-    # Create a Warp array for knife position with requires_grad
-    knife_pos_arr = wp.array([0.5, 0.5, 0.5], dtype=wp.float32, device=device, requires_grad=True)
-
     # We need a simple differentiable loss kernel
     @wp.kernel
     def compute_loss_kernel(
@@ -111,12 +108,8 @@ def main():
     try:
         tape = wp.Tape()
         with tape:
-            # Set knife position from array
-            solver.knife_pos = wp.vec3(
-                knife_pos_arr.numpy()[0],
-                knife_pos_arr.numpy()[1],
-                knife_pos_arr.numpy()[2],
-            )
+            # Set knife position as wp.array (gradient-tracked through Tape)
+            solver.set_knife_pos(0.5, 0.5, 0.5)
             solver.knife_radius = 0.15
             solver.knife_active = 1
 
@@ -137,7 +130,13 @@ def main():
         loss_val = loss_arr.numpy()[0]
         print(f"  Loss (sum damage): {loss_val:.4f}")
 
-        # Check if gradients exist
+        # Check if gradients exist on knife_pos (the key differentiability test)
+        if solver.knife_pos.grad is not None:
+            grad_knife = solver.knife_pos.grad.numpy()
+            print(f"  knife_pos.grad exists: {grad_knife}")
+        else:
+            print("  knife_pos.grad: None (gradient did not flow to knife_pos)")
+
         if solver.p["damage"].grad is not None:
             grad_damage = solver.p["damage"].grad.numpy()
             print(f"  damage.grad exists: sum={grad_damage.sum():.4f}")
