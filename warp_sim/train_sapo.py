@@ -1,15 +1,17 @@
 """SAPO training for P(F) surgical debulking.
 
-Short-Horizon Analytic Policy Optimization:
-- Actor gradient comes from differentiable sim (wp.Tape), not reward sampling
-- Critic trained via TD(lambda) on collected trajectory data
-- Max-entropy formulation for exploration stability
+Selective differentiation (AHAC-style):
+- Full physics runs WITHOUT tape (includes SVD shape matching)
+- Collision + reward runs WITH internal tape (stable gradient)
+- env.step() returns action_grad directly — no outer tape needed
+- Critic provides long-horizon value via TD(lambda) advantages
 
 Usage:
     python warp_sim/train_sapo.py [--config warp_sim/config/debulk_sapo.yaml]
 """
 import os
 import sys
+import copy
 import argparse
 import math
 import yaml
@@ -17,7 +19,6 @@ import numpy as np
 
 import warp as wp
 
-# Defer torch import to allow running env tests without torch
 torch = None
 
 
@@ -28,280 +29,265 @@ def _ensure_torch():
         torch = _torch
 
 
-# ============== Actor-Critic Network ==============
+# ============== Actor-Critic ==============
 
 def build_actor_critic(obs_dim, act_dim, hidden_dim):
-    """Build SAPO actor-critic with LayerNorm + SiLU (matching SAPO paper)."""
     _ensure_torch()
     nn = torch.nn
-
     actor_mean = nn.Sequential(
         nn.Linear(obs_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.SiLU(),
         nn.Linear(hidden_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.SiLU(),
         nn.Linear(hidden_dim, act_dim),
     )
     actor_log_std = nn.Parameter(torch.zeros(act_dim))
-
     critic = nn.Sequential(
         nn.Linear(obs_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.SiLU(),
         nn.Linear(hidden_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.SiLU(),
         nn.Linear(hidden_dim, 1),
     )
-
     return actor_mean, actor_log_std, critic
 
 
-# ============== Training Loop ==============
+def _compute_gae(rewards, values, gamma, lam):
+    T = len(rewards)
+    advantages = np.zeros(T, dtype=np.float32)
+    returns = np.zeros(T, dtype=np.float32)
+    gae = 0.0
+    for t in reversed(range(T)):
+        delta = rewards[t] + gamma * values[t + 1] - values[t]
+        gae = delta + gamma * lam * gae
+        advantages[t] = gae
+        returns[t] = gae + values[t]
+    return advantages, returns
+
+
+# ============== Training ==============
 
 def train(cfg):
     _ensure_torch()
-    nn = torch.nn
-
     wp.init()
     device = "cuda:0"
 
-    # Build env
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
     from warp_sim.envs.debulk_env import DebulkEnv
     env = DebulkEnv(cfg, device=device)
 
-    # Training config
     tcfg = cfg.get("training", {})
-    num_epochs = tcfg.get("num_epochs", 1000)
-    horizon = cfg.get("horizon_len", 32)
+    num_epochs = tcfg.get("num_epochs", 500)
+    horizon = cfg.get("horizon_len", 8)
     gamma = tcfg.get("gamma", 0.99)
     lam = tcfg.get("lam", 0.95)
     max_grad_norm = tcfg.get("max_grad_norm", 0.5)
     actor_lr = tcfg.get("actor_lr", 2e-3)
     critic_lr = tcfg.get("critic_lr", 5e-4)
     actor_beta1 = tcfg.get("actor_beta1", 0.7)
-    hidden_dim = tcfg.get("hidden_dim", 64)
+    hidden_dim = tcfg.get("hidden_dim", 256)
     critic_iterations = tcfg.get("critic_iterations", 16)
     log_interval = tcfg.get("log_interval", 10)
     save_interval = tcfg.get("save_interval", 100)
     init_alpha = tcfg.get("init_alpha", 1.0)
     target_entropy = tcfg.get("target_entropy", -1.5)
+    tau = tcfg.get("target_critic_tau", 0.005)
+    sim_grad_clip = tcfg.get("sim_grad_clip", 10.0)
 
-    # Build networks (obs_dim = N_SAMPLE*4 + 3, act_dim = 3)
-    obs_dim = env.num_obs  # 250*4 + 3 = 1003
-    actor_mean, actor_log_std, critic = build_actor_critic(
-        obs_dim, env.num_act, hidden_dim)
+    obs_dim = env.num_obs
+    actor_mean, actor_log_std, critic = build_actor_critic(obs_dim, env.num_act, hidden_dim)
     actor_mean.cuda()
     critic.cuda()
     actor_log_std = torch.nn.Parameter(actor_log_std.detach().cuda())
+    critic_target = copy.deepcopy(critic)
+    critic_target.eval()
 
     actor_params = list(actor_mean.parameters()) + [actor_log_std]
-    actor_opt = torch.optim.AdamW(actor_params, lr=actor_lr,
-                                   betas=(actor_beta1, 0.95))
-    critic_opt = torch.optim.AdamW(critic.parameters(), lr=critic_lr,
-                                    betas=(actor_beta1, 0.95))
-
-    # Entropy temperature (learnable)
+    actor_opt = torch.optim.AdamW(actor_params, lr=actor_lr, betas=(actor_beta1, 0.95))
+    critic_opt = torch.optim.AdamW(critic.parameters(), lr=critic_lr, betas=(actor_beta1, 0.95))
     log_alpha = torch.tensor(math.log(init_alpha), requires_grad=True, device="cuda")
     alpha_opt = torch.optim.Adam([log_alpha], lr=5e-3)
 
-    print(f"\nSAPO Training: {num_epochs} epochs, horizon={horizon}")
-    print(f"  Actor LR={actor_lr}, Critic LR={critic_lr}, beta1={actor_beta1}")
-    print(f"  gamma={gamma}, lambda={lam}, grad_clip={max_grad_norm}")
+    print(f"\nSAPO Training (selective differentiation, H={horizon})")
+    print(f"  {num_epochs} epochs, obs_dim={obs_dim}")
+    print(f"  Actor LR={actor_lr}, Critic LR={critic_lr}")
+    print(f"  gamma={gamma}, lam={lam}, grad_clip={max_grad_norm}")
 
     best_reward = -float("inf")
 
     for epoch in range(num_epochs):
-        # ---- Actor update (differentiable rollout) ----
         actor_mean.train()
 
-        # Collect trajectory data for critic
-        obs_list = []
-        reward_list = []
-        value_list = []
-        action_grads = []
-
-        # Reset env (cuts gradient)
+        # ============================================================
+        # Phase 1: Rollout — env.step() manages its own internal tape
+        # ============================================================
+        step_data = []
         obs_dict = env.initialize_trajectory()
 
-        # Record differentiable rollout
-        tape = wp.Tape()
-        actions_wp_list = []
+        for t in range(horizon):
+            wp.synchronize()
+            obs_np = env.get_obs_flat_np(obs_dict)
+            obs_torch = torch.tensor(obs_np, dtype=torch.float32, device="cuda").unsqueeze(0)
 
-        # Accumulate total reward inside tape for backprop
-        total_reward_buf = wp.zeros(1, dtype=wp.float32, device=device, requires_grad=True)
+            # Actor forward
+            with torch.no_grad():
+                act_mean_out = actor_mean(obs_torch)
+                std = actor_log_std.exp().clamp(min=0.01, max=1.0)
+                dist = torch.distributions.Normal(act_mean_out, std)
+                action_torch = dist.sample().squeeze(0)
+                action_torch = torch.tanh(action_torch)
 
-        @wp.kernel
-        def accumulate_reward(src: wp.array(dtype=wp.float32),
-                              dst: wp.array(dtype=wp.float32),
-                              discount: float):
-            tid = wp.tid()
-            if tid > 0:
-                return
-            wp.atomic_add(dst, 0, src[0] * discount)
+            # Convert to Warp
+            action_np = action_torch.cpu().numpy().astype(np.float32)
+            action_wp = wp.array(
+                [wp.vec3(action_np[0], action_np[1], action_np[2])],
+                dtype=wp.vec3, device=device, requires_grad=True,
+            )
 
-        with tape:
-            for t in range(horizon):
-                # obs dict -> flat numpy -> torch
-                wp.synchronize()
-                obs_np = env.get_obs_flat_np(obs_dict)
-                obs_list.append(obs_np.copy())
-                obs_torch = torch.tensor(obs_np, dtype=torch.float32, device="cuda").unsqueeze(0)
+            # env.step() runs full physics + internal tape for collision gradient
+            obs_dict, rew_wp, done_wp, extras = env.step(action_wp)
 
-                # Actor forward
-                with torch.no_grad():
-                    act_mean_out = actor_mean(obs_torch)
-                    std = actor_log_std.exp().clamp(min=0.01, max=1.0)
-                    dist = torch.distributions.Normal(act_mean_out, std)
-                    action_torch = dist.sample().squeeze(0)  # (3,)
-                    action_torch = torch.tanh(action_torch)  # bound to [-1, 1]
+            wp.synchronize()
+            reward_val = float(rew_wp.numpy()[0])
 
-                # torch -> warp action
-                action_np = action_torch.cpu().numpy().astype(np.float32)
-                action_wp = wp.array(
-                    [wp.vec3(action_np[0], action_np[1], action_np[2])],
-                    dtype=wp.vec3, device=device, requires_grad=True,
-                )
-                actions_wp_list.append(action_wp)
+            # Get stable action gradient from env (collision-only, no SVD)
+            action_grad = extras.get("action_grad", np.zeros(3, dtype=np.float32))
 
-                # Env step (differentiable physics)
-                obs_dict, rew_wp, done_wp, _ = env.step(action_wp)
+            # Clip gradient norm (preserve direction)
+            gnorm = np.linalg.norm(action_grad)
+            if gnorm > sim_grad_clip:
+                action_grad = action_grad * (sim_grad_clip / gnorm)
 
-                # Accumulate discounted reward into total (inside tape!)
-                discount_t = gamma ** t
-                wp.launch(accumulate_reward, dim=1,
-                          inputs=[rew_wp, total_reward_buf, discount_t],
-                          device=device)
+            # Critic value
+            with torch.no_grad():
+                value = critic_target(obs_torch).item()
 
-                # Track data
-                wp.synchronize()
-                reward_list.append(float(rew_wp.numpy()[0]))
+            step_data.append({
+                "obs_np": obs_np.copy(),
+                "action_grad": action_grad,
+                "reward": reward_val,
+                "value": value,
+            })
 
-                # Critic value estimate (detached)
-                with torch.no_grad():
-                    v = critic(obs_torch).item()
-                    value_list.append(v)
+        # ============================================================
+        # Phase 2: Advantages
+        # ============================================================
+        rewards_np = np.array([sd["reward"] for sd in step_data])
+        values_np = np.array([sd["value"] for sd in step_data] +
+                             [step_data[-1]["value"]])
+        advantages, returns = _compute_gae(rewards_np, values_np, gamma, lam)
 
-        # Backward through ALL steps via accumulated reward
-        try:
-            tape.backward(loss=total_reward_buf)
+        adv_std = advantages.std()
+        if adv_std > 1e-8:
+            advantages = (advantages - advantages.mean()) / adv_std
 
-            # Collect action gradients from Warp
-            for t, a_wp in enumerate(actions_wp_list):
-                if a_wp.grad is not None:
-                    g = a_wp.grad.numpy().copy()
-                    action_grads.append(g)
-                else:
-                    action_grads.append(np.zeros((1, 3), dtype=np.float32))
-        except Exception as e:
-            print(f"  [epoch {epoch}] tape.backward error: {e}")
-            action_grads = [np.zeros((1, 3), dtype=np.float32)] * horizon
-
-        env.clear_grad()
-
-        # ---- Policy gradient via analytic gradients ----
-        # Rerun actor forward and use Warp's action.grad as the policy gradient signal
+        # ============================================================
+        # Phase 3: Actor update
+        # ============================================================
         actor_opt.zero_grad()
         policy_loss = torch.tensor(0.0, device="cuda")
 
         for t in range(horizon):
-            obs_torch = torch.tensor(obs_list[t], dtype=torch.float32, device="cuda").unsqueeze(0)
+            sd = step_data[t]
+            obs_torch = torch.tensor(sd["obs_np"], dtype=torch.float32,
+                                     device="cuda").unsqueeze(0)
             act_mean_out = actor_mean(obs_torch)
             std = actor_log_std.exp().clamp(min=0.01, max=1.0)
             dist = torch.distributions.Normal(act_mean_out, std)
             action_sampled = dist.rsample()
             action_bounded = torch.tanh(action_sampled)
 
-            # Use Warp's analytic gradient as the "reward gradient" w.r.t. action
-            grad_from_sim = torch.tensor(
-                action_grads[t].reshape(3), dtype=torch.float32, device="cuda")
+            # Sim gradient direction (from env's internal collision tape)
+            sim_grad = torch.tensor(sd["action_grad"], device="cuda")
+            adv_t = torch.tensor(advantages[t], device="cuda")
 
-            # gamma-discounted contribution
-            discount = gamma ** t
-            # Policy gradient: action * grad (stop gradient on grad_from_sim)
-            policy_loss = policy_loss - discount * torch.sum(action_bounded.squeeze() * grad_from_sim.detach())
+            # Policy gradient = advantage × (action · sim_gradient_direction)
+            sg_norm = sim_grad.norm()
+            if sg_norm > 1e-8:
+                sg_dir = sim_grad / sg_norm
+            else:
+                sg_dir = sim_grad
 
-            # Entropy bonus
+            policy_loss = policy_loss - adv_t * torch.sum(
+                action_bounded.squeeze() * sg_dir.detach())
+
+            # Entropy
             alpha = log_alpha.exp()
-            entropy = dist.entropy().sum()
-            policy_loss = policy_loss - alpha.detach() * entropy * 0.01
+            log_prob = dist.log_prob(action_sampled).sum()
+            policy_loss = policy_loss + alpha.detach() * log_prob
 
         policy_loss = policy_loss / float(horizon)
         policy_loss.backward()
         torch.nn.utils.clip_grad_norm_(actor_params, max_grad_norm)
         actor_opt.step()
 
-        # ---- Alpha (entropy temperature) update ----
+        # Alpha update
         alpha_opt.zero_grad()
         alpha = log_alpha.exp()
-        alpha_loss = -alpha * (torch.tensor(target_entropy, device="cuda") -
-                               torch.tensor(float(sum(reward_list)) / horizon, device="cuda")).detach()
+        with torch.no_grad():
+            obs_last = torch.tensor(step_data[-1]["obs_np"], dtype=torch.float32,
+                                    device="cuda").unsqueeze(0)
+            mu = actor_mean(obs_last)
+            std = actor_log_std.exp().clamp(min=0.01, max=1.0)
+            d = torch.distributions.Normal(mu, std)
+            lp = d.log_prob(d.rsample()).sum()
+        alpha_loss = -alpha * (lp + target_entropy)
         alpha_loss.backward()
         alpha_opt.step()
 
-        # ---- Critic update (TD(lambda) targets) ----
-        rewards_np = np.array(reward_list)
-        values_np = np.array(value_list + [value_list[-1]])  # bootstrap last
-        returns = _compute_gae_returns(rewards_np, values_np, gamma, lam)
-
+        # ============================================================
+        # Phase 4: Critic update
+        # ============================================================
         for _ in range(critic_iterations):
             critic_opt.zero_grad()
             critic_loss = torch.tensor(0.0, device="cuda")
-
             for t in range(horizon):
-                obs_torch = torch.tensor(obs_list[t], dtype=torch.float32, device="cuda").unsqueeze(0)
-                v_pred = critic(obs_torch).squeeze()
+                obs_t = torch.tensor(step_data[t]["obs_np"], dtype=torch.float32,
+                                     device="cuda").unsqueeze(0)
+                v_pred = critic(obs_t).squeeze()
                 target = torch.tensor(returns[t], dtype=torch.float32, device="cuda")
                 critic_loss = critic_loss + (v_pred - target) ** 2
-
             critic_loss = critic_loss / float(horizon)
             critic_loss.backward()
             torch.nn.utils.clip_grad_norm_(critic.parameters(), max_grad_norm)
             critic_opt.step()
 
-        # ---- Logging ----
-        ep_reward = sum(reward_list)
+        with torch.no_grad():
+            for p, pt in zip(critic.parameters(), critic_target.parameters()):
+                pt.data.lerp_(p.data, tau)
+
+        # ============================================================
+        # Logging
+        # ============================================================
+        ep_reward = sum(sd["reward"] for sd in step_data)
         if epoch % log_interval == 0:
-            grad_norms = [np.linalg.norm(g) for g in action_grads]
-            avg_grad = np.mean(grad_norms) if grad_norms else 0
-            print(f"  epoch {epoch:4d} | reward={ep_reward:+8.3f} | "
-                  f"avg_grad={avg_grad:.4f} | alpha={log_alpha.exp().item():.3f} | "
-                  f"critic_loss={critic_loss.item():.4f}")
+            grad_norms = [np.linalg.norm(sd["action_grad"]) for sd in step_data]
+            avg_grad = np.mean(grad_norms)
+            max_grad = max(grad_norms) if grad_norms else 0
+            nonzero = sum(1 for n in grad_norms if n > 1e-8)
+            print(f"  epoch {epoch:4d} | reward={ep_reward:+.4f} | "
+                  f"avg_grad={avg_grad:.6f} max_grad={max_grad:.6f} | "
+                  f"grads>0: {nonzero}/{horizon} | "
+                  f"alpha={log_alpha.exp().item():.3f} | "
+                  f"critic={critic_loss.item():.4f}")
 
         if ep_reward > best_reward:
             best_reward = ep_reward
 
         if save_interval > 0 and epoch % save_interval == 0 and epoch > 0:
-            save_path = f"checkpoint_epoch{epoch}.pt"
             torch.save({
                 "actor": actor_mean.state_dict(),
                 "actor_log_std": actor_log_std.data,
                 "critic": critic.state_dict(),
-                "log_alpha": log_alpha.data,
-                "epoch": epoch,
-            }, save_path)
-            print(f"  Saved checkpoint: {save_path}")
+                "epoch": epoch, "best_reward": best_reward,
+            }, f"checkpoint_epoch{epoch}.pt")
+            print(f"  Saved checkpoint_epoch{epoch}.pt")
 
-    print(f"\nTraining complete. Best reward: {best_reward:.3f}")
+    print(f"\nTraining complete. Best reward: {best_reward:.4f}")
 
-
-def _compute_gae_returns(rewards, values, gamma, lam):
-    """Compute GAE (Generalized Advantage Estimation) returns."""
-    T = len(rewards)
-    returns = np.zeros(T, dtype=np.float32)
-    gae = 0.0
-    for t in reversed(range(T)):
-        delta = rewards[t] + gamma * values[t + 1] - values[t]
-        gae = delta + gamma * lam * gae
-        returns[t] = gae + values[t]
-    return returns
-
-
-# ============== Entry Point ==============
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="warp_sim/config/debulk_sapo.yaml")
     args = parser.parse_args()
-
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
-
     train(cfg)
 
 

@@ -1,0 +1,79 @@
+## P(F) Capsule Task — Arm Y (L1 method control: finite-difference gradient)
+## M3.5 ablation: PPO with 3-D gradient obs produced by 6 forward perturbations
+## (central difference). Rules out "you just need gradient info — autograd isn't
+## the contribution" confound when comparing against Arm C. Same L1 level.
+
+name: "Debulk Capsule Arm Y (FD method control)"
+
+# Task selector
+task_type: "capsule_only"
+
+# Obs mode: 6-point central FD gradient of capsule damage w.r.t. action (3D).
+obs_mode: "finite_diff"          # env runs 6 substeps per step (~6× cost vs Arm A)
+
+# Environment
+mesh: "resources/cuboid_flat/cuboid_h050.msh"
+settle_steps: 200
+sim_substeps: 2
+action_scale: 0.003
+knife_start: [1.0, 0.5, 0.0]
+knife_radius: 0.05
+episode_length: 256
+debulk_threshold: 0.5
+workspace_margin: -0.02
+
+# Physics
+dt: 0.005
+num_iterations: 4
+stiffness: 0.6
+damping: 0.98
+cutting_interval: 1
+
+# FD-specific
+fd_epsilon: 0.01                 # perturbation size in action space (post-tanh)
+
+# Capsule-task reward params
+capsule_budget: 0.05
+lambda_capsule: 30.0
+completion_interior_frac: 0.90
+catastrophic_breach_multiplier: 3.0
+catastrophic_penalty: 100.0
+step_penalty: 0.1
+completion_bonus: 50.0
+
+# Legacy reward params — unused in capsule_only mode
+lambda_nerve: 10.0
+waste_penalty_weight: 0.5
+guidance_weight: 5.0
+guidance_std: 0.15
+surface_bonus: 2.0
+interior_penalty: 5.0
+surface_low: 0.1
+surface_high: 0.9
+
+nerve:
+  type: "y_band"
+  y_min: 0.0
+  y_max: null
+
+# PPO training — identical to Arm A so only obs differs
+training:
+  total_timesteps: 500000
+  learning_rate: 0.0003
+  n_steps: 512
+  batch_size: 128
+  n_epochs: 4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  net_arch: [256, 256]
+  save_freq: 50000
+  use_vecnormalize: true
+  norm_obs: true
+  norm_reward: true
+  clip_obs: 10.0
+  clip_reward: 10.0

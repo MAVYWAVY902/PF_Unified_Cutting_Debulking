@@ -88,38 +88,125 @@ bool cpu_bfs_split(
         }
     }
 
-    // 找最大分量，其余标记为 removed
+    // 找最大分量
     int largest_idx = 0;
     for (int i = 1; i < (int)components.size(); i++) {
         if (components[i].size() > components[largest_idx].size())
             largest_idx = i;
     }
 
-    // 删除所有非主体（最大）组件
+    // 对非最大分量：
+    //   size <  min_fragment_size → 标记 removed（clinical = aspirated 小碎末被吸走）
+    //   size >= min_fragment_size → 保留，让物理/重力自然处理（掉落、继续和刀交互）
+    // 这修正了原版"除最大以外全删"的行为，之前大块分离体会突然消失。
+    int dropped_small = 0, kept_big = 0;
     for (int i = 0; i < (int)components.size(); i++) {
         if (i == largest_idx) continue;
-        for (int pid : components[i]) cpu_removed[pid] = 1;
-        any_change = true;
+        if ((int)components[i].size() < min_fragment_size) {
+            for (int pid : components[i]) cpu_removed[pid] = 1;
+            dropped_small++;
+            any_change = true;
+        } else {
+            kept_big++;
+        }
     }
 
-    if (!any_change) return false;
+    // 第 1 部分 — 如果移除了小碎片：同步 CPU particles 状态 + 上传到 GPU
+    if (any_change) {
+        for (int i = 0; i < N; i++) {
+            cpu_solver.particles[i].removed = (cpu_removed[i] != 0);
+        }
+        gpu_solver.upload_removed(cpu_removed);
 
-    // 同步 particles.removed 状态
-    for (int i = 0; i < N; i++) {
-        cpu_solver.particles[i].removed = (cpu_removed[i] != 0);
+        int total_removed = (int)std::count(cpu_removed.begin(), cpu_removed.end(), 1);
+        printf("[SPLIT] components=%d dropped_small=%d kept_big=%d total_removed=%d\n",
+               (int)components.size(), dropped_small, kept_big, total_removed);
     }
 
-    // 上传 removed 到 GPU
-    // 不重建 clusters — cluster_solve_kernel 在 runtime 跳过 removed 粒子
-    // 不重建 edges — 让 GPU 边的 broken/removed 自己处理
-    gpu_solver.upload_removed(cpu_removed);
+    // 第 2 部分 — 分裂横跨切口的 cluster（关键：消除"隐形弹簧"）
+    // 不做这步的话：ring-2 BFS 建的 cluster 会同时含有切口两侧的 alive 粒子，
+    // cluster_solve_kernel 对这类 cluster 还是把两侧一起 shape-match，效果
+    // 等价于切口两侧每 cluster 一根弹簧把碎片拉回主体。
+    // 只有 components > 1 才需要做（单连通图没有跨切口的 cluster）。
+    bool clusters_changed = false;
+    if ((int)components.size() > 1) {
+        std::vector<Cluster> new_clusters;
+        new_clusters.reserve(cpu_solver.clusters.size() + 32);
+        int split_count = 0;
 
-    int total_removed = (int)std::count(cpu_removed.begin(), cpu_removed.end(), 1);
-    printf("[SPLIT] components=%d removed=%d (kept main, dropped %d)\n",
-           (int)components.size(), total_removed,
-           (int)components.size() - 1);
+        for (const auto& c : cpu_solver.clusters) {
+            // 按 component_id 分组 cluster 的存活粒子
+            std::unordered_map<int, std::vector<int>> by_component;
+            for (int pid : c.particle_ids) {
+                if (cpu_removed[pid]) continue;
+                int cid = component_id[pid];
+                if (cid < 0) continue;  // defensive — BFS 已对所有存活粒子赋 id
+                by_component[cid].push_back(pid);
+            }
 
-    return true;
+            if (by_component.empty()) {
+                // 簇全死 → 丢弃
+                clusters_changed = true;
+                continue;
+            }
+
+            if ((int)by_component.size() == 1) {
+                // 完全在单一 component 内 → 保持原状（包括原 rest_cm / rest_offsets）
+                new_clusters.push_back(c);
+            } else {
+                // 跨 2+ components → 分裂
+                clusters_changed = true;
+                split_count++;
+                for (auto& [cid, ids] : by_component) {
+                    if ((int)ids.size() < 2) continue;  // cluster_solve 要求 size >= 2
+                    Cluster nc;
+                    nc.particle_ids = ids;
+                    std::sort(nc.particle_ids.begin(), nc.particle_ids.end());
+                    // 用当前位置作 rest —— 碎片"接受"它分离时刻的形状为新平衡态，
+                    // 而不是企图回到原初 tumor 内部的相对位置。
+                    nc.init(cpu_solver.particles);
+                    new_clusters.push_back(std::move(nc));
+                }
+            }
+        }
+
+        if (clusters_changed) {
+            cpu_solver.clusters = std::move(new_clusters);
+
+            // 重建 CSR 扁平数组给 GPU
+            int C = (int)cpu_solver.clusters.size();
+            std::vector<int> cluster_starts(C), cluster_sizes(C);
+            std::vector<int> flat_particle_ids;
+            std::vector<float3> flat_rest_offsets;
+            std::vector<float3> flat_rest_cm(C);
+            flat_particle_ids.reserve(C * 16);   // rings=2 典型 cluster ~15 粒子
+            flat_rest_offsets.reserve(C * 16);
+
+            int offset = 0;
+            for (int ci = 0; ci < C; ci++) {
+                const auto& cl = cpu_solver.clusters[ci];
+                cluster_starts[ci] = offset;
+                cluster_sizes[ci] = (int)cl.particle_ids.size();
+                for (int j = 0; j < cluster_sizes[ci]; j++) {
+                    flat_particle_ids.push_back(cl.particle_ids[j]);
+                    const Vec3& ro = cl.rest_offsets[j];
+                    flat_rest_offsets.push_back(make_float3(
+                        (float)ro.x(), (float)ro.y(), (float)ro.z()));
+                }
+                const Vec3& rc = cl.rest_cm;
+                flat_rest_cm[ci] = make_float3((float)rc.x(), (float)rc.y(), (float)rc.z());
+                offset += cluster_sizes[ci];
+            }
+
+            gpu_solver.reupload_clusters(cluster_starts, cluster_sizes,
+                                         flat_particle_ids, flat_rest_offsets,
+                                         flat_rest_cm);
+            printf("[CLUSTER-SPLIT] split %d clusters across cut → total %d clusters\n",
+                   split_count, C);
+        }
+    }
+
+    return any_change || clusters_changed;
 }
 
 int main(int argc, char** argv) {
@@ -487,8 +574,11 @@ int main(int argc, char** argv) {
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
 
-        // Orphan清理：迭代移除不属于任何4-alive tet的粒子
-        // 移除一批orphan后，新出现的orphan也要清理（cascade到稳定）
+        // Orphan清理：移除拓扑真正孤立的粒子（没有任何存活邻居）
+        // 原版用"没有 4-顶点全活的 tet"过于严苛 —— 表面粒子 aspirate 一个邻居就死，
+        // 再加 20 次级联，一次刀接触会蒸发 10× 于真正该死的粒子数。
+        // 新判据：遍历 vertex_neighbors，至少有 1 个邻居活着就算连接正常。
+        // 循环保留（防御性），但新判据下一般 1-2 次就收敛、很少级联。
         if (use_tet && rem > 0) {
             int total_orphans = 0;
             int iter = 0;
@@ -496,20 +586,16 @@ int main(int argc, char** argv) {
                 int round_orphans = 0;
                 for (int i = 0; i < N; i++) {
                     if (cpu_removed[i]) continue;
-                    const auto& my_tets = tet_mesh.vertex_to_tets[i];
-                    if (my_tets.empty()) continue;
+                    if (i >= (int)tet_mesh.vertex_neighbors.size()) continue;
+                    const auto& nbrs = tet_mesh.vertex_neighbors[i];
+                    if (nbrs.empty()) continue;
 
-                    bool has_alive_tet = false;
-                    for (int ti : my_tets) {
-                        const auto& t = tet_mesh.tets[ti];
-                        bool all_alive = true;
-                        for (int j = 0; j < 4; j++) {
-                            if (cpu_removed[t[j]]) { all_alive = false; break; }
-                        }
-                        if (all_alive) { has_alive_tet = true; break; }
+                    bool has_alive_neighbor = false;
+                    for (int nb : nbrs) {
+                        if (!cpu_removed[nb]) { has_alive_neighbor = true; break; }
                     }
 
-                    if (!has_alive_tet) {
+                    if (!has_alive_neighbor) {
                         cpu_removed[i] = 1;
                         cpu_solver.particles[i].removed = true;
                         round_orphans++;
@@ -531,8 +617,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        // BFS连通分量分析：删除所有非主体（最大）组件 fragments
-        if (use_tet && rem > 0 && timing_frame % 30 == 0) {
+        // BFS 连通分量分析：小碎片 aspirated、大碎片保留（详见 cpu_bfs_split）
+        // 频率从每30帧 → 每5帧：小碎片一生成（< 5 粒子）就被吸走，避免"延迟消失"跳变
+        if (use_tet && rem > 0 && timing_frame % 5 == 0) {
             bool changed = cpu_bfs_split(
                 gpu_solver, cpu_solver,
                 edge_a, edge_b, edge_pf_rest,
@@ -581,7 +668,10 @@ int main(int argc, char** argv) {
         0.75f    // pitch: ~43度俯角（类似CardinalSim的45度）
     );
 
-    viewer.substeps_per_frame = 2;
+    // NOTE: viewer.substeps_per_frame 已在上方（line 519）从 cfg.substeps 同步过。
+    //   之前这里硬编码 = 2，把 substeps_auto 算出来的补偿值（对小 mesh 可达 40）彻底覆盖，
+    //   导致每 render frame 只推进 2×dt ≈ 1ms 仿真时间 → 看起来"重力很弱、下落很慢"。
+    //   删掉这行硬编码，让 cfg 的值（yaml 显式或 auto 推导）生效。
 
     // 刀具初始位置：在手术区域上方，靠近tumor
     viewer.knife_pos = Vec3(center.x(), bb_max.y() + extent * 0.3, center.z());

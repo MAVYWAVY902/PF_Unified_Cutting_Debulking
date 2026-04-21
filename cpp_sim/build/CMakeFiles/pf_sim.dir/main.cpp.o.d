@@ -520,5 +520,6 @@ CMakeFiles/pf_sim.dir/main.cpp.o: \
  /usr/include/c++/11/ratio /usr/include/c++/11/ctime \
  /usr/include/c++/11/bits/parse_numbers.h \
  /home/yunxin/pf-shape-matching/cpp_sim/render/viewer.h \
+ /home/yunxin/pf-shape-matching/cpp_sim/render/../core/rigid_mesh.h \
  /usr/include/GL/glew.h /usr/include/GL/glu.h /usr/include/GL/gl.h \
  /usr/include/GLFW/glfw3.h

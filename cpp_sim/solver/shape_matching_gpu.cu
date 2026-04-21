@@ -404,9 +404,15 @@ __device__ void atomicMaxFloat(float* addr, float val) {
     } while (assumed != old);
 }
 
-// 每粒子 damage 聚合（从边 damage 取最大值，只增不减）
-__global__ void update_particle_damage_kernel(
-    float* particle_damage, int* removed,
+// 每粒子 damage 聚合（MEAN over incident edges，只增不减）
+// Pass 1: 每条边把自己的 damage atomicAdd 到两个端点的 sum，同时 count +=1
+// Pass 2 (下面的 finalize 核)：particle_damage = max(particle_damage, sum/count)
+// 这是对原 atomicMax 聚合的修正 —— 原版"一条断边 = 两粒子满 damage"，过度敏感。
+// 改 MEAN 后，内部粒子（~6 incident 边）需要多条边同时受损才能超过 aspiration 阈值。
+// 与 Warp/Python 版 (pf_damage.py update_particle_damage_kernel) 语义对齐。
+__global__ void accumulate_particle_damage_kernel(
+    float* particle_damage_sum, float* particle_damage_count,
+    int* removed,
     int* edge_a, int* edge_b, float* edge_damage, int num_edges)
 {
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -415,8 +421,29 @@ __global__ void update_particle_damage_kernel(
     if (removed[a] || removed[b]) return;
 
     float val = edge_damage[eid];
-    atomicMaxFloat(&particle_damage[a], val);
-    atomicMaxFloat(&particle_damage[b], val);
+    atomicAdd(&particle_damage_sum[a], val);
+    atomicAdd(&particle_damage_sum[b], val);
+    atomicAdd(&particle_damage_count[a], 1.0f);
+    atomicAdd(&particle_damage_count[b], 1.0f);
+}
+
+// Pass 2: mean + monotonic update
+__global__ void finalize_particle_damage_kernel(
+    float* particle_damage,
+    float* particle_damage_sum, float* particle_damage_count,
+    int* removed, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i]) return;
+
+    float cnt = particle_damage_count[i];
+    if (cnt < 0.5f) return;  // 本次无 incident 边参与（邻粒子全被移除或远离刀具）
+
+    float mean_damage = particle_damage_sum[i] / cnt;
+    // 只增不减（与边 damage 的 monotonic 语义一致）
+    if (mean_damage > particle_damage[i]) {
+        particle_damage[i] = mean_damage;
+    }
 }
 
 // CUSA 吸引：刀具内 + 高 damage → 标记 removed
@@ -471,6 +498,8 @@ void ShapeMatchingGPUSolver::init(
     CUDA_CHECK(cudaMalloc(&d_particles.predicted_pos, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_particles.old_pos, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_particles.damage, N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_particles.damage_sum,   N * sizeof(float)));  // MEAN-aggregation accumulator
+    CUDA_CHECK(cudaMalloc(&d_particles.damage_count, N * sizeof(float)));  // incident-edge count
     CUDA_CHECK(cudaMalloc(&d_particles.removed, N * sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_particles.fixed, N * sizeof(int)));
 
@@ -924,12 +953,27 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
 
 void ShapeMatchingGPUSolver::gpu_update_particle_damage() {
     if (d_edges.num_edges == 0) return;
+    int N = d_particles.N;
     int E = d_edges.num_edges;
+    int blocks_n = (N + 255) / 256;
     int blocks_e = (E + 255) / 256;
-    update_particle_damage_kernel<<<blocks_e, 256>>>(
-        d_particles.damage, d_particles.removed,
+
+    // Zero per-step accumulators (sum + count)
+    CUDA_CHECK(cudaMemset(d_particles.damage_sum,   0, N * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_particles.damage_count, 0, N * sizeof(float)));
+
+    // Pass 1: atomicAdd edge damage → per-particle sum + count
+    accumulate_particle_damage_kernel<<<blocks_e, 256>>>(
+        d_particles.damage_sum, d_particles.damage_count,
+        d_particles.removed,
         d_edges.particle_a, d_edges.particle_b,
         d_edges.damage, E);
+
+    // Pass 2: mean = sum / count, then monotonic update on d_particles.damage
+    finalize_particle_damage_kernel<<<blocks_n, 256>>>(
+        d_particles.damage,
+        d_particles.damage_sum, d_particles.damage_count,
+        d_particles.removed, N);
 }
 
 void ShapeMatchingGPUSolver::gpu_aspirate() {
@@ -1215,6 +1259,8 @@ void ShapeMatchingGPUSolver::cleanup() {
     cudaFree(d_particles.predicted_pos);
     cudaFree(d_particles.old_pos);
     cudaFree(d_particles.damage);
+    cudaFree(d_particles.damage_sum);
+    cudaFree(d_particles.damage_count);
     cudaFree(d_particles.removed);
     cudaFree(d_particles.fixed);
     cudaFree(d_clusters.cluster_starts);

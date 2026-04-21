@@ -66,6 +66,72 @@ def collision_kernel(
     pred_pos[i] = p
 
 
+# ============== Collision (SSA + delta variant for gradient) ==============
+# Same physics as collision_kernel above, but gradient-safe:
+#   - Each local variable assigned exactly once (no re-assignment)
+#   - wp.where replaces conditional re-assignment (Warp 1.12 single-assignment rule)
+#   - Writes DELTA to separate output buffer via atomic_add, not directly to pred_pos
+# Apply separately via apply_collision_delta_kernel so pred_pos is only touched via +=
+# (tape-safe pattern per NVIDIA XPBD reference).
+
+@wp.kernel
+def collision_kernel_ssa(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    floor_y: float,
+    knife_pos: wp.array(dtype=wp.vec3),
+    knife_radius: float,
+    knife_active: int,
+    collision_delta: wp.array(dtype=wp.vec3),  # OUTPUT: per-particle position correction
+):
+    i = wp.tid()
+    if alpha[i] < 0.01 or fixed[i] == 1:
+        return
+
+    # Single-assignment chain — never re-assign any local
+    p0 = pred_pos[i]
+
+    # Floor correction via wp.where (pure functional ternary)
+    p_floor = wp.where(
+        p0[1] < floor_y,
+        wp.vec3(p0[0], floor_y, p0[2]),
+        p0,
+    )
+
+    # Knife collision (knife_active is a compile-time arg, kernel specializes per value)
+    if knife_active == 1:
+        kp = knife_pos[0]
+        diff = p_floor - kp
+        dist_sq = wp.dot(diff, diff)
+        safe_dist = wp.sqrt(dist_sq + 1.0e-8)
+        p_knife = kp + diff * (knife_radius / safe_dist)
+        # wp.where: select p_knife inside sphere, p_floor outside. All gradients flow.
+        p_new = wp.where(
+            dist_sq < knife_radius * knife_radius,
+            p_knife,
+            p_floor,
+        )
+    else:
+        p_new = p_floor
+
+    # Write delta to separate buffer — pred_pos itself is never re-assigned here.
+    # atomic_add is explicitly allowlisted for tape adjoint accumulation.
+    wp.atomic_add(collision_delta, i, p_new - p0)
+
+
+@wp.kernel
+def apply_collision_delta_kernel(
+    pred_pos: wp.array(dtype=wp.vec3),
+    collision_delta: wp.array(dtype=wp.vec3),
+):
+    """Apply collision_delta to pred_pos via wp.atomic_add — the explicitly
+    tape-safe in-place operator per Warp docs. Do NOT use `pred_pos[i] = pred_pos[i] + ...`
+    (Warp's verify_autograd_array_access flags it as read-after-write conflict)."""
+    i = wp.tid()
+    wp.atomic_add(pred_pos, i, collision_delta[i])
+
+
 # ============== Clear Deltas ==============
 
 @wp.kernel
@@ -257,3 +323,88 @@ def update_velocity_kernel(
 
     vel[i] = (pred_pos[i] - old_pos[i]) * inv_dt
     pos[i] = pred_pos[i]
+
+
+# ============== Batched Collision (per-env knife_pos) ==============
+
+@wp.kernel
+def collision_kernel_batched(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    floor_y: float,
+    knife_pos: wp.array(dtype=wp.vec3),  # (num_envs,) — per-env knife
+    knife_radius: float,
+    knife_active: int,
+    n_per_env: int,
+):
+    """Collision kernel for batched envs. Looks up per-env knife_pos."""
+    i = wp.tid()
+    if alpha[i] < 0.01 or fixed[i] == 1:
+        return
+
+    p = pred_pos[i]
+
+    # Floor
+    if p[1] < floor_y:
+        p = wp.vec3(p[0], floor_y, p[2])
+
+    # Knife sphere SDF — per-env knife position
+    if knife_active == 1:
+        env_id = i / n_per_env
+        kp = knife_pos[env_id]
+        diff = p - kp
+        dist_sq = wp.dot(diff, diff)
+        safe_dist = wp.sqrt(dist_sq + 1.0e-8)
+        if dist_sq < knife_radius * knife_radius:
+            p = kp + diff * (knife_radius / safe_dist)
+
+    pred_pos[i] = p
+
+
+# ============== Batched Collision (SSA + delta variant for gradient) ==============
+# Multi-env gradient-safe version. Same SSA pattern as collision_kernel_ssa.
+# Apply delta via the single-env apply_collision_delta_kernel (works for batched too —
+# it's per-particle element-wise).
+
+@wp.kernel
+def collision_kernel_batched_ssa(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    floor_y: float,
+    knife_pos: wp.array(dtype=wp.vec3),       # (num_envs,) per-env knife
+    knife_radius: float,
+    knife_active: int,
+    n_per_env: int,
+    collision_delta: wp.array(dtype=wp.vec3), # OUTPUT: per-particle delta
+):
+    i = wp.tid()
+    if alpha[i] < 0.01 or fixed[i] == 1:
+        return
+
+    # Single-assignment chain (per NVIDIA XPBD + collision_kernel_ssa pattern)
+    p0 = pred_pos[i]
+
+    p_floor = wp.where(
+        p0[1] < floor_y,
+        wp.vec3(p0[0], floor_y, p0[2]),
+        p0,
+    )
+
+    if knife_active == 1:
+        env_id = i / n_per_env
+        kp = knife_pos[env_id]
+        diff = p_floor - kp
+        dist_sq = wp.dot(diff, diff)
+        safe_dist = wp.sqrt(dist_sq + 1.0e-8)
+        p_knife = kp + diff * (knife_radius / safe_dist)
+        p_new = wp.where(
+            dist_sq < knife_radius * knife_radius,
+            p_knife,
+            p_floor,
+        )
+    else:
+        p_new = p_floor
+
+    wp.atomic_add(collision_delta, i, p_new - p0)

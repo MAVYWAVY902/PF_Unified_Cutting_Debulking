@@ -24,8 +24,8 @@ clusters:
 knife:
   tool_mesh: "../../resources/tools/dissector_uv.obj"
   tool_sdf_resolution: 64
-  cutting_interval: 50
-  alpha_min: 10.0
+  cutting_interval: 1   # update damage every physics step (was 50 — caused knife tunneling)
+  alpha_min: 3.0        # softer P(F) sigmoid (was 10 — saturated damage on any contact)
   aspiration_threshold: 0.3
 
 ## Rigid object (temporal bone)

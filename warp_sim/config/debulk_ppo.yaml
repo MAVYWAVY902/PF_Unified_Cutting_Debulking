@@ -1,0 +1,63 @@
+## P(F) Debulking — PPO with Coverage Map + Surface (flat cuboid, tight damage)
+
+name: "Debulk PPO Coverage v2"
+
+# Environment
+mesh: "resources/cuboid_flat/cuboid_h050.msh"  # flat cuboid h=0.5 (was cube_dense.msh h=1)
+settle_steps: 200
+sim_substeps: 2
+action_scale: 0.003
+knife_start: [1.0, 0.5, 0.0]        # top-back-right corner of mesh (corner protects from collapse)
+knife_radius: 0.05                   # smaller tool tip (was 0.1 — tumor thickness 0.4, dia=0.1 OK)
+episode_length: 256                  # kept 256; flatter mesh may finish faster so can reduce to 128 later
+debulk_threshold: 0.5                # alpha below this = debulked
+workspace_margin: -0.02              # NEGATIVE: clamp knife strictly inside mesh
+
+# Physics
+dt: 0.005
+num_iterations: 4
+stiffness: 0.6
+damping: 0.98
+cutting_interval: 1
+
+# Reward (6-term coverage-aware + distance guidance + idle penalty)
+lambda_nerve: 10.0           # nerve damage penalty
+waste_penalty_weight: 0.5    # penalty for knife in >80% debulked voxel
+guidance_weight: 5.0         # distance-to-uncut guidance (Isaac Lab tanh kernel)
+guidance_std: 0.15           # tanh sensitivity (mesh ~1.0 wide, 0.15 = responsive at ~15% width)
+completion_bonus: 50.0       # bonus when >80% of tumor voxels debulked
+step_penalty: 0.1            # per-step baseline so idling is strictly negative (bigger > 0.05 to offset mid-range guidance)
+surface_bonus: 2.0           # reward when knife on surface (initial boundary or partial-coverage voxel)
+interior_penalty: 5.0        # penalty when knife dives into intact tumor interior (CUSA realism)
+surface_low: 0.1             # coverage < this = intact; in [low, high] = dynamic surface
+surface_high: 0.9            # coverage > this = fully-cut cavity
+
+# Nerve mask
+nerve:
+  type: "y_band"
+  y_min: 0.0
+  y_max: null
+
+# PPO Training
+training:
+  total_timesteps: 500000
+  learning_rate: 0.0003
+  n_steps: 512
+  batch_size: 128
+  n_epochs: 4                # 原 10 → 4: 减少 off-policy drift, 防止 PPO_12 后期 KL 爆炸
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.02            # 新增: KL > 0.02 时 epochs loop 提前 stop (SB3 MuJoCo zoo 标配)
+  net_arch: [256, 256]
+  save_freq: 50000
+  # VecNormalize (FIX for PPO_11 value-function collapse):
+  # running-avg normalize obs + reward so MLP critic can fit targets
+  use_vecnormalize: true
+  norm_obs: true
+  norm_reward: true
+  clip_obs: 10.0
+  clip_reward: 10.0

@@ -70,76 +70,134 @@ def normalize_com_kernel(
         out_com[0] = out_com[0] * (1.0 / cnt)
 
 
-# ============== Reward Kernels ==============
+# ============== Reward Kernels (Position-Based) ==============
+# Gradient flows through: reward → pos → collision → knife_pos → action
+# Does NOT go through damage/alpha chain (which explodes).
+# P(F) still affects physics (weakened particles move more), but gradient is indirect.
 
 @wp.kernel
-def compute_tumor_removal_kernel(
-    alpha: wp.array(dtype=wp.float32),
+def compute_tumor_displacement_kernel(
+    pos: wp.array(dtype=wp.vec3),
+    rest_pos: wp.array(dtype=wp.vec3),
     fixed: wp.array(dtype=wp.int32),
     nerve_mask: wp.array(dtype=wp.int32),
-    out_tumor_alpha_sum: wp.array(dtype=wp.float32),
-    out_tumor_count: wp.array(dtype=wp.float32),
+    out_disp_sum: wp.array(dtype=wp.float32),
+    out_count: wp.array(dtype=wp.float32),
 ):
-    """Sum alpha for tumor particles (non-fixed, non-nerve). Lower alpha = more removed."""
+    """Sum displacement of tumor particles from rest position.
+    Larger displacement = more material pushed away = more debulking.
+    Differentiable: gradient flows through pos (collision), not damage chain.
+    """
     i = wp.tid()
     if fixed[i] == 1 or nerve_mask[i] == 1:
         return
-    wp.atomic_add(out_tumor_alpha_sum, 0, alpha[i])
-    wp.atomic_add(out_tumor_count, 0, 1.0)
+    diff = pos[i] - rest_pos[i]
+    dist_sq = wp.dot(diff, diff)
+    dist = wp.sqrt(dist_sq + 1.0e-8)  # safe norm
+    wp.atomic_add(out_disp_sum, 0, dist)
+    wp.atomic_add(out_count, 0, 1.0)
 
 
 @wp.kernel
-def compute_nerve_alpha_kernel(
-    alpha: wp.array(dtype=wp.float32),
+def compute_nerve_displacement_kernel(
+    pos: wp.array(dtype=wp.vec3),
+    rest_pos: wp.array(dtype=wp.vec3),
     nerve_mask: wp.array(dtype=wp.int32),
-    out_nerve_alpha_sum: wp.array(dtype=wp.float32),
-    out_nerve_count: wp.array(dtype=wp.float32),
+    out_disp_sum: wp.array(dtype=wp.float32),
+    out_count: wp.array(dtype=wp.float32),
 ):
-    """Sum alpha for nerve particles. Lower alpha = more nerve damage (bad)."""
+    """Sum displacement of nerve particles. Should stay small (nerve undisturbed)."""
     i = wp.tid()
     if nerve_mask[i] == 0:
         return
-    wp.atomic_add(out_nerve_alpha_sum, 0, alpha[i])
-    wp.atomic_add(out_nerve_count, 0, 1.0)
+    diff = pos[i] - rest_pos[i]
+    dist_sq = wp.dot(diff, diff)
+    dist = wp.sqrt(dist_sq + 1.0e-8)
+    wp.atomic_add(out_disp_sum, 0, dist)
+    wp.atomic_add(out_count, 0, 1.0)
+
+
+# ============== Capsule-task damage kernels (M3.2) ==============
+# Used by:
+#   - _compute_reward_capsule (forward, measuring damage fractions)
+#   - L2 tactile gradient (Arm C): differentiate capsule_damage_sum w.r.t. knife_pos
+
+@wp.kernel
+def compute_capsule_damage_kernel(
+    alpha: wp.array(dtype=wp.float32),
+    boundary_mask: wp.array(dtype=wp.int32),
+    out_cap_sum: wp.array(dtype=wp.float32),
+):
+    """Sum (1 - alpha) over CAPSULE particles (boundary of tumor mesh).
+    Capsule damage = sum of fractional particle removal on the outer shell.
+    Lower is better (capsule should be preserved).
+
+    For L2 tactile gradient: differentiate this sum w.r.t. knife_pos via wp.Tape.
+    The gradient vector points in the direction that INCREASES capsule damage,
+    so policy should move AGAINST this gradient to protect the shell.
+    """
+    i = wp.tid()
+    if boundary_mask[i] == 0:
+        return
+    wp.atomic_add(out_cap_sum, 0, 1.0 - alpha[i])
 
 
 @wp.kernel
-def compute_reward_rewarped_kernel(
-    tumor_alpha_sum: wp.array(dtype=wp.float32),
+def compute_interior_damage_kernel(
+    alpha: wp.array(dtype=wp.float32),
+    interior_mask: wp.array(dtype=wp.int32),
+    out_int_sum: wp.array(dtype=wp.float32),
+):
+    """Sum (1 - alpha) over INTERIOR particles (non-boundary tumor).
+    Interior damage = main task reward signal (we WANT to remove these).
+    Higher is better.
+    """
+    i = wp.tid()
+    if interior_mask[i] == 0:
+        return
+    wp.atomic_add(out_int_sum, 0, 1.0 - alpha[i])
+
+
+@wp.kernel
+def compute_position_reward_kernel(
+    tumor_disp_sum: wp.array(dtype=wp.float32),
     tumor_count: wp.array(dtype=wp.float32),
-    nerve_alpha_sum: wp.array(dtype=wp.float32),
+    nerve_disp_sum: wp.array(dtype=wp.float32),
     nerve_count: wp.array(dtype=wp.float32),
     lambda_nerve: float,
     reward_out: wp.array(dtype=wp.float32),
 ):
-    """Reward = tumor_removed_frac - lambda * nerve_damage_frac.
-
-    tumor_removed_frac = 1 - mean(alpha[tumor])   (higher = more removed = good)
-    nerve_damage_frac  = 1 - mean(alpha[nerve])   (higher = more damage = bad)
-
-    Following RollingFlat pattern: simple geometric objective on particle state.
+    """Position-based reward (PlasticineLab-style).
+    reward = mean_tumor_displacement - lambda * mean_nerve_displacement
+    Fully differentiable through collision → positions.
     """
     tid = wp.tid()
     if tid > 0:
         return
 
+    tumor_disp = 0.0
     tc = tumor_count[0]
+    if tc > 0.5:
+        tumor_disp = tumor_disp_sum[0] / tc
+
+    nerve_disp = 0.0
     nc = nerve_count[0]
-
-    tumor_removed = 0.0
-    if tc > 0.5:
-        tumor_removed = 1.0 - tumor_alpha_sum[0] / tc
-
-    nerve_damage = 0.0
     if nc > 0.5:
-        nerve_damage = 1.0 - nerve_alpha_sum[0] / nc
+        nerve_disp = nerve_disp_sum[0] / nc
 
-    # Squash tumor reward like RollingFlat: 1/(1+d)^2 where d = mean_alpha
-    # Higher removal (lower mean_alpha) -> higher reward
-    tumor_rew = 0.0
-    if tc > 0.5:
-        d = tumor_alpha_sum[0] / tc  # mean alpha [0,1], lower = more removed
-        tumor_rew = 1.0 / (1.0 + d)
-        tumor_rew = tumor_rew * tumor_rew  # squared
+    reward_out[0] = tumor_disp - lambda_nerve * nerve_disp
 
-    reward_out[0] = tumor_rew - lambda_nerve * nerve_damage
+
+# ============== Reward Accumulation (for monolithic tape) ==============
+
+@wp.kernel
+def accumulate_reward_kernel(
+    src: wp.array(dtype=wp.float32),
+    dst: wp.array(dtype=wp.float32),
+    discount: float,
+):
+    """dst[0] += src[0] * discount. Used to sum discounted rewards inside tape."""
+    tid = wp.tid()
+    if tid > 0:
+        return
+    wp.atomic_add(dst, 0, src[0] * discount)

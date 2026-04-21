@@ -1,0 +1,34 @@
+{
+  "arm": "C",
+  "total_timesteps": 1000,
+  "checks": {
+    "obs_dim_matches": true,
+    "ppo_first_layer_shape_matches": true,
+    "checkpoints_saved": true,
+    "tb_log_written": true,
+    "roundtrip_eval_finite": true,
+    "gpu_mem_stable": true
+  },
+  "metrics": {
+    "gpu_mem_before_MB": 0.0,
+    "obs_dim_actual": 1519,
+    "obs_dim_expected": 1519,
+    "ppo_first_layer_in": 1519,
+    "train_seconds": 20.4,
+    "gpu_mem_after_MB": 33.5,
+    "gpu_mem_delta_MB": 33.5,
+    "n_checkpoints": 1,
+    "n_vecnorm_pkls": 1,
+    "tb_event_files": 1,
+    "eval_rewards": [
+      11.9,
+      -0.1,
+      -0.1,
+      -0.1,
+      -0.1
+    ],
+    "total_seconds": 179.7
+  },
+  "passed": true,
+  "error": null
+}

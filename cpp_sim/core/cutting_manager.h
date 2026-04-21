@@ -102,22 +102,17 @@ public:
         // 构建空间网格，计算初始 P(F)
         _build_grid(particles);
         for (auto& e : edges) {
-            e.pf_rest = _compute_edge_pf(e, particles);
+            // pf_rest 作为"无 intruder 基线" = 1.0，而不是用 _compute_edge_pf 的 nearest-particle 公式。
+            // 原因：GPU 的 update_edge_damage_kernel 用"刀具表面距离"计算 pf_current，
+            //      若 pf_rest 用 nearest-particle 公式就变成 ratio = (knife-based) / (particle-based)，
+            //      分子分母语义不同，damage = 1 - ratio 没有物理意义。
+            // 统一基线为 1 后：健康状态 pf_current = 1、刀具贴近 pf_current → 0，damage = 1 - pf_current 干净。
+            e.pf_rest = 1.0f;
             e.pf_current = e.pf_rest;
         }
 
         std::cout << "CuttingManager: " << edges.size() << " 条簇边, "
-                  << clusters.size() << " 个簇" << std::endl;
-
-        // 统计初始 P(F) 分布
-        float min_pf = 1, max_pf = 0, avg_pf = 0;
-        for (auto& e : edges) {
-            min_pf = std::min(min_pf, e.pf_rest);
-            max_pf = std::max(max_pf, e.pf_rest);
-            avg_pf += e.pf_rest;
-        }
-        avg_pf /= edges.size();
-        std::cout << "  初始边 P(F): min=" << min_pf << " avg=" << avg_pf << " max=" << max_pf << std::endl;
+                  << clusters.size() << " 个簇 (pf_rest=1.0 统一基线)" << std::endl;
 
         // 建立簇 → 边索引
         m_cluster_edges.clear();

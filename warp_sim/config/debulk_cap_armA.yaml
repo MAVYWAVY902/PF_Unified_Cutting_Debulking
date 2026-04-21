@@ -1,0 +1,75 @@
+## P(F) Capsule Task — Arm A (L1 baseline, no gradient)
+## M3.5 ablation: PPO with plain obs (1516D), baseline for comparing against Arm X/Y/C.
+
+name: "Debulk Capsule Arm A (L1)"
+
+# Task selector (M3.1 added dispatch)
+task_type: "capsule_only"    # IMPORTANT: switches to 4-term capsule reward in env
+
+# Obs mode for ablation (M3.4 will implement dispatch)
+obs_mode: "baseline"         # no extra dims (stays 1516D)
+
+# Environment
+mesh: "resources/cuboid_flat/cuboid_h050.msh"
+settle_steps: 200
+sim_substeps: 2
+action_scale: 0.003
+knife_start: [1.0, 0.5, 0.0]        # top-back-right corner, 1/8 of sphere in mesh
+knife_radius: 0.05
+episode_length: 256
+debulk_threshold: 0.5
+workspace_margin: -0.02
+
+# Physics
+dt: 0.005
+num_iterations: 4
+stiffness: 0.6
+damping: 0.98
+cutting_interval: 1
+
+# Capsule-task reward params (M3.3)
+capsule_budget: 0.05                    # 5% capsule breach = entry allowance
+lambda_capsule: 30.0                    # asymmetric penalty weight
+completion_interior_frac: 0.90          # NTR threshold: >90% interior debulked
+catastrophic_breach_multiplier: 3.0     # terminate if breach > 3×budget = 15%
+catastrophic_penalty: 100.0             # terminal -reward
+step_penalty: 0.1                       # idle penalty (reused from legacy)
+completion_bonus: 50.0                  # terminal bonus (reused from legacy)
+
+# Legacy reward params — unused in capsule_only mode, left here as no-ops for env init
+lambda_nerve: 10.0
+waste_penalty_weight: 0.5
+guidance_weight: 5.0
+guidance_std: 0.15
+surface_bonus: 2.0
+interior_penalty: 5.0
+surface_low: 0.1
+surface_high: 0.9
+
+# Nerve mask (not used — task_type=capsule_only skips this)
+nerve:
+  type: "y_band"
+  y_min: 0.0
+  y_max: null
+
+# PPO training (same fixes as current debulk_ppo.yaml: n_epochs=4, target_kl=0.02, VecNormalize)
+training:
+  total_timesteps: 500000
+  learning_rate: 0.0003
+  n_steps: 512
+  batch_size: 128
+  n_epochs: 4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  net_arch: [256, 256]
+  save_freq: 50000
+  use_vecnormalize: true
+  norm_obs: true
+  norm_reward: true
+  clip_obs: 10.0
+  clip_reward: 10.0

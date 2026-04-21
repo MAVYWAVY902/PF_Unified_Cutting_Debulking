@@ -2,14 +2,18 @@
 import warp as wp
 from .kernels import (
     predict_kernel,
-    collision_kernel,
+    collision_kernel,            # legacy (non-gradient-safe) — kept for backcompat
+    collision_kernel_ssa,        # SSA version — writes to collision_delta
+    apply_collision_delta_kernel,
     clear_deltas_kernel,
     cluster_solve_kernel,
     apply_kernel,
     update_velocity_kernel,
 )
 from .pf_damage import (
-    update_edge_damage_kernel,
+    update_edge_damage_kernel,         # legacy
+    update_edge_damage_kernel_ssa,     # SSA version — writes to edge_damage_delta
+    apply_edge_damage_delta_kernel,
     update_particle_damage_kernel,
     finalize_particle_damage_kernel,
     update_soft_removal_kernel,
@@ -52,7 +56,7 @@ class ShapeMatchingSolver:
         self.knife_active = 0
 
         # P(F) cutting parameters
-        self.alpha_min = 10.0
+        self.alpha_min = 3.0  # lower = smoother P(F) gradient (DiSECt-style)
         self.aspiration_threshold = 0.3
         self.soft_removal_sharpness = 20.0  # sigmoid sharpness for differentiable removal
         self.cutting_update_interval = 50
@@ -82,16 +86,24 @@ class ShapeMatchingSolver:
             device=self.device,
         )
 
-        # 2. Collision (after predict)
+        # 2. Collision (after predict) — SSA + delta pattern for Warp 1.12 autograd safety
+        self.p["collision_delta"].zero_()
         wp.launch(
-            collision_kernel,
+            collision_kernel_ssa,
             dim=N,
             inputs=[
                 self.p["pred_pos"],
                 self.p["alpha"], self.p["fixed"],
                 self.floor_y,
                 self.knife_pos, self.knife_radius, self.knife_active,
+                self.p["collision_delta"],
             ],
+            device=self.device,
+        )
+        wp.launch(
+            apply_collision_delta_kernel,
+            dim=N,
+            inputs=[self.p["pred_pos"], self.p["collision_delta"]],
             device=self.device,
         )
 
@@ -130,16 +142,24 @@ class ShapeMatchingSolver:
                 device=self.device,
             )
 
-            # Collision (each iteration)
+            # Collision (each iteration) — SSA + delta
+            self.p["collision_delta"].zero_()
             wp.launch(
-                collision_kernel,
+                collision_kernel_ssa,
                 dim=N,
                 inputs=[
                     self.p["pred_pos"],
                     self.p["alpha"], self.p["fixed"],
                     self.floor_y,
                     self.knife_pos, self.knife_radius, self.knife_active,
+                    self.p["collision_delta"],
                 ],
+                device=self.device,
+            )
+            wp.launch(
+                apply_collision_delta_kernel,
+                dim=N,
+                inputs=[self.p["pred_pos"], self.p["collision_delta"]],
                 device=self.device,
             )
 
@@ -148,16 +168,24 @@ class ShapeMatchingSolver:
                 self.step_count % self.cutting_update_interval == 0):
             num_edges = self.e["num_edges"]
 
-            # Edge damage (P(F) computation)
+            # Edge damage (P(F) computation) — SSA + delta for Warp 1.12 autograd safety
+            self.e["damage_delta"].zero_()
             wp.launch(
-                update_edge_damage_kernel,
+                update_edge_damage_kernel_ssa,
                 dim=num_edges,
                 inputs=[
                     self.p["pred_pos"], self.p["alpha"],
                     self.e["a"], self.e["b"],
                     self.e["pf_rest"], self.e["damage"],
                     self.knife_pos, self.knife_radius, self.alpha_min,
+                    self.e["damage_delta"],
                 ],
+                device=self.device,
+            )
+            wp.launch(
+                apply_edge_damage_delta_kernel,
+                dim=num_edges,
+                inputs=[self.e["damage"], self.e["damage_delta"]],
                 device=self.device,
             )
 

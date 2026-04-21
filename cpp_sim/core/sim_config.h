@@ -37,8 +37,8 @@ struct SimConfigYAML {
     // Knife / Tool
     float knife_radius = 0.1f;
     bool knife_radius_auto = false;
-    int cutting_interval = 50;
-    float alpha_min = 10.0f;
+    int cutting_interval = 1;   // update damage every N physics steps (was 50 — caused knife tunneling at normal speeds)
+    float alpha_min = 3.0f;   // P(F) sigmoid steepness (was 10 — too steep, saturated damage on any contact)
     float aspiration_threshold = 0.3f;
     std::string tool_mesh_path;     // empty = sphere tool, non-empty = mesh SDF tool
     int tool_sdf_resolution = 64;   // SDF grid resolution for tool

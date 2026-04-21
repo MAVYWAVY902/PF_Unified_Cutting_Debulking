@@ -1,0 +1,55 @@
+## P(F) Debulking — PPO with Coverage Map
+
+name: "Debulk PPO Coverage"
+
+# Environment
+mesh: "resources/cube/cube_dense.msh"
+settle_steps: 200
+sim_substeps: 2
+action_scale: 0.003
+knife_start: [0.95, 0.7, 0.5]
+knife_radius: 0.1
+episode_length: 256          # shortened: prior policy exhausted reward in first ~30 steps of 512
+debulk_threshold: 0.5        # alpha below this = debulked
+workspace_margin: -0.02      # NEGATIVE: clamp knife strictly inside mesh (was +0.05 → escape bug)
+
+# Physics
+dt: 0.005
+num_iterations: 4
+stiffness: 0.6
+damping: 0.98
+cutting_interval: 1
+
+# Reward (6-term coverage-aware + distance guidance + idle penalty)
+lambda_nerve: 10.0           # nerve damage penalty
+waste_penalty_weight: 0.5    # penalty for knife in >80% debulked voxel
+guidance_weight: 5.0         # distance-to-uncut guidance (Isaac Lab tanh kernel)
+guidance_std: 0.15           # tanh sensitivity (mesh ~1.0 wide, 0.15 = responsive at ~15% width)
+completion_bonus: 50.0       # bonus when >80% of tumor voxels debulked
+step_penalty: 0.1            # per-step baseline so idling is strictly negative (bigger > 0.05 to offset mid-range guidance)
+surface_bonus: 2.0           # reward when knife on surface (initial boundary or partial-coverage voxel)
+interior_penalty: 5.0        # penalty when knife dives into intact tumor interior (CUSA realism)
+surface_low: 0.1             # coverage < this = intact; in [low, high] = dynamic surface
+surface_high: 0.9            # coverage > this = fully-cut cavity
+
+# Nerve mask
+nerve:
+  type: "y_band"
+  y_min: 0.0
+  y_max: null
+
+# PPO Training
+training:
+  total_timesteps: 500000
+  learning_rate: 0.0003
+  n_steps: 512
+  batch_size: 128
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  save_freq: 50000

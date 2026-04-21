@@ -1,38 +1,35 @@
-## P(F) Debulking - SAPO Training Configuration
+## P(F) Debulking - SAPO Training (monolithic tape, short horizon)
 
-name: "Debulk SAPO"
+name: "Debulk SAPO v3"
 
 # Environment
 mesh: "resources/cube/cube_dense.msh"
 settle_steps: 200
-horizon_len: 32
-sim_substeps: 4
+horizon_len: 8              # start short, increase if gradients stable
+sim_substeps: 2
 action_scale: 0.005
-knife_start: [0.5, 0.5, 0.5]   # inside mesh center (mesh settles ~0.48 centroid)
-knife_radius: 0.15              # match diagnostic test — large enough to affect edges
+knife_start: [0.5, 0.5, 0.5]
+knife_radius: 0.15
 
 # Physics
 dt: 0.005
-num_iterations: 4
+num_iterations: 4       # full physics for forward sim (gradient bypasses SVD via collision re-apply)
 stiffness: 0.6
 damping: 0.98
-cutting_interval: 1    # every substep for dense gradient signal
+cutting_interval: 1
 
 # Reward
-lambda_nerve: 5.0
-mu_action: 0.01
-bonus: 10.0
-volume_target: 50.0
+lambda_nerve: 2.0
 
-# Nerve mask (spatial heuristic)
+# Nerve mask
 nerve:
   type: "y_band"
   y_min: 0.0
-  y_max: null     # null = auto (bottom 25% of mesh height)
+  y_max: null
 
 # SAPO Training
 training:
-  num_epochs: 1000
+  num_epochs: 500
   actor_lr: 0.002
   critic_lr: 0.0005
   gamma: 0.99
@@ -41,8 +38,9 @@ training:
   hidden_dim: 256
   actor_beta1: 0.7
   critic_iterations: 16
-  no_target_critic: true
   init_alpha: 1.0
   target_entropy: -1.5
+  target_critic_tau: 0.005
+  sim_grad_clip: 10.0       # clip sim gradient NORM (not values)
   log_interval: 10
   save_interval: 100

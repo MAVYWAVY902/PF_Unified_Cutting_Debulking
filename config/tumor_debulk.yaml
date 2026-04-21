@@ -4,15 +4,19 @@ name: "Tumor Debulking"
 
 ## Mesh
 mesh: "../../resources/tumor/tumor_7800.msh"  # 35k particles, 184k tets
+# mesh: "../../resources/tumor/tumor_7800.msh"  # 35k particles, 184k tets
 
 ## Simulation parameters
 simulation:
-  dt: auto              # "auto" = scale by mesh height, or float (e.g. 0.001)
+  dt: 0.002             # 手工指定 (auto 在此 mesh 上算出 0.0005 太小)。0.002 在 PBD + damping=0.95
+                        # 下的终端速度 ≈ 0.37 m/s → 每步位移 ~0.74mm (1.1× avg_spacing)，稳定边界
   gravity: [0, -9.81, 0]
-  num_iterations: 40    # 更多迭代 → 更stiff
+  num_iterations: 15    # 从 40 降 (此 mesh cluster_membership=60，atomicAdd 竞争严重；
+                        # stiffness=1.0 下 15 iter 足够收敛，substeps=8 额外提供 8×15=120 次机会)
   stiffness: 1.0        # shape matching stiffness [0, 1]
-  damping: 0.88         # 之前0.98，降低 → 更快吸收震荡（不再duang duang）
-  substeps: auto        # "auto" = compute from dt, or int (e.g. 20)
+  damping: 0.95         # 0.98 → 0.88（减震荡）→ 0.95（中间值：保留碎片自由下落动能，接触振荡仍收敛）
+  substeps: 8           # 手工指定 (auto 算出 ~40 过多)。8 × dt(0.002) = 0.016s sim/frame
+                        # 在 ~25 fps 渲染下 ≈ 40% 实时速度，流畅可交互
 
 ## Boundary conditions
 boundary:
@@ -27,8 +31,8 @@ clusters:
 ## Knife / CUSA tool
 knife:
   radius: 0.002         # 2mm tool tip (was auto ~5.2mm)
-  cutting_interval: 50  # update damage every N steps
-  alpha_min: 10.0       # P(F) sigmoid steepness
+  cutting_interval: 1   # update damage every N physics steps (was 50 — caused knife to tunnel through tissue at normal drag speeds)
+  alpha_min: 3.0        # P(F) sigmoid steepness (was 10 — too steep, damage saturated to 1 on any contact)
   aspiration_threshold: 0.3  # remove particles with damage > this
 
 ## Self-collision

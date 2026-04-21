@@ -27,6 +27,9 @@ def init_warp_arrays(vertices: np.ndarray, fixed_mask: np.ndarray, device="cuda:
         "fixed": wp.array(fixed_mask, dtype=wp.int32, device=device),  # int, no grad
         "deltas": wp.zeros(N, dtype=wp.vec3, device=device, requires_grad=True),
         "delta_counts": wp.zeros(N, dtype=wp.int32, device=device),    # int, no grad
+        # Separate collision-delta buffer: SSA gradient-safe pattern (XPBD reference).
+        # Zero-filled per collision call, then applied via apply_collision_delta_kernel.
+        "collision_delta": wp.zeros(N, dtype=wp.vec3, device=device, requires_grad=True),
     }
 
     print(f"Warp arrays initialized: {N} particles on {device}")
@@ -72,6 +75,9 @@ def init_edge_arrays(edge_a, edge_b, edge_pf_rest, device="cuda:0"):
         "b": wp.array(edge_b, dtype=wp.int32, device=device),           # int, no grad
         "pf_rest": wp.array(edge_pf_rest, dtype=wp.float32, device=device, requires_grad=True),
         "damage": wp.zeros(E, dtype=wp.float32, device=device, requires_grad=True),
+        # SSA delta buffer (Warp 1.12 gradient-safe pattern): zero-filled before each
+        # update_edge_damage_kernel_ssa launch, applied via apply_edge_damage_delta_kernel.
+        "damage_delta": wp.zeros(E, dtype=wp.float32, device=device, requires_grad=True),
         "num_edges": E,
     }
 

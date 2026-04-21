@@ -11,7 +11,7 @@ simulation:
   gravity: [0, -9.81, 0]
   num_iterations: 16    # 之前4，更多迭代 → 更stiff
   stiffness: 1.0        # 之前0.6，满stiffness
-  damping: 0.88         # 之前0.98，降低 → 快速吸收震荡
+  damping: 0.95         # 0.98 → 0.88 → 0.95（中间值）
   substeps: 8           # 之前4，更细时间步 → 更稳定
 
 boundary:
@@ -24,8 +24,8 @@ clusters:
 
 knife:
   radius: 0.1
-  cutting_interval: 50
-  alpha_min: 10.0
+  cutting_interval: 1   # update damage every physics step (was 50 — caused knife tunneling)
+  alpha_min: 3.0        # softer P(F) sigmoid (was 10 — saturated damage on any contact)
   aspiration_threshold: 0.3
 
 self_collision:

@@ -9,7 +9,9 @@ struct ParticlesGPU {
     float3* vel;
     float3* predicted_pos;
     float3* old_pos;       // 用于速度更新
-    float* damage;         // per-particle max edge damage
+    float* damage;         // per-particle MEAN edge damage (monotonic, only increases)
+    float* damage_sum;     // [N] accumulator for mean aggregation — zeroed each cutting step
+    float* damage_count;   // [N] incident-edge count (float for atomicAdd)
     int* removed;
     int* fixed;
     int N;
@@ -79,7 +81,7 @@ public:
 
     int step_count = 0;
     int cutting_update_interval = 200;
-    float alpha_min = 10.0f;
+    float alpha_min = 3.0f;   // P(F) sigmoid steepness (was 10 — saturated damage on any contact)
     float aspiration_threshold = 0.3f;
 
     // 初始化：分配 GPU 内存，上传数据

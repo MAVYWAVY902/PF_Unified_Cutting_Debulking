@@ -1,0 +1,49 @@
+## P(F) Debulking — Vectorized PPO Training (N=4 parallel envs)
+
+name: "Debulk PPO Vectorized"
+
+# Environment
+mesh: "resources/cube/cube_dense.msh"
+settle_steps: 200
+sim_substeps: 2
+action_scale: 0.005
+knife_start: [0.5, 0.5, 0.5]
+knife_radius: 0.15
+episode_length: 128
+num_envs: 4
+
+# Randomization
+knife_start_randomize: true
+knife_start_range: 0.1
+
+# Physics
+dt: 0.005
+num_iterations: 4
+stiffness: 0.6
+damping: 0.98
+cutting_interval: 1
+
+# Reward
+lambda_nerve: 2.0
+
+# Nerve mask
+nerve:
+  type: "y_band"
+  y_min: 0.0
+  y_max: null
+
+# PPO Training
+training:
+  total_timesteps: 500000
+  learning_rate: 0.0003
+  n_steps: 128           # per env, so 128×4=512 transitions per update
+  batch_size: 128
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [256, 256]
+  save_freq: 50000

@@ -43,8 +43,8 @@ def update_edge_damage_kernel(
     dist_sq = wp.dot(diff, diff)
     dist_to_center = wp.sqrt(dist_sq + 1.0e-8)
 
-    # Only update edges near knife (3x radius)
-    if dist_to_center > knife_radius * 3.0:
+    # Only update edges near knife (1.3x radius — localized cutting for CUSA realism)
+    if dist_to_center > knife_radius * 1.3:
         return
 
     # Edge half-length (circumsphere radius), also safe
@@ -73,8 +73,90 @@ def update_edge_damage_kernel(
         # Smooth monotonic update: softplus(new - old) ≈ max(0, new - old)
         current = edge_damage[eid]
         dmg_diff = target_clamped - current
-        increment = wp.log(1.0 + wp.exp(wp.clamp(20.0 * dmg_diff, -50.0, 50.0))) / 20.0
+        # Softplus smooth max: k=10 balances differentiability vs gradient stability
+        # Max gradient per step = k/4 = 2.5. Chain of 32: 2.5^32 ≈ 5e12 (within float32)
+        # Drift per step: softplus(0)/10 = 0.069. Over 32 steps: 2.2 (acceptable)
+        increment = wp.log(1.0 + wp.exp(wp.clamp(10.0 * dmg_diff, -50.0, 50.0))) / 10.0
         edge_damage[eid] = current + increment
+
+
+# ============== Edge Damage (SSA + delta variant for gradient) ==============
+# Same physics as update_edge_damage_kernel, but Warp 1.12 gradient-safe:
+#   - No conditional array write (`if rest > 0.01: edge_damage[eid] = ...` → wp.where gating)
+#   - No intra-kernel read-then-write on edge_damage (write to edge_damage_delta instead)
+# Apply separately via apply_edge_damage_delta_kernel.
+
+@wp.kernel
+def update_edge_damage_kernel_ssa(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    edge_a: wp.array(dtype=wp.int32),
+    edge_b: wp.array(dtype=wp.int32),
+    pf_rest: wp.array(dtype=wp.float32),
+    edge_damage: wp.array(dtype=wp.float32),         # INPUT: current edge_damage (read for monotonic update)
+    knife_pos: wp.array(dtype=wp.vec3),
+    knife_radius: float,
+    alpha_min: float,
+    edge_damage_delta: wp.array(dtype=wp.float32),   # OUTPUT: increment to apply
+):
+    """Gradient-safe P(F) edge damage: computes monotonic increment into delta buffer.
+    Caller must zero edge_damage_delta before launch, then apply via
+    apply_edge_damage_delta_kernel."""
+    eid = wp.tid()
+
+    a = edge_a[eid]
+    b = edge_b[eid]
+    # Early returns OK (not a re-assignment of previously-assigned var)
+    if alpha[a] < 0.01 or alpha[b] < 0.01:
+        return
+
+    pa = pred_pos[a]
+    pb = pred_pos[b]
+    mid = (pa + pb) * 0.5
+
+    kp = knife_pos[0]
+    diff = mid - kp
+    dist_sq = wp.dot(diff, diff)
+    dist_to_center = wp.sqrt(dist_sq + 1.0e-8)
+
+    if dist_to_center > knife_radius * 1.3:
+        return
+
+    edge_vec = pa - pb
+    edge_len_sq = wp.dot(edge_vec, edge_vec)
+    radius = wp.sqrt(edge_len_sq + 1.0e-8) * 0.5
+    if radius < 1.0e-4:
+        return
+
+    intruder_dist = dist_to_center - knife_radius
+    sdist = intruder_dist - radius
+    exp_arg = wp.clamp(-alpha_min * sdist / radius, -50.0, 50.0)
+    pf = 1.0 / (1.0 + wp.exp(exp_arg))
+
+    # SSA: compute delta in a single forward chain; no array re-writes.
+    rest = pf_rest[eid]
+    # rest_safe avoids div-by-zero in the gated-off branch (value doesn't matter there)
+    rest_safe = wp.where(rest > 0.01, rest, 1.0)
+    target = 1.0 - pf / rest_safe
+    target_clamped = wp.log(1.0 + wp.exp(wp.clamp(20.0 * target, -50.0, 50.0))) / 20.0
+    current = edge_damage[eid]
+    dmg_diff = target_clamped - current
+    increment_raw = wp.log(1.0 + wp.exp(wp.clamp(10.0 * dmg_diff, -50.0, 50.0))) / 10.0
+    # Gate by rest using wp.where (not `if rest: edge_damage[eid] = ...` which invalidates grad)
+    increment = wp.where(rest > 0.01, increment_raw, 0.0)
+
+    # Write to separate delta buffer; never re-assign edge_damage here.
+    wp.atomic_add(edge_damage_delta, eid, increment)
+
+
+@wp.kernel
+def apply_edge_damage_delta_kernel(
+    edge_damage: wp.array(dtype=wp.float32),
+    edge_damage_delta: wp.array(dtype=wp.float32),
+):
+    """edge_damage += edge_damage_delta via wp.atomic_add (tape-safe)."""
+    eid = wp.tid()
+    wp.atomic_add(edge_damage, eid, edge_damage_delta[eid])
 
 
 # ============== Particle Damage Aggregation ==============
@@ -157,3 +239,123 @@ def update_soft_removal_kernel(
     # Sigmoid soft mask (clamp exp arg to prevent overflow)
     exp_arg = wp.clamp(sharpness * (d - threshold), -50.0, 50.0)
     alpha[i] = 1.0 / (1.0 + wp.exp(exp_arg))
+
+
+# ============== Batched Edge Damage (per-env knife_pos) ==============
+
+@wp.kernel
+def update_edge_damage_kernel_batched(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    edge_a: wp.array(dtype=wp.int32),
+    edge_b: wp.array(dtype=wp.int32),
+    pf_rest: wp.array(dtype=wp.float32),
+    edge_damage: wp.array(dtype=wp.float32),
+    knife_pos: wp.array(dtype=wp.vec3),  # (num_envs,) per-env knife
+    knife_radius: float,
+    alpha_min: float,
+    n_per_env: int,
+    e_per_env: int,
+):
+    """Edge damage kernel for batched envs. Per-env knife_pos lookup."""
+    eid = wp.tid()
+
+    a = edge_a[eid]
+    b = edge_b[eid]
+    if alpha[a] < 0.01 or alpha[b] < 0.01:
+        return
+
+    pa = pred_pos[a]
+    pb = pred_pos[b]
+    mid = (pa + pb) * 0.5
+
+    # Per-env knife position
+    env_id = eid / e_per_env
+    kp = knife_pos[env_id]
+    diff = mid - kp
+    dist_sq = wp.dot(diff, diff)
+    dist_to_center = wp.sqrt(dist_sq + 1.0e-8)
+
+    if dist_to_center > knife_radius * 1.3:
+        return
+
+    edge_vec = pa - pb
+    edge_len_sq = wp.dot(edge_vec, edge_vec)
+    radius = wp.sqrt(edge_len_sq + 1.0e-8) * 0.5
+    if radius < 1.0e-4:
+        return
+
+    intruder_dist = dist_to_center - knife_radius
+    sdist = intruder_dist - radius
+    exp_arg = wp.clamp(-alpha_min * sdist / radius, -50.0, 50.0)
+    pf = 1.0 / (1.0 + wp.exp(exp_arg))
+
+    rest = pf_rest[eid]
+    if rest > 0.01:
+        target = 1.0 - pf / rest
+        target_clamped = wp.log(1.0 + wp.exp(wp.clamp(10.0 * target, -50.0, 50.0))) / 10.0
+        current = edge_damage[eid]
+        dmg_diff = target_clamped - current
+        increment = wp.log(1.0 + wp.exp(wp.clamp(10.0 * dmg_diff, -50.0, 50.0))) / 10.0
+        edge_damage[eid] = current + increment
+
+
+# ============== Batched Edge Damage (SSA + delta variant for gradient) ==============
+
+@wp.kernel
+def update_edge_damage_kernel_batched_ssa(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    edge_a: wp.array(dtype=wp.int32),
+    edge_b: wp.array(dtype=wp.int32),
+    pf_rest: wp.array(dtype=wp.float32),
+    edge_damage: wp.array(dtype=wp.float32),
+    knife_pos: wp.array(dtype=wp.vec3),           # (num_envs,) per-env knife
+    knife_radius: float,
+    alpha_min: float,
+    n_per_env: int,
+    e_per_env: int,
+    edge_damage_delta: wp.array(dtype=wp.float32),  # OUTPUT
+):
+    """Batched gradient-safe edge damage. Same SSA pattern as non-batched variant."""
+    eid = wp.tid()
+
+    a = edge_a[eid]
+    b = edge_b[eid]
+    if alpha[a] < 0.01 or alpha[b] < 0.01:
+        return
+
+    pa = pred_pos[a]
+    pb = pred_pos[b]
+    mid = (pa + pb) * 0.5
+
+    env_id = eid / e_per_env
+    kp = knife_pos[env_id]
+    diff = mid - kp
+    dist_sq = wp.dot(diff, diff)
+    dist_to_center = wp.sqrt(dist_sq + 1.0e-8)
+
+    if dist_to_center > knife_radius * 1.3:
+        return
+
+    edge_vec = pa - pb
+    edge_len_sq = wp.dot(edge_vec, edge_vec)
+    radius = wp.sqrt(edge_len_sq + 1.0e-8) * 0.5
+    if radius < 1.0e-4:
+        return
+
+    intruder_dist = dist_to_center - knife_radius
+    sdist = intruder_dist - radius
+    exp_arg = wp.clamp(-alpha_min * sdist / radius, -50.0, 50.0)
+    pf = 1.0 / (1.0 + wp.exp(exp_arg))
+
+    rest = pf_rest[eid]
+    rest_safe = wp.where(rest > 0.01, rest, 1.0)
+    target = 1.0 - pf / rest_safe
+    target_clamped = wp.log(1.0 + wp.exp(wp.clamp(10.0 * target, -50.0, 50.0))) / 10.0
+    current = edge_damage[eid]
+    dmg_diff = target_clamped - current
+    increment_raw = wp.log(1.0 + wp.exp(wp.clamp(10.0 * dmg_diff, -50.0, 50.0))) / 10.0
+    increment = wp.where(rest > 0.01, increment_raw, 0.0)
+
+    wp.atomic_add(edge_damage_delta, eid, increment)
