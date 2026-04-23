@@ -142,6 +142,12 @@ public:
 private:
     float3* d_deltas;
     int* d_delta_counts;
+    // FleX-style constraint groups (Macklin 2014, Sec 4): self-collision has its own
+    // delta buffer + its own apply pass, so it's NOT diluted by the ~60 shape-match
+    // contributions per particle on dense tet meshes. cluster_solve → apply → clear_sc
+    // → self_collision → apply_sc → tool/floor/bone collision.
+    float3* d_deltas_sc = nullptr;
+    int* d_delta_counts_sc = nullptr;
 
     // GPU cutting kernels
     void gpu_update_damage();

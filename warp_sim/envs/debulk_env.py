@@ -339,6 +339,10 @@ class DebulkEnv(gym.Env):
         self.solver.p["damage_int"].zero_()
         self.solver.p["deltas"].zero_()
         self.solver.p["delta_counts"].zero_()
+        # Stage C (2026-04-22): reset Müller warm-start buffer. Without this,
+        # cluster_quat retains stale rotation from previous episode and Müller
+        # iterates from a bad starting point.
+        self.solver.reset_cluster_quat()
         self.solver.step_count = 0
         self.step_count = 0
 

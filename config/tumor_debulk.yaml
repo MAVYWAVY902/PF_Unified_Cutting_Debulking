@@ -3,8 +3,9 @@
 name: "Tumor Debulking"
 
 ## Mesh
-mesh: "../../resources/tumor/tumor_7800.msh"  # 35k particles, 184k tets
-# mesh: "../../resources/tumor/tumor_7800.msh"  # 35k particles, 184k tets
+mesh: "../../resources/tumor/tumor_uniform.msh"  # 10911 verts, 52735 tets; ~22 fps on RTX 2070
+# mesh: "../../resources/tumor/tumor_7800_dense.msh"  # ~27k verts; 2-3× slower, 内部仍非 uniform (同 pipeline 只加密表面)
+# mesh: "../../resources/tumor/tumor_uniform.msh"     # 由 tools/remesh_tumor_uniform.py 生成的真正 uniform 版本
 
 ## Simulation parameters
 simulation:
@@ -38,7 +39,11 @@ knife:
 ## Self-collision
 self_collision:
   enabled: true
-  radius: auto          # "auto" = 0.45x avg_spacing, or float
+  radius: 0.000296      # 0.55 × avg_spacing (avg_spacing=0.646mm on tumor_7800.msh).
+                        # 原 auto=0.45× 太小 (collision_dist=0.58mm < avg_spacing 0.65mm)，
+                        # 碎片在 0.6-1.5mm 之间不触发排斥 → "嵌入"主体。
+                        # 0.55× 把 collision_dist 提到 0.71mm，保守改善低速擦入穿透。
+                        # 如需更强（tumor 不膨胀前提下），阶梯：0.000420 (0.65×) / 0.000453 (0.70×)
   stiffness: 0.8
 
 ## Rigid object (temporal bone)

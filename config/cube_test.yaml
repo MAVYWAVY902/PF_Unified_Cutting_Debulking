@@ -4,7 +4,7 @@
 name: "Cube Test"
 
 ## Dense cube (1m x 1m x 1m, ~31k vertices, 158k tets)
-mesh: "../../resources/cube/cube_dense.msh"
+mesh: "../../resources/cube/cube_tet.msh"
 
 simulation:
   dt: 0.005

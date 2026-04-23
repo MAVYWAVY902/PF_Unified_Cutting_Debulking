@@ -574,28 +574,41 @@ int main(int argc, char** argv) {
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
 
-        // Orphan清理：移除拓扑真正孤立的粒子（没有任何存活邻居）
-        // 原版用"没有 4-顶点全活的 tet"过于严苛 —— 表面粒子 aspirate 一个邻居就死，
-        // 再加 20 次级联，一次刀接触会蒸发 10× 于真正该死的粒子数。
-        // 新判据：遍历 vertex_neighbors，至少有 1 个邻居活着就算连接正常。
-        // 循环保留（防御性），但新判据下一般 1-2 次就收敛、很少级联。
+        // Orphan清理：判据 = "没有 4-顶点全活的 incident tet"
+        //
+        // 判据理由（Fix I，2026-04-22 reverted from vertex-neighbor lenient version）：
+        //   - 渲染（rebuild_surface_faces）使用"tet 全活"作为 surface face 可见判据。
+        //   - 若 orphan 用较宽松的"有活边邻居"判据，会留下"桥粒子"——
+        //     物理上活着但没有任何 surface face 呈现它 → 用户关闭粒子可视化时看不见，
+        //     但这些桥把 BFS 的 connected component 偷偷连在一起 →
+        //     真正的 fragment 不被 BFS 识别 → cluster splitting 不触发 → 隐形弹簧问题
+        //     → 视觉上"碎片"漂浮但物理上仍被主体拽着。
+        //   - 严格判据让 orphan / BFS / render 三者拓扑一致，桥粒子自然被清理，
+        //     真正的 fragment 被 BFS 正确识别并 cluster-split 成独立刚体。
+        //
+        // Cascade 限制到 3 iter（原版 20）：严格判据 + MEAN aggregation (之前修好的)
+        // 意味着每次 aspirate 规模已经较小、cascade 不会再失控；3 iter 够收敛正常切割。
         if (use_tet && rem > 0) {
             int total_orphans = 0;
             int iter = 0;
-            for (; iter < 20; iter++) {
+            for (; iter < 3; iter++) {
                 int round_orphans = 0;
                 for (int i = 0; i < N; i++) {
                     if (cpu_removed[i]) continue;
-                    if (i >= (int)tet_mesh.vertex_neighbors.size()) continue;
-                    const auto& nbrs = tet_mesh.vertex_neighbors[i];
-                    if (nbrs.empty()) continue;
+                    const auto& my_tets = tet_mesh.vertex_to_tets[i];
+                    if (my_tets.empty()) continue;
 
-                    bool has_alive_neighbor = false;
-                    for (int nb : nbrs) {
-                        if (!cpu_removed[nb]) { has_alive_neighbor = true; break; }
+                    bool has_alive_tet = false;
+                    for (int ti : my_tets) {
+                        const auto& t = tet_mesh.tets[ti];
+                        bool all_alive = true;
+                        for (int j = 0; j < 4; j++) {
+                            if (cpu_removed[t[j]]) { all_alive = false; break; }
+                        }
+                        if (all_alive) { has_alive_tet = true; break; }
                     }
 
-                    if (!has_alive_neighbor) {
+                    if (!has_alive_tet) {
                         cpu_removed[i] = 1;
                         cpu_solver.particles[i].removed = true;
                         round_orphans++;
@@ -606,7 +619,7 @@ int main(int argc, char** argv) {
             }
             if (total_orphans > 0) {
                 if (timing_frame % 60 == 0)
-                    printf("[ORPHAN] removed %d in %d iters\n", total_orphans, iter+1);
+                    printf("[ORPHAN] removed %d in %d iters (cap=3)\n", total_orphans, iter+1);
                 gpu_solver.upload_removed(cpu_removed);
                 active = 0; rem = 0;
                 for (int i = 0; i < N; i++) {

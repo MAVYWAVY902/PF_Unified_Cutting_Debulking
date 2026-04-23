@@ -26,15 +26,40 @@ __global__ void predict_kernel(
 }
 
 __global__ void collision_kernel(
-    float3* pred_pos, int* removed, int* fixed,
-    float floor_y, float3 knife_pos, float knife_radius, int knife_active, int N)
+    float3* pred_pos, float3* old_pos, int* removed, int* fixed,
+    float floor_y, float3 knife_pos, float knife_radius, int knife_active,
+    float mu_s, float mu_k, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i] || fixed[i]) return;
 
-    // 地板
+    // 地板 — y-clamp + Coulomb 摩擦（法向量恒为 +Y）
+    // 和 sdf_collision_kernel 的 friction 段同构；normal=(0,1,0) 简化 dot/tangent 计算。
+    // 没有摩擦时粒子会"滑冰"—— 垂直能量正确吸收（vy clamp 到 0），但水平速度只靠全局
+    // damping=0.95 衰减，碎片能滑几 cm 才停，对手术 demo 不现实。
     if (pred_pos[i].y < floor_y) {
+        float push = floor_y - pred_pos[i].y;  // 多少被推回地面上（>0）
         pred_pos[i].y = floor_y;
+
+        if (mu_s > 0.0f || mu_k > 0.0f) {
+            // 本 substep 水平位移（切向，法向 y 分量不算）
+            float dpx = pred_pos[i].x - old_pos[i].x;
+            float dpz = pred_pos[i].z - old_pos[i].z;
+            float len_t = sqrtf(dpx*dpx + dpz*dpz);
+
+            if (len_t > 1e-10f) {
+                if (len_t < mu_s * push) {
+                    // 静摩擦：切向位移 < μ_s × 法向接触力 → 完全粘住，本步抹掉水平移动
+                    pred_pos[i].x -= dpx;
+                    pred_pos[i].z -= dpz;
+                } else {
+                    // 动摩擦：按 μ_k × 法向推量 的比例削弱水平位移
+                    float reduce = fminf(mu_k * push / len_t, 1.0f);
+                    pred_pos[i].x -= dpx * reduce;
+                    pred_pos[i].z -= dpz * reduce;
+                }
+            }
+        }
     }
 
     // 刀具（球形 SDF）
@@ -207,6 +232,28 @@ __global__ void apply_kernel(
     pred_pos[i].x += local_stiff * deltas[i].x * inv_count;
     pred_pos[i].y += local_stiff * deltas[i].y * inv_count;
     pred_pos[i].z += local_stiff * deltas[i].z * inv_count;
+}
+
+// Apply self-collision delta (FleX constraint groups, Macklin 2014, Sec 4).
+// Differs from apply_kernel:
+//   - Uses SEPARATE deltas_sc / delta_counts_sc (not shared with shape-match)
+//     → average is over only the self-colliding pairs for this particle (typically 2-8),
+//     not over the ~60 shape-match cluster memberships. No dilution.
+//   - NO damage-based weakening. Self-collision is a kinematic non-penetration constraint;
+//     a damaged particle should NOT be allowed to freely overlap with its neighbors.
+//   - self_collision_kernel already bakes stiffness into the per-pair delta, so no
+//     further stiffness multiplier here.
+__global__ void apply_self_collision_kernel(
+    float3* pred_pos, float3* deltas_sc, int* delta_counts_sc,
+    int* removed, int* fixed, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i] || delta_counts_sc[i] == 0) return;
+
+    float inv_count = 1.0f / delta_counts_sc[i];
+    pred_pos[i].x += deltas_sc[i].x * inv_count;
+    pred_pos[i].y += deltas_sc[i].y * inv_count;
+    pred_pos[i].z += deltas_sc[i].z * inv_count;
 }
 
 __global__ void clear_deltas_kernel(float3* deltas, int* counts, int N)
@@ -524,9 +571,12 @@ void ShapeMatchingGPUSolver::init(
     CUDA_CHECK(cudaMemcpy(d_clusters.rest_offsets, rest_offsets.data(), total * sizeof(float3), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_clusters.rest_cm, rest_cm.data(), C * sizeof(float3), cudaMemcpyHostToDevice));
 
-    // 分配 delta buffers
+    // 分配 delta buffers (shape-match)
     CUDA_CHECK(cudaMalloc(&d_deltas, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_delta_counts, N * sizeof(int)));
+    // Separate delta buffers for self-collision (FleX constraint groups, Macklin 2014 Sec 4)
+    CUDA_CHECK(cudaMalloc(&d_deltas_sc, N * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_delta_counts_sc, N * sizeof(int)));
 
     // Self-collision hash grid buffers
     if (config.self_collision_enabled) {
@@ -1016,10 +1066,11 @@ void ShapeMatchingGPUSolver::step() {
 
     // 2. Collision (predict 后) — floor + sphere tool
     collision_kernel<<<blocks_n, 256>>>(
-        d_particles.predicted_pos,
+        d_particles.predicted_pos, d_particles.old_pos,
         d_particles.removed, d_particles.fixed,
         config.floor_y, config.knife_pos, config.knife_radius,
-        (config.tool_type == 0) ? config.knife_active : 0, N);  // sphere only if tool_type==0
+        (config.tool_type == 0) ? config.knife_active : 0,     // sphere only if tool_type==0
+        config.friction_s, config.friction_k, N);              // Coulomb 摩擦（复用 bone SDF 的 μ_s/μ_k）
 
     // 2a. Tool SDF collision (if mesh tool)
     if (config.tool_type == 1 && config.knife_active && d_tool_sdf.active && d_tool_sdf.d_sdf) {
@@ -1039,9 +1090,13 @@ void ShapeMatchingGPUSolver::step() {
             config.friction_s, config.friction_k, N);
     }
 
-    // 3. Jacobi 迭代
+    // 3. Jacobi 迭代 — FleX constraint groups (Macklin 2014 Sec 4):
+    //    Group 1: shape-matching (cluster_solve → apply) — soft constraint, Jacobi-averaged
+    //    Group 2: self-collision (self_collision_kernel → apply_sc) — separate delta buffer
+    //             so contacts aren't diluted by ~60 shape-match contributions per particle
+    //    Group 3: hard contacts (knife/floor/tool SDF/bone SDF) — direct write to pred_pos
     for (int iter = 0; iter < config.num_iterations; iter++) {
-        // Clear deltas
+        // ---- Group 1: shape matching ----
         clear_deltas_kernel<<<blocks_n, 256>>>(d_deltas, d_delta_counts, N);
 
         // Solve all clusters（每簇一个 block，32 线程/warp）
@@ -1051,31 +1106,38 @@ void ShapeMatchingGPUSolver::step() {
             d_clusters.particle_ids, d_clusters.rest_offsets,
             d_deltas, d_delta_counts, C);
 
-        // Self-collision（hash grid + neighbor query → atomicAdd deltas）
+        // Apply shape-match delta (avg over ~60 cluster memberships)
+        apply_kernel<<<blocks_n, 256>>>(
+            d_particles.predicted_pos, d_deltas, d_delta_counts,
+            d_particles.damage, d_particles.removed, d_particles.fixed,
+            config.stiffness, N);
+
+        // ---- Group 2: self-collision (separate delta buffer, no shape-match dilution) ----
         if (config.self_collision_enabled && d_cell_hash) {
+            clear_deltas_kernel<<<blocks_n, 256>>>(d_deltas_sc, d_delta_counts_sc, N);
             build_hash_grid();
             float cell_size = config.self_collision_radius * 2.0f;
             self_collision_kernel<<<blocks_n, 256>>>(
                 d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
                 d_particle_index_sorted, d_cell_hash_sorted,
                 d_cell_start, d_cell_end,
-                d_deltas, d_delta_counts,
+                d_deltas_sc, d_delta_counts_sc,      // SEPARATE buffer (was d_deltas)
                 config.self_collision_radius, config.self_collision_stiffness,
                 cell_size, HASH_TABLE_SIZE, N);
+            // Apply self-collision delta (avg over only the colliding pairs, ~2-8)
+            apply_self_collision_kernel<<<blocks_n, 256>>>(
+                d_particles.predicted_pos, d_deltas_sc, d_delta_counts_sc,
+                d_particles.removed, d_particles.fixed, N);
         }
 
-        // Apply（merge shape matching + self-collision）
-        apply_kernel<<<blocks_n, 256>>>(
-            d_particles.predicted_pos, d_deltas, d_delta_counts,
-            d_particles.damage, d_particles.removed, d_particles.fixed,
-            config.stiffness, N);
-
-        // Collision (每次迭代) — floor + sphere tool
+        // ---- Group 3: hard contacts (direct write to pred_pos) ----
+        // Collision (每次迭代) — floor (带 Coulomb 摩擦) + sphere tool
         collision_kernel<<<blocks_n, 256>>>(
-            d_particles.predicted_pos,
+            d_particles.predicted_pos, d_particles.old_pos,
             d_particles.removed, d_particles.fixed,
             config.floor_y, config.knife_pos, config.knife_radius,
-            (config.tool_type == 0) ? config.knife_active : 0, N);
+            (config.tool_type == 0) ? config.knife_active : 0,
+            config.friction_s, config.friction_k, N);
 
         // Tool SDF collision (每次迭代)
         if (config.tool_type == 1 && config.knife_active && d_tool_sdf.active && d_tool_sdf.d_sdf) {
@@ -1270,6 +1332,8 @@ void ShapeMatchingGPUSolver::cleanup() {
     cudaFree(d_clusters.rest_cm);
     cudaFree(d_deltas);
     cudaFree(d_delta_counts);
+    cudaFree(d_deltas_sc);
+    cudaFree(d_delta_counts_sc);
     if (d_edges.particle_a) {
         cudaFree(d_edges.particle_a);
         cudaFree(d_edges.particle_b);

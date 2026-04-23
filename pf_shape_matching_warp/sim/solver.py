@@ -1,13 +1,19 @@
 """Shape Matching PBD Solver using Warp kernels."""
 import warp as wp
 from .kernels import (
-    predict_kernel,
+    predict_kernel,              # legacy — kept for forward-only paths
+    predict_kernel_ssa,          # SSA — Stage B (2026-04-22), fixes `v=v*damping`
     collision_kernel,            # legacy (non-gradient-safe) — kept for backcompat
     collision_kernel_ssa,        # SSA version — writes to collision_delta
     apply_collision_delta_kernel,
     clear_deltas_kernel,
-    cluster_solve_kernel,
-    apply_kernel,
+    cluster_solve_kernel,            # legacy SVD — kept for forward-only paths
+    cluster_solve_kernel_ssa,        # SSA + Müller 2016 polar — Stage C (2026-04-22)
+    cluster_quat_update_kernel,      # Müller warm-start state update (isolated)
+    reset_cluster_quat_kernel,       # reset warm-start on env.reset
+    apply_kernel,                # legacy — kept for forward-only paths
+    apply_kernel_ssa,            # SSA — Stage A (2026-04-22), writes to shape_delta
+    apply_shape_delta_kernel,    # SSA apply pred_pos += shape_delta
     update_velocity_kernel,
 )
 from .pf_damage import (
@@ -15,7 +21,9 @@ from .pf_damage import (
     update_edge_damage_kernel_ssa,     # SSA version — writes to edge_damage_delta
     apply_edge_damage_delta_kernel,
     update_particle_damage_kernel,
-    finalize_particle_damage_kernel,
+    finalize_particle_damage_kernel,   # legacy — kept for forward-only paths
+    finalize_particle_damage_kernel_ssa,   # SSA — Stage A (2026-04-22)
+    apply_particle_damage_delta_kernel,    # SSA apply for particle damage
     update_soft_removal_kernel,
 )
 
@@ -41,6 +49,12 @@ class ShapeMatchingSolver:
         self.damping = 0.98
         self.floor_y = 0.0
         self.substeps = 1  # number of substeps per step() call
+
+        # Stage C (2026-04-22): Müller iterations for cluster_solve_kernel_ssa.
+        # 8 is the safe default — handles any rotation delta up to ~1 rad with
+        # ~7e-5 error. Per-substep rotation delta is typically << 0.1 rad with
+        # warm-start, so 8 is generous. Tune via solver.muller_iter if needed.
+        self.muller_iter = 8
 
         # Knife — wp.array for differentiability (gradient flows through wp.Tape)
         self.knife_pos = wp.array(
@@ -73,9 +87,10 @@ class ShapeMatchingSolver:
         N = self.N
         dt_sub = self.dt / float(self.substeps)
 
-        # 1. Predict
+        # 1. Predict — Stage B (2026-04-22) SSA variant
+        # fixes `v = v * damping` silent-zero + hoists old_pos write out of branch.
         wp.launch(
-            predict_kernel,
+            predict_kernel_ssa,
             dim=N,
             inputs=[
                 self.p["pos"], self.p["vel"],
@@ -117,28 +132,41 @@ class ShapeMatchingSolver:
                 device=self.device,
             )
 
-            # Cluster solve (shape matching SVD)
+            # Cluster solve — Stage C (2026-04-22) SSA + Müller 2016 polar.
+            # Replaces wp.svd3 + det<0 branch with tape-safe iterative quaternion
+            # polar decomposition. Warm-started from cluster_quat (persistent).
             wp.launch(
-                cluster_solve_kernel,
+                cluster_solve_kernel_ssa,
                 dim=self.num_clusters,
                 inputs=[
                     self.p["pred_pos"], self.p["alpha"],
                     self.c["starts"], self.c["sizes"],
                     self.c["particle_ids"], self.c["rest_offsets"],
+                    self.c["cluster_quat"], self.muller_iter,
                     self.p["deltas"], self.p["delta_counts"],
                 ],
                 device=self.device,
             )
 
-            # Apply
+            # Apply — SSA pattern (Stage A 2026-04-22):
+            # compute correction into shape_delta, then apply pred_pos += shape_delta
+            # via atomic_add. Replaces the old tape-unsafe pred_pos R-M-W.
+            self.p["shape_delta"].zero_()
             wp.launch(
-                apply_kernel,
+                apply_kernel_ssa,
                 dim=N,
                 inputs=[
-                    self.p["pred_pos"], self.p["deltas"], self.p["delta_counts"],
+                    self.p["deltas"], self.p["delta_counts"],
                     self.p["damage"], self.p["alpha"], self.p["fixed"],
                     self.stiffness,
+                    self.p["shape_delta"],
                 ],
+                device=self.device,
+            )
+            wp.launch(
+                apply_shape_delta_kernel,
+                dim=N,
+                inputs=[self.p["pred_pos"], self.p["shape_delta"]],
                 device=self.device,
             )
 
@@ -162,6 +190,23 @@ class ShapeMatchingSolver:
                 inputs=[self.p["pred_pos"], self.p["collision_delta"]],
                 device=self.device,
             )
+
+        # 3b. Update cluster_quat warm-start AFTER Jacobi loop — isolated from
+        # the differentiable path (kernel reads pred_pos, writes cluster_quat).
+        # If we wrote inside cluster_solve_kernel_ssa, the write on a tracked
+        # array silently zeroed the backward chain through q_new → R → deltas
+        # (Stage C.3 debug 2026-04-22).
+        wp.launch(
+            cluster_quat_update_kernel,
+            dim=self.num_clusters,
+            inputs=[
+                self.p["pred_pos"], self.p["alpha"],
+                self.c["starts"], self.c["sizes"],
+                self.c["particle_ids"], self.c["rest_offsets"],
+                self.c["cluster_quat"], self.muller_iter,
+            ],
+            device=self.device,
+        )
 
         # 4. Cutting pipeline (every N steps when knife active)
         if (self.knife_active == 1 and self.e is not None and
@@ -206,11 +251,21 @@ class ShapeMatchingSolver:
                 device=self.device,
             )
 
-            # Pass 2: finalize mean + monotonic softplus update
+            # Pass 2: finalize mean + monotonic softplus update — SSA (Stage A 2026-04-22):
+            # compute increment into particle_damage_delta, then apply via atomic_add.
+            # Replaces tape-unsafe particle_damage[i] = particle_damage[i] + ... R-M-W.
+            self.p["particle_damage_delta"].zero_()
             wp.launch(
-                finalize_particle_damage_kernel,
+                finalize_particle_damage_kernel_ssa,
                 dim=N,
-                inputs=[damage_sum, damage_count, self.p["damage"]],
+                inputs=[damage_sum, damage_count, self.p["damage"],
+                        self.p["particle_damage_delta"]],
+                device=self.device,
+            )
+            wp.launch(
+                apply_particle_damage_delta_kernel,
+                dim=N,
+                inputs=[self.p["damage"], self.p["particle_damage_delta"]],
                 device=self.device,
             )
 
@@ -246,6 +301,15 @@ class ShapeMatchingSolver:
         self.knife_pos = wp.array(
             [wp.vec3(x, y, z)],
             dtype=wp.vec3, device=self.device, requires_grad=True,
+        )
+
+    def reset_cluster_quat(self):
+        """Reset per-cluster warm-start quaternion to identity. Call on env.reset()
+        so Müller iteration starts from a clean state (cluster_quat_init pattern
+        in particles.py::init_cluster_arrays, but GPU-side reset without realloc)."""
+        wp.launch(
+            reset_cluster_quat_kernel, dim=self.num_clusters,
+            inputs=[self.c["cluster_quat"]], device=self.device,
         )
 
     def get_positions_numpy(self):

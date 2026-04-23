@@ -30,6 +30,12 @@ def init_warp_arrays(vertices: np.ndarray, fixed_mask: np.ndarray, device="cuda:
         # Separate collision-delta buffer: SSA gradient-safe pattern (XPBD reference).
         # Zero-filled per collision call, then applied via apply_collision_delta_kernel.
         "collision_delta": wp.zeros(N, dtype=wp.vec3, device=device, requires_grad=True),
+        # Stage A (2026-04-22) SSA buffers — tape-safe replacements for R-M-W.
+        # shape_delta: pred_pos correction from apply_kernel_ssa (shape matching residual).
+        # particle_damage_delta: monotonic softplus increment from
+        # finalize_particle_damage_kernel_ssa.
+        "shape_delta": wp.zeros(N, dtype=wp.vec3, device=device, requires_grad=True),
+        "particle_damage_delta": wp.zeros(N, dtype=wp.float32, device=device, requires_grad=True),
     }
 
     print(f"Warp arrays initialized: {N} particles on {device}")
@@ -49,17 +55,37 @@ def init_cluster_arrays(starts, sizes, pids, offsets, cms, device="cuda:0"):
     Returns:
         dict of wp.arrays
     """
+    num_clusters = len(starts)
+    # Stage C.2 (2026-04-22): per-cluster warm-start quaternion for Müller 2016.
+    # Initialized to identity; cluster_solve_kernel_ssa updates in place with
+    # the converged rotation each substep.
+    #
+    # requires_grad=False (2026-04-22 Stage C.3 fix): warm-start is a HEURISTIC
+    # to speed convergence, not part of the analytic gradient path. If this
+    # array were differentiable, the pattern `q_warm = cluster_quat[cid]; ...;
+    # cluster_quat[cid] = q_new` becomes a gradient-ambiguous read-then-write
+    # on the same requires_grad array, which silently zeros the adjoint chain
+    # from q_new → R → deltas (observed on C.3 Axis 3: pred_pos.grad=0 while
+    # FD=110, confirming forward is correct but backward was broken). By
+    # marking cluster_quat non-differentiable, q_warm is a const input to Müller
+    # and the write is a pure state update — gradient flows cleanly through
+    # A → q_new → R → deltas without interference.
+    cluster_quat_init = np.zeros((num_clusters, 4), dtype=np.float32)
+    cluster_quat_init[:, 3] = 1.0  # identity quaternion (x, y, z, w) with w=1
+
     cluster_arrays = {
         "starts": wp.array(starts, dtype=wp.int32, device=device),
         "sizes": wp.array(sizes, dtype=wp.int32, device=device),
         "particle_ids": wp.array(pids, dtype=wp.int32, device=device),
         "rest_offsets": wp.array(offsets, dtype=wp.vec3, device=device),
         "rest_cm": wp.array(cms, dtype=wp.vec3, device=device),
-        "num_clusters": len(starts),
+        "cluster_quat": wp.array(cluster_quat_init, dtype=wp.quat,
+                                  device=device, requires_grad=False),
+        "num_clusters": num_clusters,
         "total_entries": len(pids),
     }
 
-    print(f"Cluster arrays: {len(starts)} clusters, {len(pids)} total entries")
+    print(f"Cluster arrays: {num_clusters} clusters, {len(pids)} total entries")
     return cluster_arrays
 
 

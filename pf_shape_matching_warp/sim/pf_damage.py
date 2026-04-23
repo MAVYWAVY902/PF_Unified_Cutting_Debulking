@@ -200,20 +200,58 @@ def finalize_particle_damage_kernel(
     particle_damage_count: wp.array(dtype=wp.float32),
     particle_damage: wp.array(dtype=wp.float32),
 ):
-    """Compute mean damage per particle. Monotonic: only increase.
-    damage[i] = max(damage[i], sum[i] / count[i])
-    The max here is a per-particle scalar op (not atomic), fine for differentiability.
+    """LEGACY — direct R-M-W on particle_damage. Tape-unsafe under Warp 1.12
+    verify_autograd_array_access. Kept only for forward-only paths. New solver
+    uses finalize_particle_damage_kernel_ssa + apply_particle_damage_delta_kernel.
     """
     i = wp.tid()
     cnt = particle_damage_count[i]
     if cnt < 0.5:
         return
     mean_dmg = particle_damage_sum[i] / cnt
-    # Differentiable monotonic update: softplus approximation of max(0, new - old)
-    # softplus(x) = log(1 + exp(k*x)) / k, but clamp arg to prevent overflow
     diff = mean_dmg - particle_damage[i]
     sp_arg = wp.clamp(20.0 * diff, -50.0, 50.0)
     particle_damage[i] = particle_damage[i] + wp.log(1.0 + wp.exp(sp_arg)) / 20.0
+
+
+# ============== Particle Damage Finalize (SSA + delta variant) ==============
+# Same monotonic softplus update, but Warp 1.12 tape-safe:
+#   - Writes increment to particle_damage_delta buffer (NOT particle_damage R-M-W)
+#   - Caller zeroes particle_damage_delta before launch, applies via
+#     apply_particle_damage_delta_kernel
+# softplus(diff) ≈ max(0, diff) — ensures damage monotonically increases.
+
+@wp.kernel
+def finalize_particle_damage_kernel_ssa(
+    particle_damage_sum: wp.array(dtype=wp.float32),
+    particle_damage_count: wp.array(dtype=wp.float32),
+    particle_damage: wp.array(dtype=wp.float32),          # INPUT: current damage (read for diff)
+    particle_damage_delta: wp.array(dtype=wp.float32),    # OUTPUT: increment to apply
+):
+    i = wp.tid()
+    cnt = particle_damage_count[i]
+    if cnt < 0.5:
+        return
+
+    # Single-assignment chain — no local re-assign, no array R-M-W
+    mean_dmg = particle_damage_sum[i] / cnt
+    diff = mean_dmg - particle_damage[i]
+    sp_arg = wp.clamp(20.0 * diff, -50.0, 50.0)
+    increment = wp.log(1.0 + wp.exp(sp_arg)) / 20.0
+
+    # Write to separate delta buffer via atomic_add (tape-safe).
+    wp.atomic_add(particle_damage_delta, i, increment)
+
+
+@wp.kernel
+def apply_particle_damage_delta_kernel(
+    particle_damage: wp.array(dtype=wp.float32),
+    particle_damage_delta: wp.array(dtype=wp.float32),
+):
+    """Apply damage increment via wp.atomic_add (tape-safe). Mirrors
+    apply_edge_damage_delta_kernel — same pattern, different target array."""
+    i = wp.tid()
+    wp.atomic_add(particle_damage, i, particle_damage_delta[i])
 
 
 # ============== Soft Removal (Differentiable) ==============
