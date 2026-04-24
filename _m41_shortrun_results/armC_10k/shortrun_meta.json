@@ -1,0 +1,7 @@
+{
+  "wall_clock_seconds": 209.8,
+  "total_timesteps": 10000,
+  "checkpoint_dir": "/home/yunxin/pf-shape-matching/_m41_shortrun_results/armC_10k",
+  "tb_run": "/home/yunxin/pf-shape-matching/tb_logs/m41_shortrun_armC_10k_1",
+  "health_rc": 0
+}

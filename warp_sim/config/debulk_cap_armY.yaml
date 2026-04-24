@@ -11,16 +11,20 @@ task_type: "capsule_only"
 # Obs mode: 6-point central FD gradient of capsule damage w.r.t. action (3D).
 obs_mode: "finite_diff"          # env runs 6 substeps per step (~6× cost vs Arm A)
 
-# Environment
-mesh: "resources/cuboid_flat/cuboid_h050.msh"
+# Environment — TORUS TASK (switched from cuboid 2026-04-23)
+mesh: "resources/torus/torus.msh"
 settle_steps: 200
 sim_substeps: 2
 action_scale: 0.003
-knife_start: [1.0, 0.5, 0.0]
+knife_start: [1.0, 0.25, 0.5]
 knife_radius: 0.05
-episode_length: 256
+episode_length: 1024
 debulk_threshold: 0.5
 workspace_margin: -0.02
+
+# Potential-based reward shaping (Ng 1999) — policy-invariant dense coverage signal.
+pbrs_alpha: 50.0
+pbrs_gamma: 0.995
 
 # Physics
 dt: 0.005
@@ -60,11 +64,11 @@ nerve:
 training:
   total_timesteps: 500000
   learning_rate: 0.0003
-  n_steps: 512
+  n_steps: 2048
   batch_size: 128
   n_epochs: 4
-  gamma: 0.99
-  gae_lambda: 0.95
+  gamma: 0.995
+  gae_lambda: 0.97
   clip_range: 0.2
   ent_coef: 0.01
   vf_coef: 0.5

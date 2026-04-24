@@ -16,13 +16,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "pf_shape_matching_warp"))
 
 
-def train(cfg):
+def train(cfg, seed=None, run_name=None):
     wp.init()
 
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
+    from stable_baselines3.common.utils import set_random_seed
     from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecNormalize
     from warp_sim.envs.debulk_env import DebulkEnv
+
+    if seed is not None:
+        set_random_seed(int(seed))
+        print(f"[seed] Set SB3/torch/numpy random seed = {seed}")
 
     # PPO config
     tcfg = cfg.get("training", {})
@@ -54,6 +59,17 @@ def train(cfg):
     else:
         print("[env] VecNormalize DISABLED (config use_vecnormalize=false)")
 
+    # Per-run paths — if run_name provided, use dedicated TB + checkpoint dirs
+    # so multi-seed / multi-arm runs don't collide.
+    import os
+    if run_name:
+        ckpt_dir = f"./checkpoints/{run_name}"
+        os.makedirs(ckpt_dir, exist_ok=True)
+        tb_log_name = run_name
+    else:
+        ckpt_dir = "./checkpoints/"
+        tb_log_name = None  # SB3 auto-names (PPO_1, PPO_2, ...)
+
     model = PPO(
         policy="MlpPolicy",
         env=env,
@@ -68,6 +84,7 @@ def train(cfg):
         vf_coef=tcfg.get("vf_coef", 0.5),
         max_grad_norm=tcfg.get("max_grad_norm", 0.5),
         target_kl=tcfg.get("target_kl", None),   # FIXES PPO_12 KL blow-up (default None = disabled)
+        seed=int(seed) if seed is not None else None,
         policy_kwargs=dict(
             net_arch=tcfg.get("net_arch", [256, 256]),
         ),
@@ -78,14 +95,17 @@ def train(cfg):
     total_timesteps = tcfg.get("total_timesteps", 100000)
 
     # Callbacks — also save vecnormalize stats so intermediate checkpoints replayable
+    name_prefix = run_name if run_name else "ppo_debulk"
     checkpoint_cb = CheckpointCallback(
         save_freq=tcfg.get("save_freq", 10000),
-        save_path="./checkpoints/",
-        name_prefix="ppo_debulk",
+        save_path=ckpt_dir,
+        name_prefix=name_prefix,
         save_vecnormalize=use_vecnorm,   # writes vecnormalize_<step>.pkl alongside zip
     )
 
     print(f"\nPPO Training: {total_timesteps} timesteps")
+    print(f"  Run name: {run_name or '(default: SB3 auto-numbered)'}")
+    print(f"  Checkpoint dir: {ckpt_dir}")
     print(f"  LR={model.learning_rate}, n_steps={model.n_steps}")
     print(f"  batch_size={model.batch_size}, n_epochs={model.n_epochs}")
     print(f"  gamma={model.gamma}, clip={model.clip_range}")
@@ -94,25 +114,35 @@ def train(cfg):
     model.learn(
         total_timesteps=total_timesteps,
         callback=checkpoint_cb,
+        tb_log_name=tb_log_name,
         progress_bar=True,
     )
 
-    model.save("ppo_debulk_final")
+    # Final save under run_name prefix so multi-run output isn't clobbered
+    final_zip = os.path.join(ckpt_dir, f"{name_prefix}_final.zip")
+    final_pkl = os.path.join(ckpt_dir, f"{name_prefix}_final_vecnormalize.pkl")
+    model.save(final_zip)
     if use_vecnorm:
-        env.save("vecnormalize_final.pkl")
-        print("\nTraining complete. Saved: ppo_debulk_final.zip + vecnormalize_final.pkl")
+        env.save(final_pkl)
+        print(f"\nTraining complete. Saved: {final_zip} + {final_pkl}")
         print("  IMPORTANT: rollout/eval must load BOTH files together (see rollout_viz_mesh.py).")
     else:
-        print("\nTraining complete. Model saved: ppo_debulk_final.zip")
+        print(f"\nTraining complete. Model saved: {final_zip}")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="warp_sim/config/debulk_ppo.yaml")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed (SB3 + torch + numpy). If None, unseeded.")
+    parser.add_argument("--run-name", default=None,
+                        help="Run identifier (e.g. cap_armC_diffM_seed0). Used for "
+                             "TB subdir, checkpoint dir, and final file prefix. "
+                             "If None, SB3 auto-numbers.")
     args = parser.parse_args()
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
-    train(cfg)
+    train(cfg, seed=args.seed, run_name=args.run_name)
 
 
 if __name__ == "__main__":

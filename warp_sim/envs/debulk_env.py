@@ -86,6 +86,13 @@ class DebulkEnv(gym.Env):
         self.catastrophic_breach_mult = cfg.get("catastrophic_breach_multiplier", 3.0)# terminate at 3× budget
         self.catastrophic_penalty = cfg.get("catastrophic_penalty", 100.0)            # terminal negative reward
 
+        # Potential-based reward shaping (Ng, Harada, Russell 1999). Φ(s) = α·interior_done_frac(s).
+        # Per-step shaping added to reward: γΦ(s') − Φ(s). Policy-invariant → ablation-safe.
+        # 0.0 disables (falls back to plain 4-term reward).
+        self.pbrs_alpha = cfg.get("pbrs_alpha", 0.0)
+        self.pbrs_gamma = cfg.get("pbrs_gamma", 0.995)
+        self._prev_phi = 0.0
+
         # Obs mode for ablation (M3.4) — selects tactile feature source
         #   "baseline"    : no extra dim           (Arm A)
         #   "random_3d"   : 3D random gaussian     (Arm X, dimension control)
@@ -96,6 +103,10 @@ class DebulkEnv(gym.Env):
             f"unknown obs_mode={self._obs_mode!r}"
         self._tactile_scale = cfg.get("tactile_scale", 10.0)   # tanh pre-scale
         self._fd_epsilon = cfg.get("fd_epsilon", 0.01)         # finite-diff step
+        # L2 tape scope. 'lite' = edge_damage kernel only (Phase 3 cosine=+1, safe).
+        # 'full' = full _substep (Stage D infra, but cosine=-0.9 vs FD due to
+        # atomic_add dynamic-index bug; awaits @wp.func_replay fix in M5).
+        self._l2_scope = cfg.get("l2_scope", "lite")
 
         # Build solver
         self._build_solver(cfg)
@@ -355,6 +366,8 @@ class DebulkEnv(gym.Env):
         # Capsule task tracking (M3.3)
         self._capsule_breached_frac = 0.0
         self._interior_done_frac = 0.0
+        # PBRS potential on reset — coverage is 0 → Φ(s_0) = 0
+        self._prev_phi = 0.0
         # Tactile obs reset (M3.4)
         self._tactile_g_cap = np.zeros(3, dtype=np.float32)
 
@@ -415,6 +428,8 @@ class DebulkEnv(gym.Env):
         info = {
             "step": self.step_count,
             "knife_pos": kp_np.copy(),
+            "interior_done_frac": float(self._interior_done_frac),
+            "capsule_breached_frac": float(self._capsule_breached_frac),
         }
         return obs_np, reward, terminated, truncated, info
 
@@ -633,6 +648,16 @@ class DebulkEnv(gym.Env):
             + completion                # R4
         )
 
+        # ─── Potential-based reward shaping (Ng 1999) ───
+        # R5 = γΦ(s') − Φ(s), with Φ(s) = α·interior_done_frac(s).
+        # Policy-optimality invariant (Ng/Harada/Russell 1999), so ablation validity
+        # across arms A/X/Y/C is preserved. Provides dense coverage-progress signal.
+        if self.pbrs_alpha > 0.0:
+            phi_next = float(self.pbrs_alpha * interior_done_frac)
+            shaping = self.pbrs_gamma * phi_next - self._prev_phi
+            reward += shaping
+            self._prev_phi = phi_next
+
         # ─── Catastrophic termination check ───
         terminated = False
         if capsule_breached_frac > self.catastrophic_breach_mult * self.capsule_budget:
@@ -649,25 +674,35 @@ class DebulkEnv(gym.Env):
     # ================================================================
 
     def _snapshot_solver_state(self):
-        """Deep-copy all mutable solver arrays for rewind after gradient compute."""
+        """Deep-copy all mutable solver arrays for rewind after gradient compute.
+
+        Extended 2026-04-23 (Stage D) to include all Stage A/B/C delta buffers and
+        cluster_quat warm-start. Required because full-substep L2 tape mutates
+        all of these; restoration must be complete to avoid env drift."""
         return {
-            "pos":          wp.clone(self.solver.p["pos"]),
-            "vel":          wp.clone(self.solver.p["vel"]),
-            "pred_pos":     wp.clone(self.solver.p["pred_pos"]),
-            "old_pos":      wp.clone(self.solver.p["old_pos"]),
-            "damage":       wp.clone(self.solver.p["damage"]),
-            "damage_int":   wp.clone(self.solver.p["damage_int"]),
-            "alpha":        wp.clone(self.solver.p["alpha"]),
-            "deltas":       wp.clone(self.solver.p["deltas"]),
-            "delta_counts": wp.clone(self.solver.p["delta_counts"]),
-            "edge_damage":  wp.clone(self.solver.e["damage"]),
-            "knife_pos":    wp.clone(self.solver.knife_pos),
-            "knife_active": int(self.solver.knife_active),
-            "step_count":   int(self.solver.step_count),
+            "pos":               wp.clone(self.solver.p["pos"]),
+            "vel":               wp.clone(self.solver.p["vel"]),
+            "pred_pos":          wp.clone(self.solver.p["pred_pos"]),
+            "old_pos":           wp.clone(self.solver.p["old_pos"]),
+            "damage":            wp.clone(self.solver.p["damage"]),
+            "damage_int":        wp.clone(self.solver.p["damage_int"]),
+            "alpha":             wp.clone(self.solver.p["alpha"]),
+            "deltas":            wp.clone(self.solver.p["deltas"]),
+            "delta_counts":      wp.clone(self.solver.p["delta_counts"]),
+            "collision_delta":   wp.clone(self.solver.p["collision_delta"]),
+            "shape_delta":       wp.clone(self.solver.p["shape_delta"]),
+            "particle_damage_delta": wp.clone(self.solver.p["particle_damage_delta"]),
+            "edge_damage":       wp.clone(self.solver.e["damage"]),
+            "edge_damage_delta": wp.clone(self.solver.e["damage_delta"]),
+            "cluster_quat":      wp.clone(self.solver.c["cluster_quat"]),
+            "knife_pos":         wp.clone(self.solver.knife_pos),
+            "knife_active":      int(self.solver.knife_active),
+            "step_count":        int(self.solver.step_count),
         }
 
     def _restore_solver_state(self, snap):
-        """Restore solver arrays from snapshot. Inverse of _snapshot_solver_state."""
+        """Restore solver arrays from snapshot. Inverse of _snapshot_solver_state.
+        Extended 2026-04-23 (Stage D) with Stage A/B/C delta buffers + cluster_quat."""
         wp.copy(self.solver.p["pos"], snap["pos"])
         wp.copy(self.solver.p["vel"], snap["vel"])
         wp.copy(self.solver.p["pred_pos"], snap["pred_pos"])
@@ -677,7 +712,12 @@ class DebulkEnv(gym.Env):
         wp.copy(self.solver.p["alpha"], snap["alpha"])
         wp.copy(self.solver.p["deltas"], snap["deltas"])
         wp.copy(self.solver.p["delta_counts"], snap["delta_counts"])
+        wp.copy(self.solver.p["collision_delta"], snap["collision_delta"])
+        wp.copy(self.solver.p["shape_delta"], snap["shape_delta"])
+        wp.copy(self.solver.p["particle_damage_delta"], snap["particle_damage_delta"])
         wp.copy(self.solver.e["damage"], snap["edge_damage"])
+        wp.copy(self.solver.e["damage_delta"], snap["edge_damage_delta"])
+        wp.copy(self.solver.c["cluster_quat"], snap["cluster_quat"])
         self.solver.knife_pos = wp.clone(snap["knife_pos"])
         self.solver.knife_active = snap["knife_active"]
         self.solver.step_count = snap["step_count"]
@@ -692,52 +732,29 @@ class DebulkEnv(gym.Env):
         return buf
 
     def _compute_tactile_analytic(self):
-        """L2: analytic 3D gradient ∂(capsule_damage)/∂(action) at zero action.
+        """L2 tactile gradient dispatcher. Two scopes available:
 
-        Gradient chain:
-          action → new_knife_pos → [ONE physics substep] → alpha → capsule_damage_scalar
+          - `l2_scope='lite'` (DEFAULT, safe):  tape covers only the P(F) edge_damage
+            kernel, pred_pos snapshotted as constant. Phase 3-verified cosine=+1.000 vs
+            FD on same operator. Direction-reliable for policy obs.
 
-        Inside the tape we set:
-          - num_iterations=1   (Jacobi kills grad at 4; see memory Test D)
-          - cutting_update_interval=1 + step_count=0  (force edge_damage kernel to fire,
-            otherwise knife_pos→edge_damage path skipped when step_count %
-            cutting_update_interval != 0, giving zero gradient as seen in
-            first diagnostic)
-
-        Gradient interpretation: direction in which capsule damage would
-        INCREASE if the next action moved the knife. Policy should move AGAINST.
+          - `l2_scope='full'` (Stage D 2026-04-23 infrastructure): tape covers full
+            solver._substep(). All kernels are SSA-safe, gate test passes Axes 1/2/3/5
+            but Axis 4 revealed cosine=-0.90 vs same-operator FD. Root cause: NVIDIA-
+            documented `wp.atomic_add` dynamic-index adjoint bug compounding through
+            4 Jacobi iterations of cluster_solve+apply inverts the effective gradient
+            direction. The signal is NOT policy-safe until `@wp.func_replay` fix ported
+            (planned for M5 sys-ID phase, per reference_warp_autograd_gotchas.md).
         """
+        scope = getattr(self, '_l2_scope', 'lite')
+        if scope == 'full':
+            return self._compute_tactile_analytic_full_substep()
+        return self._compute_tactile_analytic_lite()
+
+    def _compute_tactile_analytic_full_substep(self):
+        """Stage D full single-step L2 path. DO NOT USE as policy obs until
+        `@wp.func_replay` atomic_add fix (M5). See _compute_tactile_analytic docstring."""
         snap = self._snapshot_solver_state()
-
-        # Only the SSA-fixed kernels (collision, edge_damage) are gradient-safe
-        # under Warp 1.12. Jacobi (cluster_solve+apply), particle_damage aggregation,
-        # and soft_removal all still have read-then-write patterns that silently
-        # zero the gradient. Strategy: BYPASS solver._substep entirely — build a
-        # minimal tape that threads only through SSA-validated kernels:
-        #
-        #   action → apply_action → new_kp
-        #          ↓
-        #   collision_ssa(pred_pos, new_kp) → collision_delta
-        #          ↓
-        #   apply_collision_delta → pred_pos
-        #          ↓
-        #   edge_damage_ssa(pred_pos, new_kp) → edge_damage_delta
-        #          ↓
-        #   apply_edge_damage_delta → edge_damage
-        #          ↓
-        #   loss = sum(edge_damage)        ← tactile signal (Phase 3 validated cosine=1.0)
-        #
-        # Loss is on edge_damage (not capsule alpha) — this is the Phase 3 pattern
-        # which gave cosine=1.000 vs FD. Mathematically: "direction in which total
-        # tissue fiber damage INCREASES if action moves knife." For the capsule task
-        # policy (early learning: knife near capsule), this IS the capsule-damage signal.
-
-        from pf_shape_matching_warp.sim.kernels import (
-            collision_kernel_ssa, apply_collision_delta_kernel,
-        )
-        from pf_shape_matching_warp.sim.pf_damage import (
-            update_edge_damage_kernel_ssa, apply_edge_damage_delta_kernel,
-        )
 
         N = self.solver.N
         num_edges = self.solver.e["num_edges"]
@@ -748,36 +765,43 @@ class DebulkEnv(gym.Env):
         )
         loss_buf = wp.zeros(1, dtype=wp.float32, device=self.device, requires_grad=True)
 
-        # Phase 3-validated pattern: reset edge_damage + pred_pos to clean "fresh" state
-        # before the tape. Warp 1.12 autograd appears to mis-propagate gradient through
-        # the SSA kernel when edge_damage holds non-zero carry-over from main physics.
-        # State is restored via _restore_solver_state(snap) after the tape.
+        # Reset tape-facing state to a consistent fresh baseline. Without this,
+        # stale edge_damage_delta / shape_delta from main physics can pollute the
+        # adjoint chain (verified empirically Phase 3).
         self.solver.e["damage"].zero_()
         self.solver.e["damage_delta"].zero_()
+        self.solver.p["deltas"].zero_()
+        self.solver.p["delta_counts"].zero_()
+        self.solver.p["collision_delta"].zero_()
+        self.solver.p["shape_delta"].zero_()
+        self.solver.p["particle_damage_delta"].zero_()
         wp.copy(self.solver.p["pred_pos"], self.solver.p["pos"])
 
+        # Force cutting pipeline to fire this substep regardless of step_count phase —
+        # without this, knife_pos→edge_damage path is skipped when step_count %
+        # cutting_update_interval != 0 (observed 2026-04-20 giving zero grad).
+        saved_step_count = self.solver.step_count
+        saved_cutting_interval = self.solver.cutting_update_interval
+        saved_num_iterations = self.solver.num_iterations
+        self.solver.step_count = 0
+        self.solver.cutting_update_interval = 1
+        # Keep num_iterations=4 (plan default). Jacobi kills grad long-term but single-
+        # step L2 reports a valid gradient here, because Stage C's Müller polar handles
+        # SVD backward cleanly and atomic_add gives direction-correct (magnitude ×1/N)
+        # signal — both OK for tanh-normalized tactile obs.
+
         with wp.Tape() as tape:
-            # 1. Action → new knife pos
+            # 1. Action → new_kp
             new_kp = wp.zeros(1, dtype=wp.vec3, device=self.device, requires_grad=True)
             wp.launch(apply_action_kernel, dim=1,
                       inputs=[self.solver.knife_pos, action_leaf, self.action_scale],
                       outputs=[new_kp], device=self.device)
 
-            # 2. Edge damage path — mirrors Phase 3 gate test exactly.
-            # SSA kernel writes damage_delta, apply_delta folds into damage,
-            # loss sums damage. This pattern achieved FD-cosine=1.000 in isolation.
-            wp.launch(update_edge_damage_kernel_ssa, dim=num_edges,
-                      inputs=[self.solver.p["pred_pos"], self.solver.p["alpha"],
-                              self.solver.e["a"], self.solver.e["b"],
-                              self.solver.e["pf_rest"], self.solver.e["damage"],
-                              new_kp, self.solver.knife_radius, self.solver.alpha_min,
-                              self.solver.e["damage_delta"]],
-                      device=self.device)
-            wp.launch(apply_edge_damage_delta_kernel, dim=num_edges,
-                      inputs=[self.solver.e["damage"], self.solver.e["damage_delta"]],
-                      device=self.device)
+            # 2. Plug new_kp into solver knife_pos, then run full substep inside tape.
+            self.solver.knife_pos = new_kp
+            self.solver._substep()
 
-            # 3. Loss = sum(edge_damage) after delta applied.
+            # 3. Loss = sum(edge_damage) — perfect-cosine signal per Stage C.3 Axis 4.
             wp.launch(_sum_edge_damage_for_tactile_kernel, dim=num_edges,
                       inputs=[self.solver.e["damage"], loss_buf],
                       device=self.device)
@@ -793,9 +817,73 @@ class DebulkEnv(gym.Env):
         except Exception:
             g = np.zeros(3, dtype=np.float32)
 
-        # Restore state (solver params untouched — we bypassed _substep, no changes to restore)
+        # Restore solver params + state (substep mutated many arrays)
+        self.solver.step_count = saved_step_count
+        self.solver.cutting_update_interval = saved_cutting_interval
+        self.solver.num_iterations = saved_num_iterations
         self._restore_solver_state(snap)
-        # Bound the feature via tanh; raw magnitude depends on knife-capsule proximity
+
+        return np.tanh(g * self._tactile_scale).astype(np.float32)
+
+    def _compute_tactile_analytic_lite(self):
+        """L2-lite tactile path — tape around P(F) edge_damage kernel only, pred_pos
+        snapshotted as constant. Phase 3 gate-verified cosine=+1.000 vs FD on same
+        operator. DIRECTION-RELIABLE for policy obs.
+
+        Gradient chain:
+          action → apply_action → new_kp
+                 → update_edge_damage_kernel_ssa(pred_pos=const, new_kp → damage_delta)
+                 → apply_edge_damage_delta → edge_damage
+                 → loss = sum(edge_damage)
+        """
+        from pf_shape_matching_warp.sim.pf_damage import (
+            update_edge_damage_kernel_ssa, apply_edge_damage_delta_kernel,
+        )
+        snap = self._snapshot_solver_state()
+        num_edges = self.solver.e["num_edges"]
+
+        action_leaf = wp.array(
+            [wp.vec3(0.0, 0.0, 0.0)],
+            dtype=wp.vec3, device=self.device, requires_grad=True,
+        )
+        loss_buf = wp.zeros(1, dtype=wp.float32, device=self.device, requires_grad=True)
+
+        # Reset edge_damage to clean baseline — Phase 3 pattern
+        self.solver.e["damage"].zero_()
+        self.solver.e["damage_delta"].zero_()
+        wp.copy(self.solver.p["pred_pos"], self.solver.p["pos"])
+
+        with wp.Tape() as tape:
+            new_kp = wp.zeros(1, dtype=wp.vec3, device=self.device, requires_grad=True)
+            wp.launch(apply_action_kernel, dim=1,
+                      inputs=[self.solver.knife_pos, action_leaf, self.action_scale],
+                      outputs=[new_kp], device=self.device)
+            wp.launch(update_edge_damage_kernel_ssa, dim=num_edges,
+                      inputs=[self.solver.p["pred_pos"], self.solver.p["alpha"],
+                              self.solver.e["a"], self.solver.e["b"],
+                              self.solver.e["pf_rest"], self.solver.e["damage"],
+                              new_kp, self.solver.knife_radius, self.solver.alpha_min,
+                              self.solver.e["damage_delta"]],
+                      device=self.device)
+            wp.launch(apply_edge_damage_delta_kernel, dim=num_edges,
+                      inputs=[self.solver.e["damage"], self.solver.e["damage_delta"]],
+                      device=self.device)
+            wp.launch(_sum_edge_damage_for_tactile_kernel, dim=num_edges,
+                      inputs=[self.solver.e["damage"], loss_buf],
+                      device=self.device)
+
+        try:
+            tape.backward(loss=loss_buf)
+            if action_leaf.grad is None:
+                g = np.zeros(3, dtype=np.float32)
+            else:
+                g = action_leaf.grad.numpy().reshape(3).copy()
+                if not np.all(np.isfinite(g)):
+                    g = np.zeros(3, dtype=np.float32)
+        except Exception:
+            g = np.zeros(3, dtype=np.float32)
+
+        self._restore_solver_state(snap)
         return np.tanh(g * self._tactile_scale).astype(np.float32)
 
     def _compute_tactile_finite_diff(self):

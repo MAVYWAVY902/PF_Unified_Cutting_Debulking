@@ -1,0 +1,3597 @@
+{
+  "meta": {
+    "frames_rendered": 256,
+    "final_interior_done_frac": 0.0,
+    "final_capsule_breach_frac": 0.0,
+    "cumulative_reward": 950.4,
+    "model_path": "checkpoints/cap_armC_diffM_seed0/cap_armC_diffM_seed0_final.zip",
+    "cfg_path": "warp_sim/config/debulk_cap_armC.yaml",
+    "terminated_early": true
+  },
+  "per_step": [
+    {
+      "step": 0,
+      "knife_pos": [
+        0.9838458299636841,
+        0.4685840904712677,
+        0.019999999552965164
+      ],
+      "reward": 11.899999618530273,
+      "cumulative_reward": 11.9,
+      "interior_done_frac": 0.00078125,
+      "capsule_breach_frac": 0.009566326530612245,
+      "alive_capsule": 3106,
+      "alive_interior": 15348
+    },
+    {
+      "step": 1,
+      "knife_pos": [
+        0.9808458089828491,
+        0.4655840992927551,
+        0.023000000044703484
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 11.8,
+      "interior_done_frac": 0.00078125,
+      "capsule_breach_frac": 0.009566326530612245,
+      "alive_capsule": 3106,
+      "alive_interior": 15348
+    },
+    {
+      "step": 2,
+      "knife_pos": [
+        0.9778457880020142,
+        0.46258410811424255,
+        0.026000000536441803
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 14.7,
+      "interior_done_frac": 0.0009765625,
+      "capsule_breach_frac": 0.009566326530612245,
+      "alive_capsule": 3106,
+      "alive_interior": 15345
+    },
+    {
+      "step": 3,
+      "knife_pos": [
+        0.9748457670211792,
+        0.45958411693573,
+        0.029000001028180122
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 15.6,
+      "interior_done_frac": 0.0010416666666666667,
+      "capsule_breach_frac": 0.009566326530612245,
+      "alive_capsule": 3106,
+      "alive_interior": 15344
+    },
+    {
+      "step": 4,
+      "knife_pos": [
+        0.9718457460403442,
+        0.4565841257572174,
+        0.03200000151991844
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 20.5,
+      "interior_done_frac": 0.0013671875,
+      "capsule_breach_frac": 0.01020408163265306,
+      "alive_capsule": 3104,
+      "alive_interior": 15339
+    },
+    {
+      "step": 5,
+      "knife_pos": [
+        0.9688457250595093,
+        0.45358413457870483,
+        0.03500000014901161
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 22.4,
+      "interior_done_frac": 0.0014973958333333334,
+      "capsule_breach_frac": 0.01020408163265306,
+      "alive_capsule": 3104,
+      "alive_interior": 15337
+    },
+    {
+      "step": 6,
+      "knife_pos": [
+        0.9658457040786743,
+        0.45058414340019226,
+        0.03799999877810478
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 23.3,
+      "interior_done_frac": 0.0015625,
+      "capsule_breach_frac": 0.010841836734693877,
+      "alive_capsule": 3102,
+      "alive_interior": 15336
+    },
+    {
+      "step": 7,
+      "knife_pos": [
+        0.9628456830978394,
+        0.4475841522216797,
+        0.04099999740719795
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 24.2,
+      "interior_done_frac": 0.0016276041666666667,
+      "capsule_breach_frac": 0.010841836734693877,
+      "alive_capsule": 3102,
+      "alive_interior": 15335
+    },
+    {
+      "step": 8,
+      "knife_pos": [
+        0.9598456621170044,
+        0.4445841610431671,
+        0.04399999603629112
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 25.1,
+      "interior_done_frac": 0.0016927083333333334,
+      "capsule_breach_frac": 0.010841836734693877,
+      "alive_capsule": 3102,
+      "alive_interior": 15334
+    },
+    {
+      "step": 9,
+      "knife_pos": [
+        0.9568456411361694,
+        0.44158416986465454,
+        0.04699999466538429
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 25.0,
+      "interior_done_frac": 0.0016927083333333334,
+      "capsule_breach_frac": 0.010841836734693877,
+      "alive_capsule": 3102,
+      "alive_interior": 15334
+    },
+    {
+      "step": 10,
+      "knife_pos": [
+        0.9538456201553345,
+        0.43858417868614197,
+        0.04999999329447746
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 25.9,
+      "interior_done_frac": 0.0017578125,
+      "capsule_breach_frac": 0.011160714285714286,
+      "alive_capsule": 3101,
+      "alive_interior": 15333
+    },
+    {
+      "step": 11,
+      "knife_pos": [
+        0.9508455991744995,
+        0.4355841875076294,
+        0.05299999192357063
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 33.8,
+      "interior_done_frac": 0.0022786458333333335,
+      "capsule_breach_frac": 0.011160714285714286,
+      "alive_capsule": 3101,
+      "alive_interior": 15325
+    },
+    {
+      "step": 12,
+      "knife_pos": [
+        0.9478455781936646,
+        0.4325841963291168,
+        0.0559999905526638
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 35.7,
+      "interior_done_frac": 0.0024088541666666668,
+      "capsule_breach_frac": 0.011160714285714286,
+      "alive_capsule": 3101,
+      "alive_interior": 15323
+    },
+    {
+      "step": 13,
+      "knife_pos": [
+        0.9448455572128296,
+        0.42958420515060425,
+        0.05899998918175697
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 41.6,
+      "interior_done_frac": 0.0027994791666666667,
+      "capsule_breach_frac": 0.011798469387755101,
+      "alive_capsule": 3099,
+      "alive_interior": 15317
+    },
+    {
+      "step": 14,
+      "knife_pos": [
+        0.9418455362319946,
+        0.4265842139720917,
+        0.06199998781085014
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 46.5,
+      "interior_done_frac": 0.003125,
+      "capsule_breach_frac": 0.01211734693877551,
+      "alive_capsule": 3098,
+      "alive_interior": 15312
+    },
+    {
+      "step": 15,
+      "knife_pos": [
+        0.9388455152511597,
+        0.4235842227935791,
+        0.06499999016523361
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 49.4,
+      "interior_done_frac": 0.0033203125,
+      "capsule_breach_frac": 0.01211734693877551,
+      "alive_capsule": 3098,
+      "alive_interior": 15309
+    },
+    {
+      "step": 16,
+      "knife_pos": [
+        0.9358454942703247,
+        0.42058423161506653,
+        0.06799998879432678
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 57.3,
+      "interior_done_frac": 0.003841145833333333,
+      "capsule_breach_frac": 0.01211734693877551,
+      "alive_capsule": 3098,
+      "alive_interior": 15301
+    },
+    {
+      "step": 17,
+      "knife_pos": [
+        0.9328454732894897,
+        0.41758424043655396,
+        0.07099998742341995
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 62.2,
+      "interior_done_frac": 0.004166666666666667,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15296
+    },
+    {
+      "step": 18,
+      "knife_pos": [
+        0.9298454523086548,
+        0.4145842492580414,
+        0.07399998605251312
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 66.1,
+      "interior_done_frac": 0.004427083333333333,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15292
+    },
+    {
+      "step": 19,
+      "knife_pos": [
+        0.9268454313278198,
+        0.4115842580795288,
+        0.07699998468160629
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 69.0,
+      "interior_done_frac": 0.004622395833333333,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15289
+    },
+    {
+      "step": 20,
+      "knife_pos": [
+        0.9238454103469849,
+        0.40858426690101624,
+        0.07999998331069946
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 71.9,
+      "interior_done_frac": 0.0048177083333333336,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15286
+    },
+    {
+      "step": 21,
+      "knife_pos": [
+        0.9208453893661499,
+        0.40558427572250366,
+        0.08299998193979263
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 75.8,
+      "interior_done_frac": 0.005078125,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15282
+    },
+    {
+      "step": 22,
+      "knife_pos": [
+        0.9178453683853149,
+        0.4025842845439911,
+        0.0859999805688858
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 77.7,
+      "interior_done_frac": 0.005208333333333333,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15280
+    },
+    {
+      "step": 23,
+      "knife_pos": [
+        0.91484534740448,
+        0.3995842933654785,
+        0.08899997919797897
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 80.6,
+      "interior_done_frac": 0.005403645833333333,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15277
+    },
+    {
+      "step": 24,
+      "knife_pos": [
+        0.911845326423645,
+        0.39658430218696594,
+        0.09199997782707214
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 83.5,
+      "interior_done_frac": 0.005598958333333333,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15274
+    },
+    {
+      "step": 25,
+      "knife_pos": [
+        0.9088453054428101,
+        0.39885658025741577,
+        0.09499997645616531
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 86.4,
+      "interior_done_frac": 0.0057942708333333336,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15271
+    },
+    {
+      "step": 26,
+      "knife_pos": [
+        0.9058452844619751,
+        0.40185657143592834,
+        0.09799997508525848
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 91.3,
+      "interior_done_frac": 0.006119791666666667,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15266
+    },
+    {
+      "step": 27,
+      "knife_pos": [
+        0.9028452634811401,
+        0.4048565626144409,
+        0.10099997371435165
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 92.2,
+      "interior_done_frac": 0.006184895833333333,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15265
+    },
+    {
+      "step": 28,
+      "knife_pos": [
+        0.8998452425003052,
+        0.4078565537929535,
+        0.10399997234344482
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 96.1,
+      "interior_done_frac": 0.0064453125,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15261
+    },
+    {
+      "step": 29,
+      "knife_pos": [
+        0.8968452215194702,
+        0.41085654497146606,
+        0.106999970972538
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 102.0,
+      "interior_done_frac": 0.0068359375,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15255
+    },
+    {
+      "step": 30,
+      "knife_pos": [
+        0.8938452005386353,
+        0.4115959107875824,
+        0.10999996960163116
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 105.9,
+      "interior_done_frac": 0.007096354166666667,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15251
+    },
+    {
+      "step": 31,
+      "knife_pos": [
+        0.8908451795578003,
+        0.4085959196090698,
+        0.11299996823072433
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 108.8,
+      "interior_done_frac": 0.007291666666666667,
+      "capsule_breach_frac": 0.012436224489795918,
+      "alive_capsule": 3097,
+      "alive_interior": 15248
+    },
+    {
+      "step": 32,
+      "knife_pos": [
+        0.8878451585769653,
+        0.40559592843055725,
+        0.1159999668598175
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 109.7,
+      "interior_done_frac": 0.007356770833333333,
+      "capsule_breach_frac": 0.012755102040816327,
+      "alive_capsule": 3096,
+      "alive_interior": 15247
+    },
+    {
+      "step": 33,
+      "knife_pos": [
+        0.8848451375961304,
+        0.4025959372520447,
+        0.11899996548891068
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 112.6,
+      "interior_done_frac": 0.007552083333333333,
+      "capsule_breach_frac": 0.012755102040816327,
+      "alive_capsule": 3096,
+      "alive_interior": 15244
+    },
+    {
+      "step": 34,
+      "knife_pos": [
+        0.8818451166152954,
+        0.3995959460735321,
+        0.12199996411800385
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 117.5,
+      "interior_done_frac": 0.007877604166666666,
+      "capsule_breach_frac": 0.012755102040816327,
+      "alive_capsule": 3096,
+      "alive_interior": 15239
+    },
+    {
+      "step": 35,
+      "knife_pos": [
+        0.8788450956344604,
+        0.39659595489501953,
+        0.12499996274709702
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 117.4,
+      "interior_done_frac": 0.007877604166666666,
+      "capsule_breach_frac": 0.012755102040816327,
+      "alive_capsule": 3096,
+      "alive_interior": 15239
+    },
+    {
+      "step": 36,
+      "knife_pos": [
+        0.8758450746536255,
+        0.39359596371650696,
+        0.12799996137619019
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 120.3,
+      "interior_done_frac": 0.008072916666666667,
+      "capsule_breach_frac": 0.012755102040816327,
+      "alive_capsule": 3096,
+      "alive_interior": 15236
+    },
+    {
+      "step": 37,
+      "knife_pos": [
+        0.8728450536727905,
+        0.3905959725379944,
+        0.13099996745586395
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 125.2,
+      "interior_done_frac": 0.0083984375,
+      "capsule_breach_frac": 0.012755102040816327,
+      "alive_capsule": 3096,
+      "alive_interior": 15231
+    },
+    {
+      "step": 38,
+      "knife_pos": [
+        0.8698450326919556,
+        0.3875959813594818,
+        0.13399997353553772
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 129.1,
+      "interior_done_frac": 0.008658854166666667,
+      "capsule_breach_frac": 0.012755102040816327,
+      "alive_capsule": 3096,
+      "alive_interior": 15227
+    },
+    {
+      "step": 39,
+      "knife_pos": [
+        0.8668450117111206,
+        0.38459599018096924,
+        0.1369999796152115
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 132.0,
+      "interior_done_frac": 0.008854166666666666,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15224
+    },
+    {
+      "step": 40,
+      "knife_pos": [
+        0.8638449907302856,
+        0.38159599900245667,
+        0.13999998569488525
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 136.9,
+      "interior_done_frac": 0.0091796875,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15219
+    },
+    {
+      "step": 41,
+      "knife_pos": [
+        0.8608449697494507,
+        0.3785960078239441,
+        0.14299999177455902
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 142.8,
+      "interior_done_frac": 0.0095703125,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15213
+    },
+    {
+      "step": 42,
+      "knife_pos": [
+        0.8578449487686157,
+        0.3755960166454315,
+        0.1459999978542328
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 146.7,
+      "interior_done_frac": 0.009830729166666666,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15209
+    },
+    {
+      "step": 43,
+      "knife_pos": [
+        0.8548449277877808,
+        0.37259602546691895,
+        0.14900000393390656
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 151.6,
+      "interior_done_frac": 0.01015625,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15204
+    },
+    {
+      "step": 44,
+      "knife_pos": [
+        0.8518449068069458,
+        0.36959603428840637,
+        0.15200001001358032
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 153.5,
+      "interior_done_frac": 0.010286458333333333,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15202
+    },
+    {
+      "step": 45,
+      "knife_pos": [
+        0.8488448858261108,
+        0.3665960431098938,
+        0.1550000160932541
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 154.4,
+      "interior_done_frac": 0.0103515625,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15201
+    },
+    {
+      "step": 46,
+      "knife_pos": [
+        0.8458448648452759,
+        0.3635960519313812,
+        0.15800002217292786
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 159.3,
+      "interior_done_frac": 0.010677083333333334,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15196
+    },
+    {
+      "step": 47,
+      "knife_pos": [
+        0.8428448438644409,
+        0.36059606075286865,
+        0.16100002825260162
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 166.2,
+      "interior_done_frac": 0.0111328125,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15189
+    },
+    {
+      "step": 48,
+      "knife_pos": [
+        0.839844822883606,
+        0.3575960695743561,
+        0.1640000343322754
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 169.1,
+      "interior_done_frac": 0.011328125,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15186
+    },
+    {
+      "step": 49,
+      "knife_pos": [
+        0.836844801902771,
+        0.3545960783958435,
+        0.16700004041194916
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 174.0,
+      "interior_done_frac": 0.011653645833333334,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15181
+    },
+    {
+      "step": 50,
+      "knife_pos": [
+        0.833844780921936,
+        0.35159608721733093,
+        0.17000004649162292
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 174.9,
+      "interior_done_frac": 0.01171875,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15180
+    },
+    {
+      "step": 51,
+      "knife_pos": [
+        0.8308447599411011,
+        0.34859609603881836,
+        0.1730000525712967
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 182.8,
+      "interior_done_frac": 0.012239583333333333,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15172
+    },
+    {
+      "step": 52,
+      "knife_pos": [
+        0.8278447389602661,
+        0.3455961048603058,
+        0.17600005865097046
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 190.7,
+      "interior_done_frac": 0.012760416666666666,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15164
+    },
+    {
+      "step": 53,
+      "knife_pos": [
+        0.8248447179794312,
+        0.3425961136817932,
+        0.17900006473064423
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 192.6,
+      "interior_done_frac": 0.012890625,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15162
+    },
+    {
+      "step": 54,
+      "knife_pos": [
+        0.8218446969985962,
+        0.33959612250328064,
+        0.182000070810318
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 195.5,
+      "interior_done_frac": 0.0130859375,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15159
+    },
+    {
+      "step": 55,
+      "knife_pos": [
+        0.8188446760177612,
+        0.33659613132476807,
+        0.18500007688999176
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 195.4,
+      "interior_done_frac": 0.0130859375,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15159
+    },
+    {
+      "step": 56,
+      "knife_pos": [
+        0.8158446550369263,
+        0.3335961401462555,
+        0.18800008296966553
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 197.3,
+      "interior_done_frac": 0.013216145833333333,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15157
+    },
+    {
+      "step": 57,
+      "knife_pos": [
+        0.8128446340560913,
+        0.3305961489677429,
+        0.1910000890493393
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 197.2,
+      "interior_done_frac": 0.013216145833333333,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15157
+    },
+    {
+      "step": 58,
+      "knife_pos": [
+        0.8098446130752563,
+        0.32759615778923035,
+        0.19400009512901306
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 201.1,
+      "interior_done_frac": 0.0134765625,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15153
+    },
+    {
+      "step": 59,
+      "knife_pos": [
+        0.8068445920944214,
+        0.3245961666107178,
+        0.19700010120868683
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 206.0,
+      "interior_done_frac": 0.013802083333333333,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15148
+    },
+    {
+      "step": 60,
+      "knife_pos": [
+        0.8038445711135864,
+        0.3215961754322052,
+        0.2000001072883606
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 210.9,
+      "interior_done_frac": 0.014127604166666667,
+      "capsule_breach_frac": 0.013392857142857142,
+      "alive_capsule": 3094,
+      "alive_interior": 15143
+    },
+    {
+      "step": 61,
+      "knife_pos": [
+        0.8008445501327515,
+        0.3185961842536926,
+        0.20300011336803436
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 214.8,
+      "interior_done_frac": 0.014388020833333333,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15139
+    },
+    {
+      "step": 62,
+      "knife_pos": [
+        0.7978445291519165,
+        0.31559619307518005,
+        0.20600011944770813
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 216.7,
+      "interior_done_frac": 0.014518229166666667,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15137
+    },
+    {
+      "step": 63,
+      "knife_pos": [
+        0.7948445081710815,
+        0.3125962018966675,
+        0.2090001255273819
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 220.6,
+      "interior_done_frac": 0.014778645833333333,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15133
+    },
+    {
+      "step": 64,
+      "knife_pos": [
+        0.7918444871902466,
+        0.3095962107181549,
+        0.21200013160705566
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 226.5,
+      "interior_done_frac": 0.015169270833333333,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15127
+    },
+    {
+      "step": 65,
+      "knife_pos": [
+        0.7888444662094116,
+        0.30659621953964233,
+        0.21500013768672943
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 228.4,
+      "interior_done_frac": 0.015299479166666666,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15125
+    },
+    {
+      "step": 66,
+      "knife_pos": [
+        0.7858444452285767,
+        0.30359622836112976,
+        0.2180001437664032
+      ],
+      "reward": 8.899999618530273,
+      "cumulative_reward": 237.3,
+      "interior_done_frac": 0.015885416666666666,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15116
+    },
+    {
+      "step": 67,
+      "knife_pos": [
+        0.7828444242477417,
+        0.3005962371826172,
+        0.22100014984607697
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 242.2,
+      "interior_done_frac": 0.0162109375,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15111
+    },
+    {
+      "step": 68,
+      "knife_pos": [
+        0.7798444032669067,
+        0.2975962460041046,
+        0.22400015592575073
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 243.1,
+      "interior_done_frac": 0.016276041666666668,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15110
+    },
+    {
+      "step": 69,
+      "knife_pos": [
+        0.7768443822860718,
+        0.29459625482559204,
+        0.2270001620054245
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 244.0,
+      "interior_done_frac": 0.016341145833333334,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15109
+    },
+    {
+      "step": 70,
+      "knife_pos": [
+        0.7738443613052368,
+        0.29159626364707947,
+        0.23000016808509827
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 248.9,
+      "interior_done_frac": 0.016666666666666666,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15104
+    },
+    {
+      "step": 71,
+      "knife_pos": [
+        0.7708443403244019,
+        0.2885962724685669,
+        0.23300017416477203
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 256.8,
+      "interior_done_frac": 0.0171875,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15096
+    },
+    {
+      "step": 72,
+      "knife_pos": [
+        0.7678443193435669,
+        0.2855962812900543,
+        0.2360001802444458
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 260.7,
+      "interior_done_frac": 0.017447916666666667,
+      "capsule_breach_frac": 0.01371173469387755,
+      "alive_capsule": 3093,
+      "alive_interior": 15092
+    },
+    {
+      "step": 73,
+      "knife_pos": [
+        0.7648442983627319,
+        0.28259629011154175,
+        0.23900018632411957
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 262.6,
+      "interior_done_frac": 0.017578125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15090
+    },
+    {
+      "step": 74,
+      "knife_pos": [
+        0.761844277381897,
+        0.2795962989330292,
+        0.24200019240379333
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 266.5,
+      "interior_done_frac": 0.017838541666666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15086
+    },
+    {
+      "step": 75,
+      "knife_pos": [
+        0.758844256401062,
+        0.2765963077545166,
+        0.2450001984834671
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 267.4,
+      "interior_done_frac": 0.017903645833333332,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15085
+    },
+    {
+      "step": 76,
+      "knife_pos": [
+        0.755844235420227,
+        0.27359631657600403,
+        0.24800020456314087
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 269.3,
+      "interior_done_frac": 0.018033854166666665,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15083
+    },
+    {
+      "step": 77,
+      "knife_pos": [
+        0.7528442144393921,
+        0.27059632539749146,
+        0.25100019574165344
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 271.2,
+      "interior_done_frac": 0.0181640625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15081
+    },
+    {
+      "step": 78,
+      "knife_pos": [
+        0.7498441934585571,
+        0.2675963342189789,
+        0.254000186920166
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 277.1,
+      "interior_done_frac": 0.0185546875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15075
+    },
+    {
+      "step": 79,
+      "knife_pos": [
+        0.7468441724777222,
+        0.2645963430404663,
+        0.2570001780986786
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 282.0,
+      "interior_done_frac": 0.018880208333333332,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15070
+    },
+    {
+      "step": 80,
+      "knife_pos": [
+        0.7438441514968872,
+        0.26159635186195374,
+        0.26000016927719116
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 289.9,
+      "interior_done_frac": 0.019401041666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15062
+    },
+    {
+      "step": 81,
+      "knife_pos": [
+        0.7408441305160522,
+        0.25859636068344116,
+        0.26300016045570374
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 291.8,
+      "interior_done_frac": 0.01953125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15060
+    },
+    {
+      "step": 82,
+      "knife_pos": [
+        0.7378441095352173,
+        0.2555963695049286,
+        0.2660001516342163
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 292.7,
+      "interior_done_frac": 0.019596354166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15059
+    },
+    {
+      "step": 83,
+      "knife_pos": [
+        0.7348440885543823,
+        0.252596378326416,
+        0.2690001428127289
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 299.6,
+      "interior_done_frac": 0.020052083333333335,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15052
+    },
+    {
+      "step": 84,
+      "knife_pos": [
+        0.7318440675735474,
+        0.24959637224674225,
+        0.27200013399124146
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 302.5,
+      "interior_done_frac": 0.020247395833333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15049
+    },
+    {
+      "step": 85,
+      "knife_pos": [
+        0.7288440465927124,
+        0.24659636616706848,
+        0.27500012516975403
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 305.4,
+      "interior_done_frac": 0.020442708333333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15046
+    },
+    {
+      "step": 86,
+      "knife_pos": [
+        0.7258440256118774,
+        0.24359636008739471,
+        0.2780001163482666
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 310.3,
+      "interior_done_frac": 0.020768229166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15041
+    },
+    {
+      "step": 87,
+      "knife_pos": [
+        0.7228440046310425,
+        0.24059635400772095,
+        0.2810001075267792
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 312.2,
+      "interior_done_frac": 0.0208984375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15039
+    },
+    {
+      "step": 88,
+      "knife_pos": [
+        0.7198439836502075,
+        0.23759634792804718,
+        0.28400009870529175
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 316.1,
+      "interior_done_frac": 0.021158854166666668,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15035
+    },
+    {
+      "step": 89,
+      "knife_pos": [
+        0.7168439626693726,
+        0.2345963418483734,
+        0.2870000898838043
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 321.0,
+      "interior_done_frac": 0.021484375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15030
+    },
+    {
+      "step": 90,
+      "knife_pos": [
+        0.7138439416885376,
+        0.23159633576869965,
+        0.2900000810623169
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 326.9,
+      "interior_done_frac": 0.021875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15024
+    },
+    {
+      "step": 91,
+      "knife_pos": [
+        0.7108439207077026,
+        0.22859632968902588,
+        0.29300007224082947
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 332.8,
+      "interior_done_frac": 0.022265625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15018
+    },
+    {
+      "step": 92,
+      "knife_pos": [
+        0.7078438997268677,
+        0.2255963236093521,
+        0.29600006341934204
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 336.7,
+      "interior_done_frac": 0.022526041666666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15014
+    },
+    {
+      "step": 93,
+      "knife_pos": [
+        0.7048438787460327,
+        0.22259631752967834,
+        0.2990000545978546
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 338.6,
+      "interior_done_frac": 0.02265625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15012
+    },
+    {
+      "step": 94,
+      "knife_pos": [
+        0.7018438577651978,
+        0.21959631145000458,
+        0.3020000457763672
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 338.5,
+      "interior_done_frac": 0.02265625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15012
+    },
+    {
+      "step": 95,
+      "knife_pos": [
+        0.6988438367843628,
+        0.2171543389558792,
+        0.30500003695487976
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 343.4,
+      "interior_done_frac": 0.022981770833333335,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15007
+    },
+    {
+      "step": 96,
+      "knife_pos": [
+        0.6958438158035278,
+        0.21509495377540588,
+        0.30800002813339233
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 344.3,
+      "interior_done_frac": 0.023046875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15006
+    },
+    {
+      "step": 97,
+      "knife_pos": [
+        0.6928437948226929,
+        0.214509978890419,
+        0.3110000193119049
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 345.2,
+      "interior_done_frac": 0.023111979166666668,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15005
+    },
+    {
+      "step": 98,
+      "knife_pos": [
+        0.6898437738418579,
+        0.21539680659770966,
+        0.3140000104904175
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 348.1,
+      "interior_done_frac": 0.023307291666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 15002
+    },
+    {
+      "step": 99,
+      "knife_pos": [
+        0.686843752861023,
+        0.21736596524715424,
+        0.31700000166893005
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 353.0,
+      "interior_done_frac": 0.0236328125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14997
+    },
+    {
+      "step": 100,
+      "knife_pos": [
+        0.683843731880188,
+        0.220365971326828,
+        0.3199999928474426
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 354.9,
+      "interior_done_frac": 0.023763020833333332,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14995
+    },
+    {
+      "step": 101,
+      "knife_pos": [
+        0.680843710899353,
+        0.22336597740650177,
+        0.3229999840259552
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 362.8,
+      "interior_done_frac": 0.024283854166666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14987
+    },
+    {
+      "step": 102,
+      "knife_pos": [
+        0.6778436899185181,
+        0.22636598348617554,
+        0.3259999752044678
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 367.7,
+      "interior_done_frac": 0.024609375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14982
+    },
+    {
+      "step": 103,
+      "knife_pos": [
+        0.6748436689376831,
+        0.2293659895658493,
+        0.32899996638298035
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 370.6,
+      "interior_done_frac": 0.0248046875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14979
+    },
+    {
+      "step": 104,
+      "knife_pos": [
+        0.6718436479568481,
+        0.23236599564552307,
+        0.3319999575614929
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 373.5,
+      "interior_done_frac": 0.025,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14976
+    },
+    {
+      "step": 105,
+      "knife_pos": [
+        0.6688436269760132,
+        0.23536600172519684,
+        0.3349999487400055
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 374.4,
+      "interior_done_frac": 0.025065104166666668,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14975
+    },
+    {
+      "step": 106,
+      "knife_pos": [
+        0.6658436059951782,
+        0.2383660078048706,
+        0.33799993991851807
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 377.3,
+      "interior_done_frac": 0.025260416666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14972
+    },
+    {
+      "step": 107,
+      "knife_pos": [
+        0.6628435850143433,
+        0.24136601388454437,
+        0.34099993109703064
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 379.2,
+      "interior_done_frac": 0.025390625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14970
+    },
+    {
+      "step": 108,
+      "knife_pos": [
+        0.6598435640335083,
+        0.24436601996421814,
+        0.3439999222755432
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 383.1,
+      "interior_done_frac": 0.025651041666666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14966
+    },
+    {
+      "step": 109,
+      "knife_pos": [
+        0.6568435430526733,
+        0.2473660260438919,
+        0.3469999134540558
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 386.0,
+      "interior_done_frac": 0.025846354166666665,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14963
+    },
+    {
+      "step": 110,
+      "knife_pos": [
+        0.6538435220718384,
+        0.2503660321235657,
+        0.34999990463256836
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 393.9,
+      "interior_done_frac": 0.0263671875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14955
+    },
+    {
+      "step": 111,
+      "knife_pos": [
+        0.6508435010910034,
+        0.25336602330207825,
+        0.35299989581108093
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 397.8,
+      "interior_done_frac": 0.026627604166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14951
+    },
+    {
+      "step": 112,
+      "knife_pos": [
+        0.6478434801101685,
+        0.2563660144805908,
+        0.3559998869895935
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 399.7,
+      "interior_done_frac": 0.0267578125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14949
+    },
+    {
+      "step": 113,
+      "knife_pos": [
+        0.6448434591293335,
+        0.2593660056591034,
+        0.3589998781681061
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 402.6,
+      "interior_done_frac": 0.026953125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14946
+    },
+    {
+      "step": 114,
+      "knife_pos": [
+        0.6418434381484985,
+        0.26236599683761597,
+        0.36199986934661865
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 410.5,
+      "interior_done_frac": 0.027473958333333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14938
+    },
+    {
+      "step": 115,
+      "knife_pos": [
+        0.6388434171676636,
+        0.26536598801612854,
+        0.3649998605251312
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 412.4,
+      "interior_done_frac": 0.027604166666666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14936
+    },
+    {
+      "step": 116,
+      "knife_pos": [
+        0.6358433961868286,
+        0.2683659791946411,
+        0.3679998517036438
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 415.3,
+      "interior_done_frac": 0.027799479166666665,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14933
+    },
+    {
+      "step": 117,
+      "knife_pos": [
+        0.6328433752059937,
+        0.2713659703731537,
+        0.37099984288215637
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 419.2,
+      "interior_done_frac": 0.028059895833333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14929
+    },
+    {
+      "step": 118,
+      "knife_pos": [
+        0.6298433542251587,
+        0.27436596155166626,
+        0.37399983406066895
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 424.1,
+      "interior_done_frac": 0.028385416666666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14924
+    },
+    {
+      "step": 119,
+      "knife_pos": [
+        0.6268433332443237,
+        0.27736595273017883,
+        0.3769998252391815
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 429.0,
+      "interior_done_frac": 0.0287109375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14919
+    },
+    {
+      "step": 120,
+      "knife_pos": [
+        0.6238433122634888,
+        0.2803659439086914,
+        0.3799998164176941
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 432.9,
+      "interior_done_frac": 0.028971354166666668,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14915
+    },
+    {
+      "step": 121,
+      "knife_pos": [
+        0.6208432912826538,
+        0.283365935087204,
+        0.38299980759620667
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 437.8,
+      "interior_done_frac": 0.029296875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14910
+    },
+    {
+      "step": 122,
+      "knife_pos": [
+        0.6178432703018188,
+        0.28636592626571655,
+        0.38599979877471924
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 443.7,
+      "interior_done_frac": 0.0296875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14904
+    },
+    {
+      "step": 123,
+      "knife_pos": [
+        0.6148432493209839,
+        0.2893659174442291,
+        0.3889997899532318
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 446.6,
+      "interior_done_frac": 0.0298828125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14901
+    },
+    {
+      "step": 124,
+      "knife_pos": [
+        0.6118432283401489,
+        0.2923659086227417,
+        0.3919997811317444
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 448.5,
+      "interior_done_frac": 0.030013020833333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14899
+    },
+    {
+      "step": 125,
+      "knife_pos": [
+        0.608843207359314,
+        0.2953658998012543,
+        0.39499977231025696
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 449.4,
+      "interior_done_frac": 0.030078125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14898
+    },
+    {
+      "step": 126,
+      "knife_pos": [
+        0.605843186378479,
+        0.29836589097976685,
+        0.39799976348876953
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 451.3,
+      "interior_done_frac": 0.030208333333333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14896
+    },
+    {
+      "step": 127,
+      "knife_pos": [
+        0.602843165397644,
+        0.3013658821582794,
+        0.4009997546672821
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 453.2,
+      "interior_done_frac": 0.030338541666666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14894
+    },
+    {
+      "step": 128,
+      "knife_pos": [
+        0.5998431444168091,
+        0.304365873336792,
+        0.4039997458457947
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 458.1,
+      "interior_done_frac": 0.0306640625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14889
+    },
+    {
+      "step": 129,
+      "knife_pos": [
+        0.5968431234359741,
+        0.30736586451530457,
+        0.40699973702430725
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 465.0,
+      "interior_done_frac": 0.031119791666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14882
+    },
+    {
+      "step": 130,
+      "knife_pos": [
+        0.5938431024551392,
+        0.31036585569381714,
+        0.4099997282028198
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 467.9,
+      "interior_done_frac": 0.03131510416666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14879
+    },
+    {
+      "step": 131,
+      "knife_pos": [
+        0.5908430814743042,
+        0.3133658468723297,
+        0.4129997193813324
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 471.8,
+      "interior_done_frac": 0.031575520833333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14875
+    },
+    {
+      "step": 132,
+      "knife_pos": [
+        0.5878430604934692,
+        0.3163658380508423,
+        0.41599971055984497
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 473.7,
+      "interior_done_frac": 0.03170572916666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14873
+    },
+    {
+      "step": 133,
+      "knife_pos": [
+        0.5848430395126343,
+        0.31936582922935486,
+        0.41899970173835754
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 480.6,
+      "interior_done_frac": 0.03216145833333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14866
+    },
+    {
+      "step": 134,
+      "knife_pos": [
+        0.5818430185317993,
+        0.32236582040786743,
+        0.4219996929168701
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 487.5,
+      "interior_done_frac": 0.0326171875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14859
+    },
+    {
+      "step": 135,
+      "knife_pos": [
+        0.5788429975509644,
+        0.32536581158638,
+        0.4249996840953827
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 493.4,
+      "interior_done_frac": 0.0330078125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14853
+    },
+    {
+      "step": 136,
+      "knife_pos": [
+        0.5758429765701294,
+        0.3283658027648926,
+        0.42799967527389526
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 499.3,
+      "interior_done_frac": 0.0333984375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14847
+    },
+    {
+      "step": 137,
+      "knife_pos": [
+        0.5728429555892944,
+        0.33136579394340515,
+        0.43099966645240784
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 501.2,
+      "interior_done_frac": 0.033528645833333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14845
+    },
+    {
+      "step": 138,
+      "knife_pos": [
+        0.5698429346084595,
+        0.3343657851219177,
+        0.4339996576309204
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 503.1,
+      "interior_done_frac": 0.03365885416666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14843
+    },
+    {
+      "step": 139,
+      "knife_pos": [
+        0.5668429136276245,
+        0.3373657763004303,
+        0.436999648809433
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 506.0,
+      "interior_done_frac": 0.033854166666666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14840
+    },
+    {
+      "step": 140,
+      "knife_pos": [
+        0.5638428926467896,
+        0.34036576747894287,
+        0.43999963998794556
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 509.9,
+      "interior_done_frac": 0.03411458333333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14836
+    },
+    {
+      "step": 141,
+      "knife_pos": [
+        0.5608428716659546,
+        0.34336575865745544,
+        0.44299963116645813
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 515.8,
+      "interior_done_frac": 0.034505208333333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14830
+    },
+    {
+      "step": 142,
+      "knife_pos": [
+        0.5578428506851196,
+        0.346365749835968,
+        0.4459996223449707
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 522.7,
+      "interior_done_frac": 0.0349609375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14823
+    },
+    {
+      "step": 143,
+      "knife_pos": [
+        0.5548428297042847,
+        0.3493657410144806,
+        0.4489996135234833
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 524.6,
+      "interior_done_frac": 0.03509114583333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14821
+    },
+    {
+      "step": 144,
+      "knife_pos": [
+        0.5518428087234497,
+        0.35236573219299316,
+        0.45199960470199585
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 526.5,
+      "interior_done_frac": 0.03522135416666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14819
+    },
+    {
+      "step": 145,
+      "knife_pos": [
+        0.5488427877426147,
+        0.35536572337150574,
+        0.4549995958805084
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 529.4,
+      "interior_done_frac": 0.035416666666666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14816
+    },
+    {
+      "step": 146,
+      "knife_pos": [
+        0.5458427667617798,
+        0.3583657145500183,
+        0.457999587059021
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 532.3,
+      "interior_done_frac": 0.03561197916666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14813
+    },
+    {
+      "step": 147,
+      "knife_pos": [
+        0.5428427457809448,
+        0.3613657057285309,
+        0.46099957823753357
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 534.2,
+      "interior_done_frac": 0.0357421875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14811
+    },
+    {
+      "step": 148,
+      "knife_pos": [
+        0.5398427248001099,
+        0.36436569690704346,
+        0.46399956941604614
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 538.1,
+      "interior_done_frac": 0.03600260416666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14807
+    },
+    {
+      "step": 149,
+      "knife_pos": [
+        0.5368427038192749,
+        0.36736568808555603,
+        0.4669995605945587
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 545.0,
+      "interior_done_frac": 0.036458333333333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14800
+    },
+    {
+      "step": 150,
+      "knife_pos": [
+        0.5338426828384399,
+        0.3703656792640686,
+        0.4699995517730713
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 547.9,
+      "interior_done_frac": 0.03665364583333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14797
+    },
+    {
+      "step": 151,
+      "knife_pos": [
+        0.530842661857605,
+        0.3733656704425812,
+        0.47299954295158386
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 553.8,
+      "interior_done_frac": 0.03704427083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14791
+    },
+    {
+      "step": 152,
+      "knife_pos": [
+        0.52784264087677,
+        0.37636566162109375,
+        0.47599953413009644
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 553.7,
+      "interior_done_frac": 0.03704427083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14791
+    },
+    {
+      "step": 153,
+      "knife_pos": [
+        0.5248426198959351,
+        0.3793656527996063,
+        0.478999525308609
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 559.6,
+      "interior_done_frac": 0.037434895833333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14785
+    },
+    {
+      "step": 154,
+      "knife_pos": [
+        0.5218425989151001,
+        0.3823656439781189,
+        0.4819995164871216
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 566.5,
+      "interior_done_frac": 0.037890625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14778
+    },
+    {
+      "step": 155,
+      "knife_pos": [
+        0.5188425779342651,
+        0.38536563515663147,
+        0.48499950766563416
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 566.4,
+      "interior_done_frac": 0.037890625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14778
+    },
+    {
+      "step": 156,
+      "knife_pos": [
+        0.5158425569534302,
+        0.38836562633514404,
+        0.48799949884414673
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 573.3,
+      "interior_done_frac": 0.038346354166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14771
+    },
+    {
+      "step": 157,
+      "knife_pos": [
+        0.5128425359725952,
+        0.3913656175136566,
+        0.4909994900226593
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 578.2,
+      "interior_done_frac": 0.038671875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14766
+    },
+    {
+      "step": 158,
+      "knife_pos": [
+        0.5098425149917603,
+        0.3943656086921692,
+        0.4939994812011719
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 579.1,
+      "interior_done_frac": 0.038736979166666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14765
+    },
+    {
+      "step": 159,
+      "knife_pos": [
+        0.5068424940109253,
+        0.39736559987068176,
+        0.49699947237968445
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 579.0,
+      "interior_done_frac": 0.038736979166666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14765
+    },
+    {
+      "step": 160,
+      "knife_pos": [
+        0.5038424730300903,
+        0.40036559104919434,
+        0.499999463558197
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 583.9,
+      "interior_done_frac": 0.0390625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14760
+    },
+    {
+      "step": 161,
+      "knife_pos": [
+        0.5008424520492554,
+        0.4021585285663605,
+        0.502999484539032
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 590.8,
+      "interior_done_frac": 0.03951822916666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14753
+    },
+    {
+      "step": 162,
+      "knife_pos": [
+        0.4978424608707428,
+        0.39972057938575745,
+        0.5059995055198669
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 594.7,
+      "interior_done_frac": 0.039778645833333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14749
+    },
+    {
+      "step": 163,
+      "knife_pos": [
+        0.4948424696922302,
+        0.3967205882072449,
+        0.5089995265007019
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 599.6,
+      "interior_done_frac": 0.04010416666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14744
+    },
+    {
+      "step": 164,
+      "knife_pos": [
+        0.49184247851371765,
+        0.3937205970287323,
+        0.5119995474815369
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 602.5,
+      "interior_done_frac": 0.040299479166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14741
+    },
+    {
+      "step": 165,
+      "knife_pos": [
+        0.4888424873352051,
+        0.3907206058502197,
+        0.5149995684623718
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 604.4,
+      "interior_done_frac": 0.0404296875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14739
+    },
+    {
+      "step": 166,
+      "knife_pos": [
+        0.4858424961566925,
+        0.38772061467170715,
+        0.5179995894432068
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 605.3,
+      "interior_done_frac": 0.04049479166666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14738
+    },
+    {
+      "step": 167,
+      "knife_pos": [
+        0.48284250497817993,
+        0.3847206234931946,
+        0.5209996104240417
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 607.2,
+      "interior_done_frac": 0.040625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14736
+    },
+    {
+      "step": 168,
+      "knife_pos": [
+        0.47984251379966736,
+        0.381720632314682,
+        0.5239996314048767
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 609.1,
+      "interior_done_frac": 0.040755208333333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14734
+    },
+    {
+      "step": 169,
+      "knife_pos": [
+        0.4768425226211548,
+        0.37872064113616943,
+        0.5269996523857117
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 616.0,
+      "interior_done_frac": 0.0412109375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14727
+    },
+    {
+      "step": 170,
+      "knife_pos": [
+        0.4738425314426422,
+        0.37572064995765686,
+        0.5299996733665466
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 622.9,
+      "interior_done_frac": 0.041666666666666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14720
+    },
+    {
+      "step": 171,
+      "knife_pos": [
+        0.47084254026412964,
+        0.3727206587791443,
+        0.5329996943473816
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 623.8,
+      "interior_done_frac": 0.041731770833333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14719
+    },
+    {
+      "step": 172,
+      "knife_pos": [
+        0.46784254908561707,
+        0.3697206676006317,
+        0.5359997153282166
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 627.7,
+      "interior_done_frac": 0.0419921875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14715
+    },
+    {
+      "step": 173,
+      "knife_pos": [
+        0.4648425579071045,
+        0.36672067642211914,
+        0.5389997363090515
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 630.6,
+      "interior_done_frac": 0.0421875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14712
+    },
+    {
+      "step": 174,
+      "knife_pos": [
+        0.4618425667285919,
+        0.36372068524360657,
+        0.5419997572898865
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 635.5,
+      "interior_done_frac": 0.04251302083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14707
+    },
+    {
+      "step": 175,
+      "knife_pos": [
+        0.45884257555007935,
+        0.360720694065094,
+        0.5449997782707214
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 640.4,
+      "interior_done_frac": 0.04283854166666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14702
+    },
+    {
+      "step": 176,
+      "knife_pos": [
+        0.4558425843715668,
+        0.3577207028865814,
+        0.5479997992515564
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 644.3,
+      "interior_done_frac": 0.04309895833333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14698
+    },
+    {
+      "step": 177,
+      "knife_pos": [
+        0.4528425931930542,
+        0.35472071170806885,
+        0.5509998202323914
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 652.2,
+      "interior_done_frac": 0.043619791666666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14690
+    },
+    {
+      "step": 178,
+      "knife_pos": [
+        0.4498426020145416,
+        0.3517207205295563,
+        0.5539998412132263
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 653.1,
+      "interior_done_frac": 0.043684895833333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14689
+    },
+    {
+      "step": 179,
+      "knife_pos": [
+        0.44684261083602905,
+        0.3487207293510437,
+        0.5569998621940613
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 656.0,
+      "interior_done_frac": 0.04388020833333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14686
+    },
+    {
+      "step": 180,
+      "knife_pos": [
+        0.4438426196575165,
+        0.34572073817253113,
+        0.5599998831748962
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 657.9,
+      "interior_done_frac": 0.04401041666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14684
+    },
+    {
+      "step": 181,
+      "knife_pos": [
+        0.4408426284790039,
+        0.34272074699401855,
+        0.5629999041557312
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 665.8,
+      "interior_done_frac": 0.04453125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14676
+    },
+    {
+      "step": 182,
+      "knife_pos": [
+        0.43784263730049133,
+        0.339720755815506,
+        0.5659999251365662
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 669.7,
+      "interior_done_frac": 0.04479166666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14672
+    },
+    {
+      "step": 183,
+      "knife_pos": [
+        0.43484264612197876,
+        0.3367207646369934,
+        0.5689999461174011
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 670.6,
+      "interior_done_frac": 0.04485677083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14671
+    },
+    {
+      "step": 184,
+      "knife_pos": [
+        0.4318426549434662,
+        0.33372077345848083,
+        0.5719999670982361
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 673.5,
+      "interior_done_frac": 0.04505208333333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14668
+    },
+    {
+      "step": 185,
+      "knife_pos": [
+        0.4288426637649536,
+        0.33072078227996826,
+        0.574999988079071
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 677.4,
+      "interior_done_frac": 0.0453125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14664
+    },
+    {
+      "step": 186,
+      "knife_pos": [
+        0.42584267258644104,
+        0.3277207911014557,
+        0.578000009059906
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 679.3,
+      "interior_done_frac": 0.04544270833333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14662
+    },
+    {
+      "step": 187,
+      "knife_pos": [
+        0.42284268140792847,
+        0.3247207999229431,
+        0.581000030040741
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 682.2,
+      "interior_done_frac": 0.045638020833333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14659
+    },
+    {
+      "step": 188,
+      "knife_pos": [
+        0.4198426902294159,
+        0.32172080874443054,
+        0.5840000510215759
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 687.1,
+      "interior_done_frac": 0.04596354166666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14654
+    },
+    {
+      "step": 189,
+      "knife_pos": [
+        0.4168426990509033,
+        0.31872081756591797,
+        0.5870000720024109
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 691.0,
+      "interior_done_frac": 0.046223958333333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14650
+    },
+    {
+      "step": 190,
+      "knife_pos": [
+        0.41384270787239075,
+        0.3157208263874054,
+        0.5900000929832458
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 693.9,
+      "interior_done_frac": 0.04641927083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14647
+    },
+    {
+      "step": 191,
+      "knife_pos": [
+        0.4108427166938782,
+        0.3127208352088928,
+        0.5930001139640808
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 699.8,
+      "interior_done_frac": 0.04680989583333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14641
+    },
+    {
+      "step": 192,
+      "knife_pos": [
+        0.4078427255153656,
+        0.30972084403038025,
+        0.5960001349449158
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 702.7,
+      "interior_done_frac": 0.04700520833333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14638
+    },
+    {
+      "step": 193,
+      "knife_pos": [
+        0.404842734336853,
+        0.3067208528518677,
+        0.5990001559257507
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 708.6,
+      "interior_done_frac": 0.04739583333333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14632
+    },
+    {
+      "step": 194,
+      "knife_pos": [
+        0.40184274315834045,
+        0.3037208616733551,
+        0.6020001769065857
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 714.5,
+      "interior_done_frac": 0.04778645833333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14626
+    },
+    {
+      "step": 195,
+      "knife_pos": [
+        0.3988427519798279,
+        0.30072087049484253,
+        0.6050001978874207
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 719.4,
+      "interior_done_frac": 0.048111979166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14621
+    },
+    {
+      "step": 196,
+      "knife_pos": [
+        0.3958427608013153,
+        0.29772087931632996,
+        0.6080002188682556
+      ],
+      "reward": 8.899999618530273,
+      "cumulative_reward": 728.3,
+      "interior_done_frac": 0.04869791666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14612
+    },
+    {
+      "step": 197,
+      "knife_pos": [
+        0.39284276962280273,
+        0.2947208881378174,
+        0.6110002398490906
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 730.2,
+      "interior_done_frac": 0.048828125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14610
+    },
+    {
+      "step": 198,
+      "knife_pos": [
+        0.38984277844429016,
+        0.2917208969593048,
+        0.6140002608299255
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 731.1,
+      "interior_done_frac": 0.04889322916666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14609
+    },
+    {
+      "step": 199,
+      "knife_pos": [
+        0.3868427872657776,
+        0.28872090578079224,
+        0.6170002818107605
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 733.0,
+      "interior_done_frac": 0.0490234375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14607
+    },
+    {
+      "step": 200,
+      "knife_pos": [
+        0.383842796087265,
+        0.28572091460227966,
+        0.6200003027915955
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 735.9,
+      "interior_done_frac": 0.04921875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14604
+    },
+    {
+      "step": 201,
+      "knife_pos": [
+        0.38084280490875244,
+        0.2827209234237671,
+        0.6230003237724304
+      ],
+      "reward": 8.899999618530273,
+      "cumulative_reward": 744.8,
+      "interior_done_frac": 0.0498046875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14595
+    },
+    {
+      "step": 202,
+      "knife_pos": [
+        0.37784281373023987,
+        0.2797209322452545,
+        0.6260003447532654
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 748.7,
+      "interior_done_frac": 0.050065104166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14591
+    },
+    {
+      "step": 203,
+      "knife_pos": [
+        0.3748428225517273,
+        0.27672094106674194,
+        0.6290003657341003
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 751.6,
+      "interior_done_frac": 0.05026041666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14588
+    },
+    {
+      "step": 204,
+      "knife_pos": [
+        0.3718428313732147,
+        0.27372094988822937,
+        0.6320003867149353
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 753.5,
+      "interior_done_frac": 0.050390625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14586
+    },
+    {
+      "step": 205,
+      "knife_pos": [
+        0.36884284019470215,
+        0.2707209587097168,
+        0.6350004076957703
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 754.4,
+      "interior_done_frac": 0.050455729166666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14585
+    },
+    {
+      "step": 206,
+      "knife_pos": [
+        0.3658428490161896,
+        0.2677209675312042,
+        0.6380004286766052
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 756.3,
+      "interior_done_frac": 0.0505859375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14583
+    },
+    {
+      "step": 207,
+      "knife_pos": [
+        0.362842857837677,
+        0.26472097635269165,
+        0.6410004496574402
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 762.2,
+      "interior_done_frac": 0.0509765625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14577
+    },
+    {
+      "step": 208,
+      "knife_pos": [
+        0.35984286665916443,
+        0.2617209851741791,
+        0.6440004706382751
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 767.1,
+      "interior_done_frac": 0.05130208333333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14572
+    },
+    {
+      "step": 209,
+      "knife_pos": [
+        0.35684287548065186,
+        0.2587209939956665,
+        0.6470004916191101
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 771.0,
+      "interior_done_frac": 0.0515625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14568
+    },
+    {
+      "step": 210,
+      "knife_pos": [
+        0.3538428843021393,
+        0.25572100281715393,
+        0.6500005125999451
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 775.9,
+      "interior_done_frac": 0.05188802083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14563
+    },
+    {
+      "step": 211,
+      "knife_pos": [
+        0.3508428931236267,
+        0.25272101163864136,
+        0.65300053358078
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 781.8,
+      "interior_done_frac": 0.05227864583333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14557
+    },
+    {
+      "step": 212,
+      "knife_pos": [
+        0.34784290194511414,
+        0.2497210055589676,
+        0.656000554561615
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 783.7,
+      "interior_done_frac": 0.052408854166666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14555
+    },
+    {
+      "step": 213,
+      "knife_pos": [
+        0.34484291076660156,
+        0.24672099947929382,
+        0.65900057554245
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 791.6,
+      "interior_done_frac": 0.0529296875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14547
+    },
+    {
+      "step": 214,
+      "knife_pos": [
+        0.341842919588089,
+        0.24372099339962006,
+        0.6620005965232849
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 796.5,
+      "interior_done_frac": 0.05325520833333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14542
+    },
+    {
+      "step": 215,
+      "knife_pos": [
+        0.3388429284095764,
+        0.2407209873199463,
+        0.6650006175041199
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 798.4,
+      "interior_done_frac": 0.053385416666666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14540
+    },
+    {
+      "step": 216,
+      "knife_pos": [
+        0.33584293723106384,
+        0.23772098124027252,
+        0.6680006384849548
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 803.3,
+      "interior_done_frac": 0.0537109375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14535
+    },
+    {
+      "step": 217,
+      "knife_pos": [
+        0.33284294605255127,
+        0.23472097516059875,
+        0.6710006594657898
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 805.2,
+      "interior_done_frac": 0.05384114583333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14533
+    },
+    {
+      "step": 218,
+      "knife_pos": [
+        0.3298429548740387,
+        0.231720969080925,
+        0.6740006804466248
+      ],
+      "reward": -0.10000000149011612,
+      "cumulative_reward": 805.1,
+      "interior_done_frac": 0.05384114583333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14533
+    },
+    {
+      "step": 219,
+      "knife_pos": [
+        0.3268429636955261,
+        0.22872096300125122,
+        0.6770007014274597
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 807.0,
+      "interior_done_frac": 0.053971354166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14531
+    },
+    {
+      "step": 220,
+      "knife_pos": [
+        0.32384297251701355,
+        0.22572095692157745,
+        0.6800007224082947
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 810.9,
+      "interior_done_frac": 0.05423177083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14527
+    },
+    {
+      "step": 221,
+      "knife_pos": [
+        0.320842981338501,
+        0.2227209508419037,
+        0.6830007433891296
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 816.8,
+      "interior_done_frac": 0.05462239583333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14521
+    },
+    {
+      "step": 222,
+      "knife_pos": [
+        0.3178429901599884,
+        0.21972094476222992,
+        0.6860007643699646
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 822.7,
+      "interior_done_frac": 0.055013020833333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14515
+    },
+    {
+      "step": 223,
+      "knife_pos": [
+        0.31484299898147583,
+        0.21672093868255615,
+        0.6890007853507996
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 827.6,
+      "interior_done_frac": 0.055338541666666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14510
+    },
+    {
+      "step": 224,
+      "knife_pos": [
+        0.31184300780296326,
+        0.21372093260288239,
+        0.6920008063316345
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 832.5,
+      "interior_done_frac": 0.0556640625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14505
+    },
+    {
+      "step": 225,
+      "knife_pos": [
+        0.3088430166244507,
+        0.21072092652320862,
+        0.6950008273124695
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 833.4,
+      "interior_done_frac": 0.05572916666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14504
+    },
+    {
+      "step": 226,
+      "knife_pos": [
+        0.3058430254459381,
+        0.20772092044353485,
+        0.6980008482933044
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 835.3,
+      "interior_done_frac": 0.055859375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14502
+    },
+    {
+      "step": 227,
+      "knife_pos": [
+        0.30284303426742554,
+        0.20472091436386108,
+        0.7010008692741394
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 837.2,
+      "interior_done_frac": 0.055989583333333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14500
+    },
+    {
+      "step": 228,
+      "knife_pos": [
+        0.29984304308891296,
+        0.20172090828418732,
+        0.7040008902549744
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 843.1,
+      "interior_done_frac": 0.056380208333333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14494
+    },
+    {
+      "step": 229,
+      "knife_pos": [
+        0.2968430519104004,
+        0.19872090220451355,
+        0.7070009112358093
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 845.0,
+      "interior_done_frac": 0.05651041666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14492
+    },
+    {
+      "step": 230,
+      "knife_pos": [
+        0.2938430607318878,
+        0.19572089612483978,
+        0.7100009322166443
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 849.9,
+      "interior_done_frac": 0.0568359375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14487
+    },
+    {
+      "step": 231,
+      "knife_pos": [
+        0.29084306955337524,
+        0.19272089004516602,
+        0.7130009531974792
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 856.8,
+      "interior_done_frac": 0.057291666666666664,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14480
+    },
+    {
+      "step": 232,
+      "knife_pos": [
+        0.28784307837486267,
+        0.18972088396549225,
+        0.7160009741783142
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 859.7,
+      "interior_done_frac": 0.05748697916666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14477
+    },
+    {
+      "step": 233,
+      "knife_pos": [
+        0.2848430871963501,
+        0.18672087788581848,
+        0.7190009951591492
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 864.6,
+      "interior_done_frac": 0.0578125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14472
+    },
+    {
+      "step": 234,
+      "knife_pos": [
+        0.2818430960178375,
+        0.18372087180614471,
+        0.7220010161399841
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 868.5,
+      "interior_done_frac": 0.05807291666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14468
+    },
+    {
+      "step": 235,
+      "knife_pos": [
+        0.27884310483932495,
+        0.18072086572647095,
+        0.7250010371208191
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 872.4,
+      "interior_done_frac": 0.058333333333333334,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14464
+    },
+    {
+      "step": 236,
+      "knife_pos": [
+        0.2758431136608124,
+        0.17772085964679718,
+        0.728001058101654
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 874.3,
+      "interior_done_frac": 0.05846354166666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14462
+    },
+    {
+      "step": 237,
+      "knife_pos": [
+        0.2728431224822998,
+        0.1747208535671234,
+        0.731001079082489
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 877.2,
+      "interior_done_frac": 0.05865885416666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14459
+    },
+    {
+      "step": 238,
+      "knife_pos": [
+        0.26984313130378723,
+        0.17172084748744965,
+        0.734001100063324
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 879.1,
+      "interior_done_frac": 0.0587890625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14457
+    },
+    {
+      "step": 239,
+      "knife_pos": [
+        0.26684314012527466,
+        0.16872084140777588,
+        0.7370011210441589
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 881.0,
+      "interior_done_frac": 0.058919270833333336,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14455
+    },
+    {
+      "step": 240,
+      "knife_pos": [
+        0.2638431489467621,
+        0.1657208353281021,
+        0.7400011420249939
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 883.9,
+      "interior_done_frac": 0.05911458333333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14452
+    },
+    {
+      "step": 241,
+      "knife_pos": [
+        0.2608431577682495,
+        0.16272082924842834,
+        0.7430011630058289
+      ],
+      "reward": 5.900000095367432,
+      "cumulative_reward": 889.8,
+      "interior_done_frac": 0.05950520833333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14446
+    },
+    {
+      "step": 242,
+      "knife_pos": [
+        0.25784316658973694,
+        0.15972082316875458,
+        0.7460011839866638
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 894.7,
+      "interior_done_frac": 0.059830729166666666,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14441
+    },
+    {
+      "step": 243,
+      "knife_pos": [
+        0.25484317541122437,
+        0.1567208170890808,
+        0.7490012049674988
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 899.6,
+      "interior_done_frac": 0.06015625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14436
+    },
+    {
+      "step": 244,
+      "knife_pos": [
+        0.2518431842327118,
+        0.15372081100940704,
+        0.7520012259483337
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 903.5,
+      "interior_done_frac": 0.06041666666666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14432
+    },
+    {
+      "step": 245,
+      "knife_pos": [
+        0.24884317815303802,
+        0.15072080492973328,
+        0.7550012469291687
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 905.4,
+      "interior_done_frac": 0.060546875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14430
+    },
+    {
+      "step": 246,
+      "knife_pos": [
+        0.24584317207336426,
+        0.1477207988500595,
+        0.7580012679100037
+      ],
+      "reward": 2.9000000953674316,
+      "cumulative_reward": 908.3,
+      "interior_done_frac": 0.0607421875,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14427
+    },
+    {
+      "step": 247,
+      "knife_pos": [
+        0.2428431659936905,
+        0.14472079277038574,
+        0.7610012888908386
+      ],
+      "reward": 9.899999618530273,
+      "cumulative_reward": 918.2,
+      "interior_done_frac": 0.06139322916666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14417
+    },
+    {
+      "step": 248,
+      "knife_pos": [
+        0.23984315991401672,
+        0.14172078669071198,
+        0.7640013098716736
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 919.1,
+      "interior_done_frac": 0.06145833333333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14416
+    },
+    {
+      "step": 249,
+      "knife_pos": [
+        0.23684315383434296,
+        0.1387207806110382,
+        0.7670013308525085
+      ],
+      "reward": 0.8999999761581421,
+      "cumulative_reward": 920.0,
+      "interior_done_frac": 0.0615234375,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14415
+    },
+    {
+      "step": 250,
+      "knife_pos": [
+        0.2338431477546692,
+        0.13572077453136444,
+        0.7700013518333435
+      ],
+      "reward": 7.900000095367432,
+      "cumulative_reward": 927.9,
+      "interior_done_frac": 0.06204427083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14407
+    },
+    {
+      "step": 251,
+      "knife_pos": [
+        0.23084314167499542,
+        0.13272076845169067,
+        0.7730013728141785
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 932.8,
+      "interior_done_frac": 0.06236979166666667,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14402
+    },
+    {
+      "step": 252,
+      "knife_pos": [
+        0.22784313559532166,
+        0.1297207623720169,
+        0.7760013937950134
+      ],
+      "reward": 1.899999976158142,
+      "cumulative_reward": 934.7,
+      "interior_done_frac": 0.0625,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14400
+    },
+    {
+      "step": 253,
+      "knife_pos": [
+        0.2248431295156479,
+        0.12672075629234314,
+        0.7790014147758484
+      ],
+      "reward": 4.900000095367432,
+      "cumulative_reward": 939.6,
+      "interior_done_frac": 0.06282552083333333,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14395
+    },
+    {
+      "step": 254,
+      "knife_pos": [
+        0.22184312343597412,
+        0.12372075766324997,
+        0.7820014357566833
+      ],
+      "reward": 6.900000095367432,
+      "cumulative_reward": 946.5,
+      "interior_done_frac": 0.06328125,
+      "capsule_breach_frac": 0.01403061224489796,
+      "alive_capsule": 3092,
+      "alive_interior": 14388
+    },
+    {
+      "step": 255,
+      "knife_pos": [
+        1.0,
+        0.5,
+        0.0
+      ],
+      "reward": 3.9000000953674316,
+      "cumulative_reward": 950.4,
+      "interior_done_frac": 0.0,
+      "capsule_breach_frac": 0.0,
+      "alive_capsule": 3136,
+      "alive_interior": 15360
+    }
+  ]
+}

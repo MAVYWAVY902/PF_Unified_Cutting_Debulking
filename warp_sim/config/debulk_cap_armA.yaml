@@ -9,16 +9,28 @@ task_type: "capsule_only"    # IMPORTANT: switches to 4-term capsule reward in e
 # Obs mode for ablation (M3.4 will implement dispatch)
 obs_mode: "baseline"         # no extra dims (stays 1516D)
 
-# Environment
-mesh: "resources/cuboid_flat/cuboid_h050.msh"
+# Environment — TORUS TASK (switched from cuboid 2026-04-23)
+# Rationale: cuboid interior is so dense that any motion debulks particles,
+# so intracapsular-carving vs random-wandering are indistinguishable. Torus
+# forces centerline-following — deviation hits capsule.
+mesh: "resources/torus/torus.msh"
 settle_steps: 200
 sim_substeps: 2
 action_scale: 0.003
-knife_start: [1.0, 0.5, 0.0]        # top-back-right corner, 1/8 of sphere in mesh
+knife_start: [1.0, 0.25, 0.5]       # just outside torus ring at +x equator; dist to capsule ≈ 0.03
 knife_radius: 0.05
-episode_length: 256
+# Episode raised 256 → 1024: one full ring sweep needs 2π·R/action_scale_max ≈ 423 steps.
+# 1024 allows ~2.4 sweeps for policy to learn spiral/wobble coverage.
+episode_length: 1024
 debulk_threshold: 0.5
 workspace_margin: -0.02
+
+# Potential-based reward shaping (Ng 1999). Φ(s) = pbrs_alpha · interior_done_frac(s).
+# Adds r' = r + pbrs_gamma·Φ(s') − Φ(s) each step. Policy-invariant per Ng's theorem,
+# so Arm A/X/Y/C comparison stays valid. Provides dense progress signal bridging the
+# gap to the sparse completion_bonus at 90% coverage.
+pbrs_alpha: 50.0
+pbrs_gamma: 0.995
 
 # Physics
 dt: 0.005
@@ -54,13 +66,18 @@ nerve:
 
 # PPO training (same fixes as current debulk_ppo.yaml: n_epochs=4, target_kl=0.02, VecNormalize)
 training:
+  # total_timesteps unchanged; with episode_length=1024, this is ~488 episodes
+  # (vs 1953 @ ep=256). Each episode now informative enough to compensate.
   total_timesteps: 500000
   learning_rate: 0.0003
-  n_steps: 512
+  # n_steps bumped 512 → 2048 so rollout buffer spans 2 full episodes.
+  n_steps: 2048
   batch_size: 128
   n_epochs: 4
-  gamma: 0.99
-  gae_lambda: 0.95
+  # γ, λ raised for long-horizon task (effective horizon 1/(1-γλ) ≈ 200 → 667).
+  # One ring sweep = ~423 steps; old 200 was structurally under-horizon.
+  gamma: 0.995
+  gae_lambda: 0.97
   clip_range: 0.2
   ent_coef: 0.01
   vf_coef: 0.5

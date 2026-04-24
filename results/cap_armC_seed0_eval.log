@@ -1,0 +1,43 @@
+Warp 1.12.1 initialized:
+   CUDA Toolkit 12.9, Driver 13.0
+   Devices:
+     "cpu"      : "x86_64"
+     "cuda:0"   : "NVIDIA GeForce RTX 2070" (8 GiB, sm_75, mempool enabled)
+   Kernel cache:
+     /home/yunxin/.cache/warp/1.12.1
+
+Loaded: 20808 vertices, 111078 tetrahedra
+Built 20808 clusters (rings=2)
+  Cluster sizes: min=14, max=65, avg=57.9
+CSR packed: 20808 clusters, 1205472 total entries
+Built 598780 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 20808 particles on cuda:0
+Cluster arrays: 20808 clusters, 1205472 total entries
+Edge arrays: 598780 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 18496
+Settling for 200 steps...
+Module sim.kernels 0ec46b0 load on device 'cuda:0' took 1.87 ms  (cached)
+  Settled centroid: (0.502, 0.243, 0.502)
+  Workspace: [[0.02  0.021 0.02 ]] to [[0.9838457  0.4685841  0.98384464]]
+  Coverage grid: 8³=512 voxels, 512 occupied by tumor
+  Initial surface: 3136 boundary particles → 260 voxels
+  Capsule vs interior: 3136 capsule / 15360 interior particles (17.0% shell)
+DebulkEnv initialized: 20808 particles, obs_dim=1519 (grid=512), episode_len=256, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 100 episodes ...
+Module warp_sim.kernels.obs_reward 05affb8 load on device 'cuda:0' took 0.80 ms  (cached)
+Module sim.pf_damage c19655c load on device 'cuda:0' took 63.34 ms  (cached)
+Module pf_shape_matching_warp.sim.pf_damage c19655c load on device 'cuda:0' took 173.21 ms  (cached)
+Module warp_sim.envs.debulk_env 34a5e68 load on device 'cuda:0' took 62.67 ms  (cached)
+  ep 20/100  cap_dmg@80=0.000  interior=0.000  catastrophic=0
+  ep 40/100  cap_dmg@80=0.000  interior=0.000  catastrophic=0
+  ep 60/100  cap_dmg@80=0.000  interior=0.000  catastrophic=0
+  ep 80/100  cap_dmg@80=0.000  interior=0.000  catastrophic=0
+  ep 100/100  cap_dmg@80=0.000  interior=0.000  catastrophic=0
+Wrote 100 rows → results/cap_armC_seed0.csv
+
+=== Summary: arm=C seed=0 over 100 eps ===
+  capsule_dmg@80:    mean=0.0000  median=0.0000  std=0.0000
+  final_interior:    mean=0.0000  median=0.0000
+  catastrophic rate: 0.000  (0/100)
