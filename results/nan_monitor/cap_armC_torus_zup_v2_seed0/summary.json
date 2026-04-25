@@ -1,0 +1,19 @@
+{
+  "run_name": "cap_armC_torus_zup_v2_seed0",
+  "step": "final",
+  "log": {
+    "log_exists": true,
+    "log_path": "/home/yunxin/pf-shape-matching/checkpoints/cap_armC_torus_zup_v2_seed0.log",
+    "runtime_warnings_total": 0,
+    "invalid_divide": 0,
+    "overflow": 0,
+    "early_stops_kl_total": 1,
+    "early_stops_kl_step0": 0,
+    "nan_traceback_seen": 0,
+    "crashed_with_nan": false,
+    "iter_count": 29,
+    "short_episode_iters": 0,
+    "short_episode_iter_examples": []
+  },
+  "eval": null
+}

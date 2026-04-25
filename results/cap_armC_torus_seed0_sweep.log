@@ -1,0 +1,393 @@
+=== Sweep-eval 11 checkpoints (20 eps each) ===
+
+--- step=050000 ---
+
+--- step=100000 ---
+
+--- step=150000 ---
+
+--- step=200000 ---
+
+--- step=250000 ---
+
+--- step=300000 ---
+
+--- step=350000 ---
+
+--- step=400000 ---
+
+--- step=450000 ---
+
+--- step=500000 ---
+
+--- step=500000 (final) ---
+
+>>> evaluating 050000 (20 eps)
+Warp 1.12.1 initialized:
+   CUDA Toolkit 12.9, Driver 13.0
+   Devices:
+     "cpu"      : "x86_64"
+     "cuda:0"   : "NVIDIA GeForce RTX 2070" (8 GiB, sm_75, mempool enabled)
+   Kernel cache:
+     /home/yunxin/.cache/warp/1.12.1
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+Module sim.kernels 0ec46b0 load on device 'cuda:0' took 1.81 ms  (cached)
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+Module warp_sim.kernels.obs_reward 05affb8 load on device 'cuda:0' took 0.81 ms  (cached)
+Module sim.pf_damage c19655c load on device 'cuda:0' took 1.01 ms  (cached)
+Module pf_shape_matching_warp.sim.pf_damage c19655c load on device 'cuda:0' took 1.06 ms  (cached)
+Module warp_sim.envs.debulk_env 34a5e68 load on device 'cuda:0' took 0.33 ms  (cached)
+  ep 20/20  cap_dmg@80=0.135  interior=0.184  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step050000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.0812  median=0.0800  std=0.0151
+  final_interior:    mean=0.1101  median=0.1177
+  catastrophic rate: 0.000  (0/20)
+  ↳ interior=11.01±2.78%  cap=8.12%  return=558.2  ep_len=1024  cata=0.0%
+
+>>> evaluating 100000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.093  interior=0.123  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step100000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.1080  median=0.1084  std=0.0353
+  final_interior:    mean=0.1483  median=0.1426
+  catastrophic rate: 0.250  (5/20)
+  ↳ interior=14.83±2.87%  cap=10.80%  return=615.9  ep_len=935  cata=25.0%
+
+>>> evaluating 150000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.051  interior=0.111  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step150000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.0470  median=0.0456  std=0.0028
+  final_interior:    mean=0.1095  median=0.1094
+  catastrophic rate: 0.000  (0/20)
+  ↳ interior=10.95±0.11%  cap=4.70%  return=1242.9  ep_len=1024  cata=0.0%
+
+>>> evaluating 200000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.054  interior=0.113  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step200000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.0566  median=0.0556  std=0.0026
+  final_interior:    mean=0.1136  median=0.1137
+  catastrophic rate: 0.000  (0/20)
+  ↳ interior=11.36±0.17%  cap=5.66%  return=1139.8  ep_len=1024  cata=0.0%
+
+>>> evaluating 250000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.051  interior=0.108  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step250000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.0533  median=0.0528  std=0.0024
+  final_interior:    mean=0.1090  median=0.1089
+  catastrophic rate: 0.000  (0/20)
+  ↳ interior=10.90±0.09%  cap=5.33%  return=1167.5  ep_len=1024  cata=0.0%
+
+>>> evaluating 300000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.065  interior=0.111  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step300000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.0619  median=0.0615  std=0.0033
+  final_interior:    mean=0.1109  median=0.1103
+  catastrophic rate: 0.000  (0/20)
+  ↳ interior=11.09±0.20%  cap=6.19%  return=976.0  ep_len=1024  cata=0.0%
+
+>>> evaluating 350000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.134  interior=0.167  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step350000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.1423  median=0.1409  std=0.0060
+  final_interior:    mean=0.1667  median=0.1668
+  catastrophic rate: 0.200  (4/20)
+  ↳ interior=16.67±0.24%  cap=14.23%  return=167.4  ep_len=893  cata=20.0%
+
+>>> evaluating 400000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.091  interior=0.174  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step400000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.1023  median=0.0991  std=0.0124
+  final_interior:    mean=0.1739  median=0.1728
+  catastrophic rate: 0.000  (0/20)
+  ↳ interior=17.39±0.37%  cap=10.23%  return=732.2  ep_len=1024  cata=0.0%
+
+>>> evaluating 450000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.086  interior=0.200  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step450000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.1087  median=0.1153  std=0.0187
+  final_interior:    mean=0.2018  median=0.2015
+  catastrophic rate: 0.000  (0/20)
+  ↳ interior=20.18±0.93%  cap=10.87%  return=927.5  ep_len=1024  cata=0.0%
+
+>>> evaluating 500000 (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.126  interior=0.186  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step500000.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.1237  median=0.1263  std=0.0121
+  final_interior:    mean=0.1967  median=0.1961
+  catastrophic rate: 0.000  (0/20)
+  ↳ interior=19.67±0.55%  cap=12.37%  return=439.0  ep_len=1024  cata=0.0%
+
+>>> evaluating 500000_final (20 eps)
+
+Loaded: 14851 vertices, 85498 tetrahedra
+Built 14851 clusters (rings=2)
+  Cluster sizes: min=39, max=95, avg=65.6
+CSR packed: 14851 clusters, 974923 total entries
+Built 673028 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14851 particles on cuda:0
+Cluster arrays: 14851 clusters, 974923 total entries
+Edge arrays: 673028 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14157
+Settling for 200 steps...
+  Settled centroid: (0.500, 0.116, 0.501)
+  Workspace: [[0.04923276 0.021      0.04921976]] to [[0.9506675  0.21390738 0.9507679 ]]
+  Coverage grid: 8³=512 voxels, 416 occupied by tumor
+  Initial surface: 1600 boundary particles → 368 voxels
+  Capsule vs interior: 1600 capsule / 12557 interior particles (11.3% shell)
+DebulkEnv initialized: 14851 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 20 episodes ...
+/home/yunxin/pf-shape-matching/warp_sim/envs/debulk_env.py:480: RuntimeWarning: invalid value encountered in divide
+  grid / self._voxel_tumor_count, 0.0)
+  ep 20/20  cap_dmg@80=0.128  interior=0.187  catastrophic=0
+Wrote 20 rows → results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step500000_final.csv
+
+=== Summary: arm=C seed=0 over 20 eps ===
+  capsule_dmg@80:    mean=0.1351  median=0.1360  std=0.0135
+  final_interior:    mean=0.1980  median=0.1978
+  catastrophic rate: 0.300  (6/20)
+  ↳ interior=19.80±0.64%  cap=13.51%  return=851.4  ep_len=789  cata=30.0%
+
+[summary] wrote results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_summary.csv
+  [plot] wrote results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_trajectory.png
+
+>>> best checkpoint by interior_mean: step=450000, interior=20.18%, cap=10.87%, return=927.5
+>>> CSV: results/sweep/cap_armC_torus_seed0/cap_armC_torus_seed0_step450000.csv

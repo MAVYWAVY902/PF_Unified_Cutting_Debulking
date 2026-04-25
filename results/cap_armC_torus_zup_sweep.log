@@ -1,0 +1,60 @@
+=== Sweep-eval 8 checkpoints (15 eps each) ===
+
+--- step=050000 ---
+
+--- step=100000 ---
+
+--- step=150000 ---
+
+--- step=200000 ---
+
+--- step=250000 ---
+
+--- step=300000 ---
+
+--- step=350000 ---
+
+--- step=400000 ---
+
+>>> evaluating 050000 (15 eps)
+Warp 1.12.1 initialized:
+   CUDA Toolkit 12.9, Driver 13.0
+   Devices:
+     "cpu"      : "x86_64"
+     "cuda:0"   : "NVIDIA GeForce RTX 2070" (8 GiB, sm_75, mempool enabled)
+   Kernel cache:
+     /home/yunxin/.cache/warp/1.12.1
+
+Loaded: 14886 vertices, 85750 tetrahedra
+Built 14886 clusters (rings=2)
+  Cluster sizes: min=41, max=95, avg=65.6
+CSR packed: 14886 clusters, 977252 total entries
+Built 671089 edges, P(F) range: [0.000, 1.000]
+Warp arrays initialized: 14886 particles on cuda:0
+Cluster arrays: 14886 clusters, 977252 total entries
+Edge arrays: 671089 edges
+[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class
+Nerve: 0 particles, Tumor: 14109
+Settling for 200 steps...
+Module sim.kernels 12ba2f2 load on device 'cuda:0' took 1.74 ms  (cached)
+  Settled centroid: (0.503, 0.460, 0.151)
+  Workspace: [[0.05907553 0.021      0.02      ]] to [[0.94743574 0.90835196 0.3453884 ]]
+  Coverage grid: 8³=512 voxels, 323 occupied by tumor
+  Initial surface: 1907 boundary particles → 281 voxels
+  Capsule vs interior: 1907 capsule / 12202 interior particles (13.5% shell)
+DebulkEnv initialized: 14886 particles, obs_dim=1519 (grid=512), episode_len=1024, obs_mode=l2_analytic
+[task] capsule_only — reward = 4-term (interior + capsule_penalty + step + completion), budget=0.05, λ_cap=30.0
+Evaluating C seed=0: 15 episodes ...
+Module warp_sim.kernels.obs_reward 05affb8 load on device 'cuda:0' took 0.81 ms  (cached)
+Module sim.pf_damage c19655c load on device 'cuda:0' took 1.02 ms  (cached)
+Module pf_shape_matching_warp.sim.pf_damage c19655c load on device 'cuda:0' took 1.06 ms  (cached)
+Module warp_sim.envs.debulk_env 34a5e68 load on device 'cuda:0' took 0.30 ms  (cached)
+Wrote 15 rows → results/sweep/cap_armC_torus_zup_seed0/cap_armC_torus_zup_seed0_step050000.csv
+
+=== Summary: arm=C seed=0 over 15 eps ===
+  capsule_dmg@80:    mean=0.1507  median=0.1505  std=0.0003
+  final_interior:    mean=0.1792  median=0.1782
+  catastrophic rate: 1.000  (15/15)
+  ↳ interior=17.92±1.40%  cap=15.07%  return=1383.5  ep_len=437  cata=100.0%
+
+>>> evaluating 100000 (15 eps)

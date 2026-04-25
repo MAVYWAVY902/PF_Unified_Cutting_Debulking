@@ -109,35 +109,34 @@ def _render_frame(state, knife_trail, frame_idx, step_t, cum_reward, out_path,
         ax3d.plot(trail[:, 0], trail[:, 1], trail[:, 2],
                   c="black", linewidth=1.0, alpha=0.6)
 
-    ax3d.set_xlim(0, 1); ax3d.set_ylim(0, 0.55); ax3d.set_zlim(0, 1)
+    ax3d.set_xlim(0, 1); ax3d.set_ylim(0, 1); ax3d.set_zlim(0, 0.55)
     ax3d.set_xlabel("x"); ax3d.set_ylabel("y"); ax3d.set_zlabel("z")
     ax3d.set_title(f"3D  |  frame {frame_idx:04d}, sim step {step_t}", fontsize=10)
     ax3d.legend(loc="upper right", fontsize=7, framealpha=0.85)
-    # View from front-upper corner for clarity
     ax3d.view_init(elev=22, azim=-65)
 
-    # --- Subplot 2: XZ projection (top-down through y) ---
+    # --- Subplot 2: XY projection (top-down through z, ground plane) ---
     ax2d = fig.add_subplot(gs[0, 1])
-    ax2d.scatter(pos[cap_alive, 0], pos[cap_alive, 2],
+    ax2d.scatter(pos[cap_alive, 0], pos[cap_alive, 1],
                  c="crimson", s=4, alpha=0.55)
-    ax2d.scatter(pos[int_alive, 0], pos[int_alive, 2],
+    ax2d.scatter(pos[int_alive, 0], pos[int_alive, 1],
                  c="royalblue", s=3, alpha=0.22)
     if cap_dead.any():
-        ax2d.scatter(pos[cap_dead, 0], pos[cap_dead, 2],
+        ax2d.scatter(pos[cap_dead, 0], pos[cap_dead, 1],
                      c="lightcoral", s=2, alpha=0.18)
     if int_dead.any():
-        ax2d.scatter(pos[int_dead, 0], pos[int_dead, 2],
+        ax2d.scatter(pos[int_dead, 0], pos[int_dead, 1],
                      c="lightgray", s=2, alpha=0.18)
-    ax2d.scatter([state["knife"][0]], [state["knife"][2]],
+    ax2d.scatter([state["knife"][0]], [state["knife"][1]],
                  c="black", s=120, marker="o")
     if len(knife_trail) > 1:
         trail = np.asarray(knife_trail)
-        ax2d.plot(trail[:, 0], trail[:, 2], c="black", linewidth=1.0, alpha=0.6)
+        ax2d.plot(trail[:, 0], trail[:, 1], c="black", linewidth=1.0, alpha=0.6)
 
     ax2d.set_xlim(0, 1); ax2d.set_ylim(0, 1)
-    ax2d.set_xlabel("x"); ax2d.set_ylabel("z")
+    ax2d.set_xlabel("x"); ax2d.set_ylabel("y")
     ax2d.set_aspect("equal")
-    ax2d.set_title("Top-down view (XZ)", fontsize=10)
+    ax2d.set_title("Top-down (XY, ground plane)", fontsize=10)
     ax2d.grid(alpha=0.2)
 
     # HUD overlay on 2D subplot

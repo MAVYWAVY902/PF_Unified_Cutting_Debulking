@@ -9,12 +9,13 @@ Why torus:
   through a thin tube; any deviation hits the capsule (inner or outer tube
   wall). This exposes the L2 tactile gradient's benefit cleanly.
 
-Geometry (default):
-  Ring plane = XZ, axis along Y (parallel to gravity so the doughnut lies
-  flat). Center (0.5, 0.25, 0.5) matches the cuboid workspace.
+Geometry (default) — Z-UP convention (2026-04-24 switch from Y-up):
+  Ring plane = XY, axis along Z (parallel to gravity so the doughnut lies
+  flat and renders flat in matplotlib's default Z-up convention). Center
+  (0.5, 0.5, 0.25) matches the new Z-up workspace.
     major_R = 0.35   (center-of-torus -> center-of-tube)
     minor_r = 0.12   (tube radius; ~2.4x knife_radius=0.05)
-  Bounding box: [0.03, 0.13, 0.03] to [0.97, 0.37, 0.97].
+  Bounding box: [0.03, 0.03, 0.13] to [0.97, 0.97, 0.37].
 
 Pipeline:
   trimesh.creation.torus  ->  surface (tri) mesh (watertight)
@@ -29,10 +30,11 @@ import numpy as np
 
 
 def generate_torus_surface(major_R, minor_r, center, major_sec, minor_sec):
-    """Build a watertight torus triangle mesh (axis = Y, ring in XZ plane).
+    """Build a watertight torus triangle mesh (axis = Z, ring in XY plane).
 
-    trimesh's built-in torus has axis along Z by default, so we rotate and
-    translate to get our convention.
+    trimesh's built-in torus already has axis along Z. We keep this convention
+    for Z-up physics (gravity = -Z), so the ring lays flat in the XY ground
+    plane and renders flat in matplotlib's default view.
     """
     import trimesh
 
@@ -42,11 +44,7 @@ def generate_torus_surface(major_R, minor_r, center, major_sec, minor_sec):
         major_sections=major_sec,
         minor_sections=minor_sec,
     )
-
-    # trimesh.creation.torus: axis along Z. Rotate so axis is along Y.
-    # Rotation: +90 degrees about X axis (Z -> Y).
-    rot = trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])
-    t.apply_transform(rot)
+    # No rotation — keep trimesh default axis=Z (Z-up convention).
     t.apply_translation(center)
 
     if not t.is_watertight:
@@ -88,13 +86,13 @@ def save_msh2(out_path, verts, tets):
 
 
 def verify_inside_torus(verts, R, r, center):
-    """All interior vertices should satisfy (sqrt((x-cx)^2+(z-cz)^2) - R)^2 + (y-cy)^2 <= r^2.
-    Report fraction of verts that satisfy it (should be 100% for a clean torus)."""
+    """Z-up convention: ring in XY, axis Z. Inside means
+       (sqrt((x-cx)^2 + (y-cy)^2) - R)^2 + (z-cz)^2 <= r^2."""
     dx = verts[:, 0] - center[0]
-    dz = verts[:, 2] - center[2]
     dy = verts[:, 1] - center[1]
-    ring_dist = np.sqrt(dx * dx + dz * dz) - R
-    tube_dist = np.sqrt(ring_dist * ring_dist + dy * dy)
+    dz = verts[:, 2] - center[2]
+    ring_dist = np.sqrt(dx * dx + dy * dy) - R
+    tube_dist = np.sqrt(ring_dist * ring_dist + dz * dz)
     inside = tube_dist <= r + 1e-3
     return inside.mean(), tube_dist.max()
 
@@ -104,7 +102,7 @@ def main():
     ap.add_argument("--output", default="resources/torus/torus.msh")
     ap.add_argument("--major-R", type=float, default=0.35)
     ap.add_argument("--minor-r", type=float, default=0.12)
-    ap.add_argument("--center", type=float, nargs=3, default=[0.5, 0.25, 0.5])
+    ap.add_argument("--center", type=float, nargs=3, default=[0.5, 0.5, 0.25])
     ap.add_argument("--major-sections", type=int, default=64,
                     help="trimesh torus major circle resolution")
     ap.add_argument("--minor-sections", type=int, default=32,

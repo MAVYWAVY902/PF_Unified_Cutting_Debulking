@@ -181,9 +181,9 @@ def collision_kernel(
 
     p = pred_pos[i]
 
-    # Floor
-    if p[1] < floor_y:
-        p = wp.vec3(p[0], floor_y, p[2])
+    # Floor (Z-up: 2026-04-24 switched from Y-up, floor_y now refers to floor Z value)
+    if p[2] < floor_y:
+        p = wp.vec3(p[0], p[1], floor_y)
 
     # Knife sphere SDF with safe distance (gradient-stable at origin)
     # safe_dist = sqrt(|diff|^2 + eps^2) — always > 0, bounded gradient
@@ -224,10 +224,10 @@ def collision_kernel_ssa(
     # Single-assignment chain — never re-assign any local
     p0 = pred_pos[i]
 
-    # Floor correction via wp.where (pure functional ternary)
+    # Floor correction via wp.where (Z-up: 2026-04-24, floor_y now = floor Z value)
     p_floor = wp.where(
-        p0[1] < floor_y,
-        wp.vec3(p0[0], floor_y, p0[2]),
+        p0[2] < floor_y,
+        wp.vec3(p0[0], p0[1], floor_y),
         p0,
     )
 
@@ -740,9 +740,9 @@ def collision_kernel_batched(
 
     p = pred_pos[i]
 
-    # Floor
-    if p[1] < floor_y:
-        p = wp.vec3(p[0], floor_y, p[2])
+    # Floor (Z-up, 2026-04-24)
+    if p[2] < floor_y:
+        p = wp.vec3(p[0], p[1], floor_y)
 
     # Knife sphere SDF — per-env knife position
     if knife_active == 1:
@@ -781,9 +781,10 @@ def collision_kernel_batched_ssa(
     # Single-assignment chain (per NVIDIA XPBD + collision_kernel_ssa pattern)
     p0 = pred_pos[i]
 
+    # Z-up (2026-04-24): floor_y param now refers to floor Z value
     p_floor = wp.where(
-        p0[1] < floor_y,
-        wp.vec3(p0[0], floor_y, p0[2]),
+        p0[2] < floor_y,
+        wp.vec3(p0[0], p0[1], floor_y),
         p0,
     )
 

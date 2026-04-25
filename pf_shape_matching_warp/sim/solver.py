@@ -42,12 +42,16 @@ class ShapeMatchingSolver:
         self.num_clusters = self.c["num_clusters"]
 
         # Config (same defaults as C++)
+        # 2026-04-24: switched from Y-up (gravity=-Y) to Z-up (gravity=-Z) so the
+        # torus phantom lies flat in the XY ground plane under both physics and
+        # default matplotlib rendering. Floor kernels check pos[2] against floor_y
+        # (variable name kept; refers to "floor value" not Y-axis specifically).
         self.dt = 0.005
-        self.gravity = wp.vec3(0.0, -9.81, 0.0)
+        self.gravity = wp.vec3(0.0, 0.0, -9.81)
         self.num_iterations = 4
         self.stiffness = 0.6
         self.damping = 0.98
-        self.floor_y = 0.0
+        self.floor_y = 0.0  # historical name; now refers to floor_z after Z-up switch
         self.substeps = 1  # number of substeps per step() call
 
         # Stage C (2026-04-22): Müller iterations for cluster_solve_kernel_ssa.

@@ -43,11 +43,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import warp as wp
 
 
-def _run_single_episode(env_raw, env_norm, model, seed_rng, max_steps=512):
+def _run_single_episode(env_raw, env_norm, model, seed_rng, max_steps=None):
+    # Auto-detect from env.episode_length if not given (previously hardcoded 512,
+    # which silently cut torus eval at step 512 out of 1024 → interior halved).
     """Run one deterministic episode via `model.predict(obs, deterministic=True)`.
     Track per-step interior coverage progression to compute step-to-80 and
     capsule_damage@80-coverage metrics. Return a dict of per-episode metrics."""
     obs = env_norm.reset()
+    if max_steps is None:
+        max_steps = int(env_raw.envs[0].episode_length) + 2  # env-driven limit + tiny slack
     ep_return = 0.0
     ep_len = 0
     terminated_by_completion = False

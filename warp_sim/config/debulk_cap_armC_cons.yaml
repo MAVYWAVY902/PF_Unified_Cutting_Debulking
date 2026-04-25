@@ -1,0 +1,99 @@
+## P(F) Capsule Task — Arm C-Cons (L2 analytic, CONSERVATIVE capsule mode)
+## 2026-04-24: cloned from debulk_cap_armC.yaml to explore the λ_capsule=200 regime
+## after the λ=30 Arm C learned to breach up to 12.6% — reward-hacking.
+##
+## Diff from debulk_cap_armC.yaml:
+##   lambda_capsule: 30 → 200
+##   catastrophic_breach_multiplier: 3.0 → 2.0  (10% hard cap instead of 15%)
+##
+## R2 math under new weights:
+##   breach = 5% (budget):  R2 = 0
+##   breach = 7%:           R2 = -200 × 0.02 = -4
+##   breach = 10% (hard cap now): terminate + -100
+## At typical R1 = 2400/episode, even breach=10% pre-termination gives R2=-10 = 0.4% of reward.
+## So relying on LOWERED hard cap (15% → 10%) is the real behavior change. λ_capsule
+## increase provides gradient pressure but catastrophic cap is the binding constraint.
+
+name: "Debulk Capsule Arm C-Cons (L2 analytic, λ=200 + 10% cat cap)"
+
+# Task selector
+task_type: "capsule_only"
+
+# Obs mode: 3-D analytic gradient via wp.Tape on
+#   action → apply_action → update_edge_damage_kernel_ssa → apply_delta → sum(damage)
+obs_mode: "l2_analytic"          # one backward per env step (~2× cost vs Arm A)
+
+# Environment — TORUS TASK (switched from cuboid 2026-04-23)
+mesh: "resources/torus/torus.msh"
+settle_steps: 200
+sim_substeps: 2
+action_scale: 0.003
+knife_start: [1.0, 0.25, 0.5]
+knife_radius: 0.05
+episode_length: 1024
+debulk_threshold: 0.5
+workspace_margin: -0.02
+
+# Potential-based reward shaping (Ng 1999) — policy-invariant dense coverage signal.
+pbrs_alpha: 50.0
+pbrs_gamma: 0.995
+
+# Physics
+dt: 0.005
+num_iterations: 4
+stiffness: 0.6
+damping: 0.98
+cutting_interval: 1
+
+# L2-specific: scale raw gradient before tanh. env.py uses _tactile_scale;
+# kept conservative (=1.0) because Phase 6 showed raw |g| already in [0, 1.7e3]
+# regime giving post-tanh ∈ {0, ±1} with good contact signal.
+tactile_scale: 1.0
+
+# Capsule-task reward params — CONSERVATIVE rebalance (2026-04-24)
+# λ_capsule: 30 → 200 (6.7× stronger gradient pressure outside budget)
+# catastrophic_breach_multiplier: 3.0 → 2.0 (hard cap 15% → 10%)
+capsule_budget: 0.05
+lambda_capsule: 200.0
+completion_interior_frac: 0.90
+catastrophic_breach_multiplier: 2.0
+catastrophic_penalty: 100.0
+step_penalty: 0.1
+completion_bonus: 50.0
+
+# Legacy reward params — unused in capsule_only mode
+lambda_nerve: 10.0
+waste_penalty_weight: 0.5
+guidance_weight: 5.0
+guidance_std: 0.15
+surface_bonus: 2.0
+interior_penalty: 5.0
+surface_low: 0.1
+surface_high: 0.9
+
+nerve:
+  type: "y_band"
+  y_min: 0.0
+  y_max: null
+
+# PPO training — identical to Arm A so only obs differs
+training:
+  total_timesteps: 500000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 4
+  gamma: 0.995
+  gae_lambda: 0.97
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.02
+  net_arch: [256, 256]
+  save_freq: 50000
+  use_vecnormalize: true
+  norm_obs: true
+  norm_reward: true
+  clip_obs: 10.0
+  clip_reward: 10.0

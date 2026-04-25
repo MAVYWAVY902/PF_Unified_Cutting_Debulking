@@ -425,11 +425,23 @@ class DebulkEnv(gym.Env):
         # 7. Get obs (includes coverage grid)
         obs_np = self._get_obs_np()
 
+        # NaN guard (2026-04-24): policy update can crash if obs/reward are NaN.
+        # Catch + clamp + force-terminate episode rather than letting NaN pollute
+        # VecNormalize running stats and PPO buffer. Logged to info for tracing.
+        nan_in_obs    = bool(np.any(~np.isfinite(obs_np)))
+        nan_in_reward = not np.isfinite(reward)
+        if nan_in_obs or nan_in_reward:
+            obs_np = np.nan_to_num(obs_np, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+            reward = float(0.0) if nan_in_reward else float(reward)
+            terminated = True
+
         info = {
             "step": self.step_count,
             "knife_pos": kp_np.copy(),
             "interior_done_frac": float(self._interior_done_frac),
             "capsule_breached_frac": float(self._capsule_breached_frac),
+            "nan_in_obs": nan_in_obs,
+            "nan_in_reward": nan_in_reward,
         }
         return obs_np, reward, terminated, truncated, info
 
@@ -475,10 +487,14 @@ class DebulkEnv(gym.Env):
                 vx, vy, vz = self._particle_voxel[i]
                 grid[vx, vy, vz] += 1.0
 
-        # Normalize: fraction of debulked particles in each voxel
-        coverage = np.where(self._voxel_tumor_count > 0,
-                            grid / self._voxel_tumor_count, 0.0)
-        return coverage.flatten()  # (512,)
+        # Normalize: fraction of debulked particles in each voxel.
+        # Use safe divide to avoid the silent NaN spread that a /0 even inside
+        # np.where can create when the masked-out values feed into running stats.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.divide(grid, self._voxel_tumor_count,
+                              out=np.zeros_like(grid, dtype=np.float32),
+                              where=self._voxel_tumor_count > 0)
+        return ratio.flatten()  # (512,)
 
     # ================================================================
     # Coverage-Aware Reward

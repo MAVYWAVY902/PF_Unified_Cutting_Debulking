@@ -17,7 +17,7 @@ mesh: "resources/torus/torus.msh"
 settle_steps: 200
 sim_substeps: 2
 action_scale: 0.003
-knife_start: [1.0, 0.25, 0.5]       # just outside torus ring at +x equator; dist to capsule ≈ 0.03
+knife_start: [1.0, 0.5, 0.25]       # Z-up (2026-04-24): just outside torus ring at +X equator; vertical Z=0.25 = ring mid-height
 knife_radius: 0.05
 # Episode raised 256 → 1024: one full ring sweep needs 2π·R/action_scale_max ≈ 423 steps.
 # 1024 allows ~2.4 sweeps for policy to learn spiral/wobble coverage.
