@@ -159,8 +159,11 @@ class DebulkEnv(gym.Env):
             os.path.dirname(__file__), "..", "..", "resources", "cube", "cube_dense.msh"))
         vertices, tets = load_tet_mesh(mesh_path)
         N = len(vertices)
-        min_y = vertices[:, 1].min()
-        vertices[:, 1] += -min_y + 0.001
+        # Z-up (2026-04-25): floor is at Z=0 (gravity = -Z). Shift mesh so lowest
+        # Z particle is at z=0.001 (just above floor). Pin bottom 10% by Z to
+        # anchor mesh against ground (instead of letting it slide).
+        min_z = vertices[:, 2].min()
+        vertices[:, 2] += -min_z + 0.001
         self._tets = tets  # kept for surface-boundary extraction
 
         vertex_neighbors = build_vertex_neighbors(tets, N)
@@ -170,11 +173,11 @@ class DebulkEnv(gym.Env):
             cluster_ids, cluster_offsets, cluster_cms)
         edge_a, edge_b, edge_pf_rest = build_edges(vertices, cluster_ids, vertex_neighbors)
 
-        mesh_height = vertices[:, 1].max() - vertices[:, 1].min()
-        fixed_threshold = vertices[:, 1].min() + mesh_height * 0.10
+        mesh_height = vertices[:, 2].max() - vertices[:, 2].min()
+        fixed_threshold = vertices[:, 2].min() + mesh_height * 0.10
         fixed_mask = np.zeros(N, dtype=np.int32)
         for i in range(N):
-            if vertices[i, 1] < fixed_threshold:
+            if vertices[i, 2] < fixed_threshold:
                 fixed_mask[i] = 1
 
         p_arrays = init_warp_arrays(vertices, fixed_mask, self.device)
@@ -204,12 +207,14 @@ class DebulkEnv(gym.Env):
             # Capsule vs interior distinction is handled later in _build_initial_surface_voxels.
             print("[task] capsule_only mode — nerve layer disabled, using tumor+capsule 2-class")
         else:
-            # Legacy "nerve_avoid" task: y-band nerve layer
+            # Legacy "nerve_avoid" task: bottom-band nerve layer along gravity axis.
+            # Z-up fix (2026-04-25): band is along Z (gravity), not Y. Yaml field
+            # name `y_max` kept for backward compat; semantically = bottom-Z threshold.
             y_max = nerve_cfg.get("y_max", None)
             if y_max is None:
-                y_max = pos_np[:, 1].min() + (pos_np[:, 1].max() - pos_np[:, 1].min()) * 0.25
+                y_max = pos_np[:, 2].min() + (pos_np[:, 2].max() - pos_np[:, 2].min()) * 0.25
             for i in range(N):
-                if fixed_np[i] == 0 and pos_np[i, 1] <= y_max:
+                if fixed_np[i] == 0 and pos_np[i, 2] <= y_max:
                     nerve_mask_np[i] = 1
 
         self._task_type = task_type

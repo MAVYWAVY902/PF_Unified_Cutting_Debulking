@@ -7,13 +7,50 @@
     "runtime_warnings_total": 0,
     "invalid_divide": 0,
     "overflow": 0,
-    "early_stops_kl_total": 1,
-    "early_stops_kl_step0": 0,
+    "early_stops_kl_total": 51,
+    "early_stops_kl_step0": 21,
     "nan_traceback_seen": 0,
     "crashed_with_nan": false,
-    "iter_count": 29,
-    "short_episode_iters": 0,
-    "short_episode_iter_examples": []
+    "iter_count": 245,
+    "short_episode_iters": 145,
+    "short_episode_iter_examples": [
+      [
+        206848.0,
+        964.0,
+        262.0
+      ],
+      [
+        208896.0,
+        956.0,
+        274.0
+      ],
+      [
+        210944.0,
+        956.0,
+        273.0
+      ],
+      [
+        212992.0,
+        938.0,
+        306.0
+      ],
+      [
+        215040.0,
+        938.0,
+        297.0
+      ]
+    ]
   },
-  "eval": null
+  "eval": {
+    "total_steps": 27664,
+    "total_episodes": 50,
+    "nan_steps": 0,
+    "eps_with_any_nan": 0,
+    "rate_per_step": 0.0,
+    "rate_per_episode": 0.0,
+    "breach_at_nan_mean": null,
+    "breach_clean_mean": 0.12255929495393521,
+    "interior_clean_mean": 0.143846744207233,
+    "verdict": "CLEAN \u2014 guard never fired."
+  }
 }
