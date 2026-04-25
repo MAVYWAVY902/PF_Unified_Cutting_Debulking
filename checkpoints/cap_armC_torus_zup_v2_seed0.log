@@ -1140,3 +1140,25 @@ Early stopping at step 1 due to reaching max kl: 0.03
 |    std                  | 1           |
 |    value_loss           | 0.00693     |
 -----------------------------------------
+-----------------------------------------
+| rollout/                |             |
+|    ep_len_mean          | 1.02e+03    |
+|    ep_rew_mean          | 297         |
+| time/                   |             |
+|    fps                  | 51          |
+|    iterations           | 51          |
+|    time_elapsed         | 2032        |
+|    total_timesteps      | 104448      |
+| train/                  |             |
+|    approx_kl            | 0.016844364 |
+|    clip_fraction        | 0.156       |
+|    clip_range           | 0.2         |
+|    entropy_loss         | -4.26       |
+|    explained_variance   | 0.99        |
+|    learning_rate        | 0.0003      |
+|    loss                 | -0.0433     |
+|    n_updates            | 181         |
+|    policy_gradient_loss | -0.00299    |
+|    std                  | 0.999       |
+|    value_loss           | 0.00306     |
+-----------------------------------------
