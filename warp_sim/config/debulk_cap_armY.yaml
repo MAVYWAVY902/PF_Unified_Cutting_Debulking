@@ -28,9 +28,10 @@ pbrs_gamma: 0.995
 
 # Physics
 dt: 0.005
-num_iterations: 4
-stiffness: 0.6
+num_iterations: 6              # 2026-04-25: 4 → 6
+stiffness: 0.85                # 2026-04-25: 0.6 → 0.85 on Z-up geometry
 damping: 0.98
+floor_friction: 0.95           # 2026-04-25: tangent slip damping [0..1]; 0=frictionless, 1=fully sticky
 cutting_interval: 1
 
 # FD-specific

@@ -48,10 +48,11 @@ class ShapeMatchingSolver:
         # (variable name kept; refers to "floor value" not Y-axis specifically).
         self.dt = 0.005
         self.gravity = wp.vec3(0.0, 0.0, -9.81)
-        self.num_iterations = 4
-        self.stiffness = 0.6
+        self.num_iterations = 6      # 2026-04-25: 4 → 6 (firmer cluster convergence per substep)
+        self.stiffness = 0.85        # 2026-04-25: 0.6 → 0.85 on corrected Z-up geometry to reduce push-induced wobble
         self.damping = 0.98
         self.floor_y = 0.0  # historical name; now refers to floor_z after Z-up switch
+        self.floor_friction = 0.85   # 2026-04-25: tangent slip damping [0..1] in collision_kernel_ssa
         self.substeps = 1  # number of substeps per step() call
 
         # Stage C (2026-04-22): Müller iterations for cluster_solve_kernel_ssa.
@@ -112,8 +113,9 @@ class ShapeMatchingSolver:
             dim=N,
             inputs=[
                 self.p["pred_pos"],
+                self.p["pos"],                 # friction anchor (start-of-substep pos)
                 self.p["alpha"], self.p["fixed"],
-                self.floor_y,
+                self.floor_y, self.floor_friction,
                 self.knife_pos, self.knife_radius, self.knife_active,
                 self.p["collision_delta"],
             ],
@@ -181,8 +183,9 @@ class ShapeMatchingSolver:
                 dim=N,
                 inputs=[
                     self.p["pred_pos"],
+                    self.p["pos"],                 # friction anchor (substep-stable)
                     self.p["alpha"], self.p["fixed"],
-                    self.floor_y,
+                    self.floor_y, self.floor_friction,
                     self.knife_pos, self.knife_radius, self.knife_active,
                     self.p["collision_delta"],
                 ],

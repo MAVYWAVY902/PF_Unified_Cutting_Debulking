@@ -63,9 +63,10 @@ class DebulkEnv(gym.Env):
         self.waste_penalty_weight = cfg.get("waste_penalty_weight", 0.5)
         self.knife_start = cfg.get("knife_start", [0.95, 0.7, 0.5])
         self.dt = cfg.get("dt", 0.005)
-        self.num_iterations = cfg.get("num_iterations", 4)
-        self.stiffness = cfg.get("stiffness", 0.6)
+        self.num_iterations = cfg.get("num_iterations", 6)        # 2026-04-25: 4 → 6
+        self.stiffness = cfg.get("stiffness", 0.85)               # 2026-04-25: 0.6 → 0.85 on Z-up geometry
         self.damping = cfg.get("damping", 0.98)
+        self.floor_friction = cfg.get("floor_friction", 0.85)     # 2026-04-25: tangent slip damping [0..1]
         self.knife_radius = cfg.get("knife_radius", 0.1)
         self.cutting_interval = cfg.get("cutting_interval", 1)
         self.debulk_threshold = cfg.get("debulk_threshold", 0.5)
@@ -189,6 +190,7 @@ class DebulkEnv(gym.Env):
         self.solver.num_iterations = self.num_iterations
         self.solver.stiffness = self.stiffness
         self.solver.damping = self.damping
+        self.solver.floor_friction = self.floor_friction
         self.solver.substeps = 1
         self.solver.knife_radius = self.knife_radius
         self.solver.cutting_update_interval = self.sim_substeps

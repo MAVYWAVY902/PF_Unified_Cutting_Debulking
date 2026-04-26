@@ -209,9 +209,11 @@ def collision_kernel(
 @wp.kernel
 def collision_kernel_ssa(
     pred_pos: wp.array(dtype=wp.vec3),
+    pos: wp.array(dtype=wp.vec3),                 # 2026-04-25: start-of-substep pos for friction anchor
     alpha: wp.array(dtype=wp.float32),
     fixed: wp.array(dtype=wp.int32),
     floor_y: float,
+    floor_friction: float,                        # 2026-04-25: tangent slip damping coef [0..1]; 0=frictionless, 1=sticky
     knife_pos: wp.array(dtype=wp.vec3),
     knife_radius: float,
     knife_active: int,
@@ -223,11 +225,20 @@ def collision_kernel_ssa(
 
     # Single-assignment chain — never re-assign any local
     p0 = pred_pos[i]
+    p_anchor = pos[i]                            # start-of-substep position (friction anchor)
 
-    # Floor correction via wp.where (Z-up: 2026-04-24, floor_y now = floor Z value)
+    # Floor + tangent friction (Z-up: 2026-04-25 added Coulomb-style tangent damping).
+    # When p[2] < floor_y, particle is in floor contact — clamp Z to floor and reduce
+    # the tangent (XY) displacement relative to its start-of-substep position by
+    # (1 - floor_friction). floor_friction = 0 reproduces frictionless behavior;
+    # floor_friction = 1 = full stick (no XY slip during this substep).
+    tx = p0[0] - p_anchor[0]                     # tangent disp X relative to substep start
+    ty = p0[1] - p_anchor[1]                     # tangent disp Y
+    fx = p_anchor[0] + tx * (1.0 - floor_friction)
+    fy = p_anchor[1] + ty * (1.0 - floor_friction)
     p_floor = wp.where(
         p0[2] < floor_y,
-        wp.vec3(p0[0], p0[1], floor_y),
+        wp.vec3(fx, fy, floor_y),
         p0,
     )
 
