@@ -1,0 +1,9 @@
+VERDICT: DISCRETE — hard removal or step jumps present
+
+Particle count constant: True
+Particles transitioned (0.5+ → 0.5-): 69
+Max alpha change per step: 0.9970
+Median alpha change per step: 0.003221
+Alpha minimum reached: 0.000532
+Damage non-monotonic samples: 0
+Steps run: 200
