@@ -182,8 +182,13 @@ def fd_grad(
 # =============================================================================
 
 class Adam2D:
-    def __init__(self, lr: float = 0.1, b1: float = 0.9, b2: float = 0.999, eps: float = 1e-8):
-        self.lr, self.b1, self.b2, self.eps = lr, b1, b2, eps
+    def __init__(self, lr=0.1, b1: float = 0.9, b2: float = 0.999, eps: float = 1e-8):
+        # lr can be scalar OR np.ndarray of shape (2,) for per-param rates.
+        # Sharpness has ~7× weaker gradient than alpha_min in this loss
+        # (sigmoid saturates outside the threshold transition zone), so per-param
+        # lr is needed even though Adam's v-scaling theoretically should adapt.
+        self.lr = np.asarray(lr, dtype=np.float64) if not np.isscalar(lr) else lr
+        self.b1, self.b2, self.eps = b1, b2, eps
         self.m = np.zeros(2); self.v = np.zeros(2); self.t = 0
 
     def step(self, params: np.ndarray, grad: np.ndarray) -> np.ndarray:
@@ -231,8 +236,14 @@ def calibrate(args):
     params = np.array([args.init_alpha_min, args.init_sharpness], dtype=np.float64)
     print(f"[init]  alpha_min={params[0]:.3f}, sharpness={params[1]:.3f}")
 
-    opt = Adam2D(lr=args.lr)
+    lr = np.array([args.lr, args.lr_sharp], dtype=np.float64)
+    opt = Adam2D(lr=lr)
     history = []
+    # Early stopping: keep best params seen, not last (sigmoid degeneracy means
+    # Adam can overshoot past optimum and loss starts climbing again).
+    best_loss = float("inf")
+    best_params = params.copy()
+    best_step = 0
 
     # --- Calibration loop ---
     t_start = time.time()
@@ -240,6 +251,9 @@ def calibrate(args):
         grad, loss = fd_grad(sys_dict, params, loss_fn,
                              eps=(args.eps_alpha, args.eps_sharp),
                              fwd_kwargs=fwd_kwargs)
+        if loss < best_loss:
+            best_loss, best_params, best_step = loss, params.copy(), step
+
         params = opt.step(params, grad)
         # Hard bounds (physics: alpha_min > 0, sharpness > 0)
         params[0] = max(0.5, min(50.0, params[0]))
@@ -252,6 +266,11 @@ def calibrate(args):
                   f"a_min={params[0]:.3f} (g={grad[0]:+.2e})  "
                   f"sharp={params[1]:.3f} (g={grad[1]:+.2e})")
 
+    # Use best params for final report (early-stopping result)
+    print(f"\n[best] step {best_step}: loss={best_loss:.6e}  "
+          f"a_min={best_params[0]:.3f}, sharp={best_params[1]:.3f}")
+    params = best_params
+
     elapsed = time.time() - t_start
     print(f"\n[done] {args.n_steps} steps in {elapsed:.1f}s "
           f"({elapsed / args.n_steps:.2f}s/step, "
@@ -261,16 +280,27 @@ def calibrate(args):
     if args.mode == "synth":
         err_a = abs(params[0] - true_params[0])
         err_s = abs(params[1] - true_params[1])
+        rel_a = err_a / true_params[0]
+        rel_s = err_s / true_params[1]
+        loss_init = history[0]["loss"]
+        loss_drop = loss_init / max(best_loss, 1e-12)
+
         print(f"\n[synth result]")
         print(f"  true:       alpha_min={true_params[0]:.3f}, sharpness={true_params[1]:.3f}")
         print(f"  recovered:  alpha_min={params[0]:.3f}, sharpness={params[1]:.3f}")
         print(f"  abs error:  alpha_min={err_a:.3f}, sharpness={err_s:.3f}")
-        # Loose pass criterion: within 20% of true value
-        rel_a = err_a / true_params[0]
-        rel_s = err_s / true_params[1]
-        passed = rel_a < 0.20 and rel_s < 0.20
         print(f"  rel error:  alpha_min={rel_a*100:.1f}%, sharpness={rel_s*100:.1f}%")
-        print(f"  identifiability: {'PASS' if passed else 'FAIL'}")
+        print(f"  loss drop:  {loss_init:.3e} → {best_loss:.3e}  ({loss_drop:.1e}×)")
+
+        # Two pass criteria — fitness vs identifiability are distinct concepts
+        loss_pass = best_loss < 1e-4              # forward-map fit quality
+        param_pass = rel_a < 0.20 and rel_s < 0.20  # param recovery
+        print(f"  fitness   (loss < 1e-4):    {'PASS' if loss_pass else 'FAIL'}")
+        print(f"  identifiability (rel<20%):  {'PASS' if param_pass else 'FAIL'}")
+        if loss_pass and not param_pass:
+            print(f"  → degeneracy detected: forward map (alpha_min, sharpness) → alpha is")
+            print(f"    locally many-to-one for this synthetic. Real Stage 2.2 should break")
+            print(f"    this with multi-observable loss (cavity volume + groove depth + force).")
 
     # --- Optional plot ---
     if args.plot:
@@ -303,7 +333,10 @@ def parse_args():
     p.add_argument("--mode", choices=["synth", "real"], default="synth")
     p.add_argument("--n_steps", type=int, default=50)
     p.add_argument("--log_every", type=int, default=2)
-    p.add_argument("--lr", type=float, default=0.1)
+    p.add_argument("--lr", type=float, default=0.1, help="Adam lr for alpha_min")
+    p.add_argument("--lr_sharp", type=float, default=1.0,
+                   help="Adam lr for sharpness (~10× alpha_min lr; sharpness "
+                        "gradient is ~7× weaker due to sigmoid saturation)")
 
     # Synthetic-mode params
     p.add_argument("--n_particles", type=int, default=20)

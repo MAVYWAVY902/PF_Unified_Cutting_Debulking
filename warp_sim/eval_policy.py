@@ -109,7 +109,7 @@ def _run_single_episode(env_raw, env_norm, model, seed_rng, max_steps=None):
 
 
 def evaluate(cfg_path, ckpt_path, vecnorm_path, episodes, out_path,
-             arm_label, seed_label, device="cuda:0"):
+             arm_label, seed_label, device="cuda:0", sharpness_override=None):
     wp.init()
 
     from stable_baselines3 import PPO
@@ -120,6 +120,14 @@ def evaluate(cfg_path, ckpt_path, vecnorm_path, episodes, out_path,
     env_fn = lambda: DebulkEnv(cfg, device=device)
     env_raw = DummyVecEnv([env_fn])
     env_mon = VecMonitor(env_raw)
+
+    # Stage 2.3.5 sharpness sensitivity hook: override the solver's
+    # soft_removal_sharpness for sim-to-sim sensitivity testing. Set BEFORE
+    # any reset/step so it propagates to all episodes.
+    if sharpness_override is not None:
+        old_sharp = env_raw.envs[0].solver.soft_removal_sharpness
+        env_raw.envs[0].solver.soft_removal_sharpness = float(sharpness_override)
+        print(f"[sharpness override] {old_sharp} → {sharpness_override}")
 
     if vecnorm_path and os.path.exists(vecnorm_path):
         env_norm = VecNormalize.load(vecnorm_path, env_mon)
@@ -183,11 +191,15 @@ def main():
     p.add_argument("--arm",        default=None, help="arm label (else derived from cfg filename)")
     p.add_argument("--seed",       default="0",  help="seed label")
     p.add_argument("--device",     default="cuda:0")
+    p.add_argument("--sharpness_override", type=float, default=None,
+                   help="Override solver.soft_removal_sharpness (default 20). "
+                        "For Stage 2.3.5 sensitivity testing.")
     args = p.parse_args()
 
     arm_label = args.arm or os.path.basename(args.cfg).replace(".yaml", "").split("_")[-1]
     evaluate(args.cfg, args.checkpoint, args.vecnorm, args.episodes,
-             args.out, arm_label, args.seed, args.device)
+             args.out, arm_label, args.seed, args.device,
+             sharpness_override=args.sharpness_override)
 
 
 if __name__ == "__main__":

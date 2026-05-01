@@ -1,0 +1,11 @@
+arm,seed,ep,final_interior_cov,capsule_dmg_at_80,steps_to_80,catastrophic,return,episode_len,terminated_by_completion,terminated_by_catastrophe
+armC_torus_sharp14_ckpt500k,0,0,0.0627,0.1069,1025,0,-869.867,1024,0,0
+armC_torus_sharp14_ckpt500k,0,1,0.062,0.1044,1025,0,-810.003,1024,0,0
+armC_torus_sharp14_ckpt500k,0,2,0.062,0.1031,1025,0,-775.713,1024,0,0
+armC_torus_sharp14_ckpt500k,0,3,0.0621,0.1062,1025,0,-857.896,1024,0,0
+armC_torus_sharp14_ckpt500k,0,4,0.0612,0.1031,1025,0,-784.324,1024,0,0
+armC_torus_sharp14_ckpt500k,0,5,0.0615,0.1025,1025,0,-765.447,1024,0,0
+armC_torus_sharp14_ckpt500k,0,6,0.0624,0.1056,1025,0,-835.339,1024,0,0
+armC_torus_sharp14_ckpt500k,0,7,0.0618,0.105,1025,0,-831.171,1024,0,0
+armC_torus_sharp14_ckpt500k,0,8,0.0613,0.105,1025,0,-840.6,1024,0,0
+armC_torus_sharp14_ckpt500k,0,9,0.0616,0.1056,1025,0,-846.9,1024,0,0
