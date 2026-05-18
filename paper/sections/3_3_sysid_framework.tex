@@ -1,0 +1,38 @@
+% ============================================================
+% Section 3.3 — System Identification Framework
+% Target: ~0.5 page of 2-column IEEE conference format
+% Status: 2nd DRAFT 2026-05-15 (label refs verified after §3.1↔§3.2 swap;
+%         alg:ssa-jacobi still resolves — algorithm now lives in §3.2,
+%         label is content-anchored)
+% ============================================================
+
+\subsection{System Identification Framework}
+\label{sec:sysid-framework}
+
+% --- Paragraph 1: Loss design for sys-ID ---
+System identification treats Algorithm~\ref{alg:ssa-jacobi} as a
+differentiable forward map
+$\theta \mapsto \mathbf{y}_{\text{sim}}(\theta)$ and uses Adam to fit
+measured signals $\mathbf{y}_{\text{real}}$. To avoid the long-horizon
+gradient bias that accumulates across many PBD
+substeps~\cite{antonova2022, suh2022}, each Adam step runs a single
+fresh forward substep from the rest configuration, and
+cutting-parameter losses compare only the final cavity geometry. The
+per-step loss is force-displacement MSE for elastic stiffness (in the
+spirit of Kolawole's volume-MSE inverse FEM~\cite{kolawole2023}, with
+displacement as the boundary input and force as the target), and a
+soft-IoU plus signed-distance match on the continuous $\alpha$ field
+(\ref{eq:soft-removal}) for cutting parameters.
+
+% --- Paragraph 2: 3-vs-2 decision matrix ---
+Three of our five physical parameters fall in this single-substep
+regime: bulk stiffness $k$, damage threshold $\alpha_{\min}$, and
+sharpness $s$. We verify in \S\ref{sec:sysid-synth} that Adam recovers
+all three to within a few percent on synthetic ground truth in under a
+minute. Friction and damping, by contrast, require non-zero particle
+velocity to develop signal and are therefore not single-substep
+identifiable; we adopt literature values ($\mu$ from
+Misra~\textit{et~al.}~\cite{misra2010}, $\beta$ from
+Mackle~\textit{et~al.}~\cite{mackle2020}), consistent with the
+convention in DiSECt~\cite{heiden2021disect} and the cardiac inverse
+FEM work of Kolawole~\cite{kolawole2023}.

@@ -560,6 +560,202 @@ def cluster_solve_kernel_ssa(
         wp.atomic_add(delta_counts, pid, int(particle_alive))
 
 
+# ============== Cluster Solve SPLIT (Phase 2B 2026-05-07) ==============
+# 5-kernel decomposition of cluster_solve_kernel_ssa to eliminate the Warp 1.13
+# silent-fail pattern (multi-loop + cross-loop accumulator + variable divisor +
+# atomic_add scatter all in same kernel → 4.5×10¹⁰ ratio bias at num_iter=6).
+#
+# Each kernel is single-purpose so that the bug-prone interactions between
+# variable divisor and atomic_add scatter no longer share a tape neighborhood:
+#   1. cluster_compute_sums_kernel_ssa        — pure reduce → (cx_sum, qc_sum, tw)
+#   2. cluster_normalize_centroids_kernel_ssa — per-cluster scalar math (variable
+#                                                divisor ISOLATED here, no scatter)
+#   3. cluster_compute_covariance_kernel_ssa  — A_pq matrix per cluster
+#   4. cluster_polar_rotation_kernel_ssa      — Müller 2016 polar → R per cluster
+#   5. cluster_goal_scatter_kernel_ssa        — atomic_add deltas (pure scatter)
+#
+# POC v3 verified at full production physics (2026-05-07):
+#     num_iter=6 ratio 0.94 vs broken cluster_solve_kernel_ssa's 4.5×10¹⁰.
+# Reference: project_layer_a_phase2b_poc_complete_2026_05_07.md
+
+@wp.kernel
+def cluster_compute_sums_kernel_ssa(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    cluster_starts: wp.array(dtype=wp.int32),
+    cluster_sizes: wp.array(dtype=wp.int32),
+    particle_ids: wp.array(dtype=wp.int32),
+    rest_offsets: wp.array(dtype=wp.vec3),
+    cx_sum_buf: wp.array(dtype=wp.vec3),       # OUT: per-cluster weighted pred_pos sum
+    qc_sum_buf: wp.array(dtype=wp.vec3),       # OUT: per-cluster weighted rest sum
+    tw_buf: wp.array(dtype=wp.float32),         # OUT: per-cluster total alpha-weight
+):
+    """K1/5: Pure reduce. Single loop, no division, no atomic_add to particle arrays."""
+    cid = wp.tid()
+    start = cluster_starts[cid]
+    size = cluster_sizes[cid]
+    if size < 2:
+        return
+
+    cx_sum = wp.vec3(0.0, 0.0, 0.0)
+    qc_sum = wp.vec3(0.0, 0.0, 0.0)
+    tw = float(0.0)
+    for j in range(size):
+        pid = particle_ids[start + j]
+        w = alpha[pid]                            # paper bridge: w_i := alpha_v_i (no clamp)
+        p = pred_pos[pid]
+        q = rest_offsets[start + j]
+        cx_sum = cx_sum + w * p
+        qc_sum = qc_sum + w * q
+        tw = tw + w
+
+    cx_sum_buf[cid] = cx_sum
+    qc_sum_buf[cid] = qc_sum
+    tw_buf[cid] = tw
+
+
+@wp.kernel
+def cluster_normalize_centroids_kernel_ssa(
+    cluster_sizes: wp.array(dtype=wp.int32),
+    cx_sum_buf: wp.array(dtype=wp.vec3),
+    qc_sum_buf: wp.array(dtype=wp.vec3),
+    tw_buf: wp.array(dtype=wp.float32),
+    cx_mean_buf: wp.array(dtype=wp.vec3),       # OUT: per-cluster centroid
+    qc_mean_buf: wp.array(dtype=wp.vec3),       # OUT: per-cluster rest centroid
+):
+    """K2/5: Per-cluster scalar normalize. Variable divisor `/ tw_safe` isolated here.
+    Single thread per cluster, no reduce loop, no scatter — adjoint chain is local."""
+    cid = wp.tid()
+    size = cluster_sizes[cid]
+    if size < 2:
+        cx_mean_buf[cid] = wp.vec3(0.0, 0.0, 0.0)
+        qc_mean_buf[cid] = wp.vec3(0.0, 0.0, 0.0)
+        return
+
+    tw = tw_buf[cid]
+    # numerical guard only (prevent div by 0 when all alpha are tiny).
+    # Loosened from 1.5 (binary-mask era "count of alive") to 1e-6 so that
+    # legitimately partially-damaged clusters (tw < 1.5 with alpha-weighted)
+    # still get a correctly computed centroid.
+    tw_safe = wp.where(tw < 1.0e-6, 1.0, tw)
+    cx_mean_buf[cid] = cx_sum_buf[cid] / tw_safe
+    qc_mean_buf[cid] = qc_sum_buf[cid] / tw_safe
+
+
+@wp.kernel
+def cluster_compute_covariance_kernel_ssa(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    cluster_starts: wp.array(dtype=wp.int32),
+    cluster_sizes: wp.array(dtype=wp.int32),
+    particle_ids: wp.array(dtype=wp.int32),
+    rest_offsets: wp.array(dtype=wp.vec3),
+    cx_mean_buf: wp.array(dtype=wp.vec3),
+    qc_mean_buf: wp.array(dtype=wp.vec3),
+    A_buf: wp.array(dtype=wp.mat33),             # OUT: per-cluster A_pq covariance
+):
+    """K3/5: 3x3 covariance A_pq per cluster, alpha-weighted (paper Eq. covariance).
+    A_C = Sum_i w_i (p_i - mu)(p_bar_i - mu_bar)^T with w_i := alpha_v_i.
+    Tikhonov term (+1e-6 on diagonal) keeps A_C invertible when most alpha are tiny."""
+    cid = wp.tid()
+    start = cluster_starts[cid]
+    size = cluster_sizes[cid]
+    if size < 2:
+        A_buf[cid] = wp.mat33(0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0,
+                                 0.0, 0.0, 0.0)
+        return
+
+    cx_mean = cx_mean_buf[cid]
+    qc_mean = qc_mean_buf[cid]
+
+    a00 = float(0.0); a01 = float(0.0); a02 = float(0.0)
+    a10 = float(0.0); a11 = float(0.0); a12 = float(0.0)
+    a20 = float(0.0); a21 = float(0.0); a22 = float(0.0)
+
+    for j in range(size):
+        pid = particle_ids[start + j]
+        w = alpha[pid]                              # paper bridge: w_i := alpha_v_i (no clamp)
+        p = pred_pos[pid]
+        px = p[0] - cx_mean[0]
+        py = p[1] - cx_mean[1]
+        pz = p[2] - cx_mean[2]
+        q = rest_offsets[start + j]
+        qx = q[0] - qc_mean[0]
+        qy = q[1] - qc_mean[1]
+        qz = q[2] - qc_mean[2]
+        a00 = a00 + w * px * qx; a01 = a01 + w * px * qy; a02 = a02 + w * px * qz
+        a10 = a10 + w * py * qx; a11 = a11 + w * py * qy; a12 = a12 + w * py * qz
+        a20 = a20 + w * pz * qx; a21 = a21 + w * pz * qy; a22 = a22 + w * pz * qz
+
+    A_buf[cid] = wp.mat33(a00 + 1.0e-6, a01,          a02,
+                             a10,          a11 + 1.0e-6, a12,
+                             a20,          a21,          a22 + 1.0e-6)
+
+
+@wp.kernel
+def cluster_polar_rotation_kernel_ssa(
+    cluster_sizes: wp.array(dtype=wp.int32),
+    A_buf: wp.array(dtype=wp.mat33),
+    cluster_quat: wp.array(dtype=wp.quat),       # IN: warm-start (read only)
+    num_iter: int,
+    R_buf: wp.array(dtype=wp.mat33),             # OUT: per-cluster rotation matrix
+):
+    """K4/5: Müller 2016 iterative quaternion polar decomposition per cluster.
+    Output R as mat33 for downstream goal scatter. cluster_quat warm-start is
+    read-only here; updated separately by cluster_quat_update_kernel after Jacobi."""
+    cid = wp.tid()
+    size = cluster_sizes[cid]
+    if size < 2:
+        R_buf[cid] = wp.mat33(1.0, 0.0, 0.0,
+                                 0.0, 1.0, 0.0,
+                                 0.0, 0.0, 1.0)
+        return
+
+    A = A_buf[cid]
+    q_warm = cluster_quat[cid]
+    q_new = extract_rotation_muller(A, q_warm, num_iter)
+    R_buf[cid] = wp.quat_to_matrix(q_new)
+
+
+@wp.kernel
+def cluster_goal_scatter_kernel_ssa(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    cluster_starts: wp.array(dtype=wp.int32),
+    cluster_sizes: wp.array(dtype=wp.int32),
+    particle_ids: wp.array(dtype=wp.int32),
+    rest_offsets: wp.array(dtype=wp.vec3),
+    cx_mean_buf: wp.array(dtype=wp.vec3),
+    qc_mean_buf: wp.array(dtype=wp.vec3),
+    R_buf: wp.array(dtype=wp.mat33),
+    deltas: wp.array(dtype=wp.vec3),
+    delta_counts: wp.array(dtype=wp.int32),
+):
+    """K5/5: Pure scatter via atomic_add. NO reduce loop, NO division.
+    Variable divisor `/ tw_safe` already consumed in K2 — its adjoint chain
+    is severed from the atomic_add scatter, eliminating the F3 trigger."""
+    cid = wp.tid()
+    start = cluster_starts[cid]
+    size = cluster_sizes[cid]
+    if size < 2:
+        return
+
+    cx_mean = cx_mean_buf[cid]
+    qc_mean = qc_mean_buf[cid]
+    R = R_buf[cid]
+
+    for j in range(size):
+        pid = particle_ids[start + j]
+        w = alpha[pid]                                       # paper bridge w_i := alpha_v_i (no clamp)
+        q = rest_offsets[start + j]
+        q_centered = wp.vec3(q[0] - qc_mean[0], q[1] - qc_mean[1], q[2] - qc_mean[2])
+        goal = R * q_centered + cx_mean
+        correction = (goal - pred_pos[pid]) * w              # paper Delta_i = w_i (g_i - p_i)
+        wp.atomic_add(deltas, pid, correction)
+        wp.atomic_add(delta_counts, pid, 1)                  # count every cluster touch (apply gates dead via alpha<0.01)
+
+
 # Helper kernel to reset cluster_quat to identity (called on env.reset())
 @wp.kernel
 def reset_cluster_quat_kernel(cluster_quat: wp.array(dtype=wp.quat)):
@@ -595,51 +791,50 @@ def cluster_quat_update_kernel(
     if size < 2:
         return
 
-    # NB: this kernel runs OUTSIDE any tape (warm-start state update), so
-    # early-returns/continues would be safe here for gradient purposes.
-    # Kept SSA-style for consistency with cluster_solve_kernel_ssa.
+    # NB: this kernel runs OUTSIDE any tape (warm-start state update).
+    # Matches the production split-kernel pipeline (centroid + covariance both
+    # alpha-weighted per paper Eq. covariance / bridge) so warm-start aligns
+    # with the actual cluster solve.
     cx_sum = float(0.0); cy_sum = float(0.0); cz_sum = float(0.0); tw = float(0.0)
     for j in range(size):
         pid = particle_ids[start + j]
-        w_raw = alpha[pid]
-        w = wp.where(w_raw < 0.01, 0.0, w_raw)
+        w = alpha[pid]                    # alpha-weighted, no clamp (paper bridge w_i := alpha_v_i)
         p = pred_pos[pid]
         cx_sum = cx_sum + w * p[0]
         cy_sum = cy_sum + w * p[1]
         cz_sum = cz_sum + w * p[2]
         tw = tw + w
-    tw_safe = wp.where(tw < 1.5, 1.0, tw)
+    tw_safe = wp.where(tw < 1.0e-6, 1.0, tw)   # numerical guard for div-by-zero
     cx_mean = cx_sum / tw_safe; cy_mean = cy_sum / tw_safe; cz_mean = cz_sum / tw_safe
 
     qcx_sum = float(0.0); qcy_sum = float(0.0); qcz_sum = float(0.0)
     for j in range(size):
         pid = particle_ids[start + j]
-        w_raw = alpha[pid]
-        w = wp.where(w_raw < 0.01, 0.0, w_raw)
+        w = alpha[pid]
         q = rest_offsets[start + j]
         qcx_sum = qcx_sum + w * q[0]
         qcy_sum = qcy_sum + w * q[1]
         qcz_sum = qcz_sum + w * q[2]
     qcx_mean = qcx_sum / tw_safe; qcy_mean = qcy_sum / tw_safe; qcz_mean = qcz_sum / tw_safe
 
-    # Covariance A_pq — legacy unweighted (skip-dead only). Use BINARY mask
-    # to match legacy forward (NOT alpha-weighted).
+    # Covariance A_pq — alpha-weighted (paper Eq. covariance) + Tikhonov 1e-6.
     a00 = float(0.0); a01 = float(0.0); a02 = float(0.0)
     a10 = float(0.0); a11 = float(0.0); a12 = float(0.0)
     a20 = float(0.0); a21 = float(0.0); a22 = float(0.0)
     for j in range(size):
         pid = particle_ids[start + j]
-        w_raw = alpha[pid]
-        alive = wp.where(w_raw < 0.01, 0.0, 1.0)
+        w = alpha[pid]
         p = pred_pos[pid]
         px = p[0] - cx_mean; py = p[1] - cy_mean; pz = p[2] - cz_mean
         q = rest_offsets[start + j]
         qx = q[0] - qcx_mean; qy = q[1] - qcy_mean; qz = q[2] - qcz_mean
-        a00 = a00 + alive * px * qx; a01 = a01 + alive * px * qy; a02 = a02 + alive * px * qz
-        a10 = a10 + alive * py * qx; a11 = a11 + alive * py * qy; a12 = a12 + alive * py * qz
-        a20 = a20 + alive * pz * qx; a21 = a21 + alive * pz * qy; a22 = a22 + alive * pz * qz
+        a00 = a00 + w * px * qx; a01 = a01 + w * px * qy; a02 = a02 + w * px * qz
+        a10 = a10 + w * py * qx; a11 = a11 + w * py * qy; a12 = a12 + w * py * qz
+        a20 = a20 + w * pz * qx; a21 = a21 + w * pz * qy; a22 = a22 + w * pz * qz
 
-    A = wp.mat33(a00, a01, a02, a10, a11, a12, a20, a21, a22)
+    A = wp.mat33(a00 + 1.0e-6, a01,          a02,
+                 a10,          a11 + 1.0e-6, a12,
+                 a20,          a21,          a22 + 1.0e-6)
     q_warm = cluster_quat[cid]
     q_new = extract_rotation_muller(A, q_warm, num_iter)
     cluster_quat[cid] = q_new
@@ -711,6 +906,48 @@ def apply_shape_delta_kernel(
     wp.atomic_add(pred_pos, i, shape_delta[i])
 
 
+# ============== SSA (cycle-scoped) Layer A apply kernels (2026-05-05) ==============
+# Replace apply_shape_delta_kernel + apply_collision_delta_kernel (which do
+# wp.atomic_add(pred_pos, ...) in-place) with separate-output-buffer variants.
+#
+# Bug fixed: 6-iter Jacobi loop's apply_shape_delta_kernel writing pred_pos
+# in-place creates cross-launch R-W-R when next iter's cluster_solve_kernel_ssa
+# reads pred_pos. Backward bias amplifies ~40× per iter; over 6 iters
+# 40^6 ≈ 4e9 ≈ measured 5.3e9× off vs FD on knife_pos.
+#
+# Falsification chain: tools/path4_falsification_test_{C..J}.py.
+# Reference template: NVIDIA Newton solver_xpbd kernels.py apply_particle_deltas
+# (newton-physics/newton main branch).
+# Warp-canonical idiom: docs/user_guide/differentiability.rst lines 1268-1271
+# "allocate two force arrays, force0 and force1, so that we are not overwriting
+# data that participates in the computation graph".
+
+@wp.kernel
+def apply_shape_delta_ssa_kernel(
+    pred_pos_in:  wp.array(dtype=wp.vec3),    # READ
+    shape_delta:  wp.array(dtype=wp.vec3),    # READ
+    pred_pos_out: wp.array(dtype=wp.vec3),    # WRITE (fresh buffer per Jacobi iter)
+):
+    """Newton-style SSA: pred_pos_out[i] = pred_pos_in[i] + shape_delta[i].
+    Caller allocates a fresh pred_pos_out via wp.empty_like before each
+    Jacobi-iter launch and rebinds self.p["pred_pos"] = pred_pos_out after."""
+    i = wp.tid()
+    pred_pos_out[i] = pred_pos_in[i] + shape_delta[i]
+
+
+@wp.kernel
+def apply_collision_delta_ssa_kernel(
+    pred_pos_in:     wp.array(dtype=wp.vec3),
+    collision_delta: wp.array(dtype=wp.vec3),
+    pred_pos_out:    wp.array(dtype=wp.vec3),
+):
+    """Newton-style SSA: pred_pos_out[i] = pred_pos_in[i] + collision_delta[i].
+    Same pattern as apply_shape_delta_ssa_kernel, used both pre-loop and
+    in Jacobi loop for collision delta application."""
+    i = wp.tid()
+    pred_pos_out[i] = pred_pos_in[i] + collision_delta[i]
+
+
 # ============== Update Velocity ==============
 
 @wp.kernel
@@ -723,12 +960,60 @@ def update_velocity_kernel(
     fixed: wp.array(dtype=wp.int32),
     inv_dt: float,
 ):
+    """LEGACY — alpha-based early return is tape-hostile (silent zero pattern
+    that Stage A/B/C 2026-04-22 fixed elsewhere but missed here). Kept for
+    forward-only paths. Backward-correct version: update_velocity_kernel_ssa."""
     i = wp.tid()
     if alpha[i] < 0.01 or fixed[i] == 1:
         return
 
     vel[i] = (pred_pos[i] - old_pos[i]) * inv_dt
     pos[i] = pred_pos[i]
+
+
+# ============== Update Velocity (SSA — Phase 2C 2026-05-07) ==============
+# Replaces alpha-based early return with wp.where masking. Writes to fresh
+# pos_out, vel_out buffers (caller reassigns). Eliminates Stage A/B/C-class
+# silent gradient zero when cutting fires within tape (alpha changes, then
+# update_velocity reads alpha AND writes pos in-place → R-W-R contamination).
+#
+# Forward semantic identical to update_velocity_kernel:
+#   alive (alpha ≥ 0.01) AND not fixed → vel = (pred_pos - old_pos)/dt; pos = pred_pos
+#   else                                → vel, pos preserved from previous substep
+#
+# Verified by Phase 2C Day 4-F test (2026-05-07): with-cutting ratio 0.094 → 0.94.
+
+@wp.kernel
+def update_velocity_kernel_ssa(
+    pos_in: wp.array(dtype=wp.vec3),         # IN: previous-substep pos
+    vel_in: wp.array(dtype=wp.vec3),         # IN: previous-substep vel
+    pred_pos: wp.array(dtype=wp.vec3),
+    old_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    inv_dt: float,
+    pos_out: wp.array(dtype=wp.vec3),        # OUT: new pos
+    vel_out: wp.array(dtype=wp.vec3),        # OUT: new vel
+):
+    """SSA Phase 2C: wp.where mask + cycle-scoped output buffers."""
+    i = wp.tid()
+
+    a = alpha[i]
+    f = fixed[i]
+    # SIGMOID mask experiment 2026-05-07 — replace discrete wp.where with smooth
+    # sigmoid (k=40 narrow transition at a=0.01) to test if mask discreteness
+    # was the core cause of with-cutting ratio 0.094 bias.
+    alive = float(1.0) / (float(1.0) + wp.exp(-40.0 * (a - 0.01)))
+    not_fixed = wp.where(f == 1, 0.0, 1.0)
+    mask = alive * not_fixed
+
+    # always compute updated values; mask blends with input
+    new_vel = (pred_pos[i] - old_pos[i]) * inv_dt
+    new_pos = pred_pos[i]
+
+    # masked write: alive → new value; dead/fixed → preserve previous
+    vel_out[i] = mask * new_vel + (1.0 - mask) * vel_in[i]
+    pos_out[i] = mask * new_pos + (1.0 - mask) * pos_in[i]
 
 
 # ============== Batched Collision (per-env knife_pos) ==============

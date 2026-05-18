@@ -1,0 +1,93 @@
+% ============================================================
+% Section 3.1 — Differentiable Shape-Matching PBD Substrate
+% Target: ~0.8 page of 2-column IEEE conference format
+% Status: 3rd DRAFT 2026-05-15 (REORDERED — was P(F) definition.
+%         Now PBD substrate precedes P(F): reader sees the w_i
+%         interface BEFORE the α extension fills it, so the
+%         w_i := α bridge in §3.2 lands as the climax rather
+%         than a forward reference. Filename kept; content swapped.)
+% ============================================================
+
+\subsection{Differentiable Shape-Matching PBD Substrate}
+\label{sec:pbd-substrate}
+
+% --- Paragraph 1: Motivation + contrast with FEM/XPBD ---
+We build on shape-matching PBD~\cite{muller2005}. At each substep,
+every cluster fits a single rigid rotation between its rest and
+current configurations in closed form, and pulls each particle
+part-way toward the rotated rest. There is no global system to
+invert---unlike the linear solve FEM issues every step or the
+constraint loop XPBD~\cite{macklin2016xpbd} runs over the whole mesh.
+
+% --- Paragraph 2: Cluster def + 4-step math derivation + diff claim ---
+Concretely, the mesh is divided into overlapping clusters
+$\{C_1, C_2, \ldots\}$---small groups of nearby vertices that share a
+remembered rest shape. Fix one cluster $C$ with current particle
+positions $\{\mathbf{p}_i\}_{i \in C} \subset \mathbb{R}^3$, per-vertex
+weights $\{w_i\}_{i \in C} \subset \mathbb{R}_{\geq 0}$, and rest
+positions $\{\bar{\mathbf{p}}_i\}_{i \in C} \subset \mathbb{R}^3$; the
+per-cluster solve proceeds in four steps. First, the cluster's weighted
+centroids of the current and rest configurations
+$\boldsymbol{\mu}_C, \bar{\boldsymbol{\mu}}_C \in \mathbb{R}^3$ are
+\begin{equation}
+  \boldsymbol{\mu}_C \!=\!
+    \frac{\sum_{i \in C} w_i \mathbf{p}_i}{\sum_{i \in C} w_i},
+  \quad
+  \bar{\boldsymbol{\mu}}_C \!=\!
+    \frac{\sum_{i \in C} w_i \bar{\mathbf{p}}_i}{\sum_{i \in C} w_i};
+  \label{eq:centroid}
+\end{equation}
+aligning these two centroids absorbs the cluster's translation, so the
+remaining task is to recover a pure rotation. Second, the cluster's
+cross-covariance matrix $A_C \in \mathbb{R}^{3 \times 3}$ encodes how
+current deviations from $\boldsymbol{\mu}_C$ relate to rest deviations
+from $\bar{\boldsymbol{\mu}}_C$,
+\begin{equation}
+  A_C = \sum_{i \in C} w_i\,(\mathbf{p}_i - \boldsymbol{\mu}_C)
+                            (\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}}_C)^\top.
+  \label{eq:covariance}
+\end{equation}
+Third, the cluster's rotation $R_C \in \mathrm{SO}(3)$ is the orthogonal
+factor in the polar decomposition $A_C = R_C S_C$, recovered by a short
+fixed iteration of quaternion updates~\cite{muller2016}; aligning the
+two centroids fixes the cluster's implicit translation
+$\mathbf{t}_C \!=\! \boldsymbol{\mu}_C - R_C \bar{\boldsymbol{\mu}}_C
+\in \mathbb{R}^3$, so $R_C$ is the only quantity we explicitly solve.
+Finally, each particle $i \in C$ is pulled toward a goal position
+$\mathbf{g}_i$ and contributes a per-cluster correction $\Delta_i$,
+\begin{equation}
+  \mathbf{g}_i \!=\! R_C(\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}}_C)
+                       + \boldsymbol{\mu}_C
+                \!=\! R_C \bar{\mathbf{p}}_i + \mathbf{t}_C,
+  \quad
+  \Delta_i \!=\! w_i (\mathbf{g}_i - \mathbf{p}_i)
+            \in \mathbb{R}^3.
+  \label{eq:cluster-correction}
+\end{equation}
+Every operation in (\ref{eq:centroid})--(\ref{eq:cluster-correction})
+is smooth in $\mathbf{p}_i$ and $w_i$: the weighted sums and outer
+product are bilinear, the polar iteration is branch-free quaternion
+arithmetic, and the goal map is linear. Gradients therefore flow
+analytically through each cluster solve with no special-case handling.
+
+% --- Paragraph 3: K Jacobi + w_i is the only modulation interface +
+%     forward hook to §3.2 (the bridge) ---
+At each substep, $K$ such cluster solves run in parallel on the GPU in
+a Jacobi pattern: every cluster reads the same shared state in each
+iteration, and the per-vertex corrections from overlapping clusters
+are aggregated into a fresh state for the next iteration. The
+per-vertex weight $w_i$ in
+(\ref{eq:centroid})--(\ref{eq:cluster-correction}) is the \emph{only}
+interface through which a vertex's participation in its overlapping
+clusters can be modulated: it appears in the centroid (so a low-weight
+vertex barely moves $\boldsymbol{\mu}_C, \bar{\boldsymbol{\mu}}_C$), in
+the covariance (so it barely steers $R_C$), and in the correction
+(so it is barely pulled back toward $\mathbf{g}_i$). In standard PBD
+cutting, topology change is realised by discretely flipping
+$w_i \!\to\! 0$ for severed vertices, which destroys the smoothness in
+$w_i$ that (\ref{eq:centroid})--(\ref{eq:cluster-correction}) require
+for end-to-end differentiation. The next section
+(\S\ref{sec:pf-cutting}) replaces this discrete switch with a
+continuous damage field $P(F)$ whose induced soft-removal mask is
+routed back into $w_i$, providing the bridge between continuous
+topology change and differentiable shape matching.

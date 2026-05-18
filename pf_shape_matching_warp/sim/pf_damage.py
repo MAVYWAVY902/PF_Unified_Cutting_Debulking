@@ -279,6 +279,172 @@ def update_soft_removal_kernel(
     alpha[i] = 1.0 / (1.0 + wp.exp(exp_arg))
 
 
+# ============== Soft Removal (SSA cycle-scoped variant) ==============
+# Path B+ Stage B (2026-05-01): cycle-scoped buffer pattern fixes the
+# cross-kernel read-write-read on alpha that produced silent-zero gradients
+# in autograd backward (PlasticineLab "detach-reattach" failure, §3.4).
+#
+# Verified by tools/poc_soft_removal_ssa_v3_full.py:
+#   ∂loss/∂sharpness  rel_err 0.95%  vs FD
+#   ∂loss/∂alpha_min  rel_err 0.11%  vs FD
+#   no verify_autograd_array_access warnings
+#
+# Pattern: read alpha_prev (gating + carry-over), write alpha_next (different
+# buffer). Caller responsible for buffer-list management (alpha_buffers[c],
+# alpha_buffers[c+1]). Mirrors NVIDIA Warp example_fluid_checkpoint.py
+# (line 197-303 Jacobi pressure solver).
+
+@wp.kernel
+def update_soft_removal_kernel_ssa(
+    damage: wp.array(dtype=wp.float32),
+    alpha_prev: wp.array(dtype=wp.float32),       # READ ONLY (gating + carry-over)
+    fixed: wp.array(dtype=wp.int32),
+    threshold: float,
+    sharpness: float,
+    alpha_next: wp.array(dtype=wp.float32),       # WRITE ONLY (separate buffer)
+):
+    """SSA cycle-scoped variant of update_soft_removal_kernel.
+
+    Reads alpha_prev (used for fixed-particle carry-over and as upstream input
+    that other kernels in this cycle may have read). Writes alpha_next (the
+    cycle's output, which becomes the next cycle's alpha_prev).
+    """
+    i = wp.tid()
+    if fixed[i] == 1:
+        alpha_next[i] = alpha_prev[i]   # carry over fixed particles unchanged
+        return
+
+    d = damage[i]
+    exp_arg = wp.clamp(sharpness * (d - threshold), -50.0, 50.0)
+    alpha_next[i] = 1.0 / (1.0 + wp.exp(exp_arg))
+
+
+# ============== SSA "apply" kernels for cycle-scoped state ==============
+# These replace the in-place atomic_add pattern of apply_edge_damage_delta_kernel
+# and apply_particle_damage_delta_kernel with explicit prev + delta -> next
+# semantics. Used only when caller is in cycle-scoped buffer mode.
+#
+# The legacy apply_*_delta_kernel are kept for forward-only paths (RL eval,
+# non-gradient pipelines) where in-place atomic_add is fine.
+
+@wp.kernel
+def apply_edge_damage_ssa_kernel(
+    edge_damage_prev: wp.array(dtype=wp.float32),       # READ
+    edge_damage_delta: wp.array(dtype=wp.float32),      # READ
+    edge_damage_next: wp.array(dtype=wp.float32),       # WRITE (different buffer)
+):
+    """SSA: edge_damage_next[i] = edge_damage_prev[i] + edge_damage_delta[i].
+    Replaces apply_edge_damage_delta_kernel's in-place atomic_add for the
+    cycle-scoped buffer path."""
+    eid = wp.tid()
+    edge_damage_next[eid] = edge_damage_prev[eid] + edge_damage_delta[eid]
+
+
+@wp.kernel
+def apply_particle_damage_ssa_kernel(
+    particle_damage_prev: wp.array(dtype=wp.float32),   # READ
+    particle_damage_delta: wp.array(dtype=wp.float32),  # READ
+    particle_damage_next: wp.array(dtype=wp.float32),   # WRITE (different buffer)
+):
+    """SSA: particle_damage_next[i] = particle_damage_prev[i] + particle_damage_delta[i].
+    Replaces apply_particle_damage_delta_kernel's in-place atomic_add for the
+    cycle-scoped buffer path."""
+    i = wp.tid()
+    particle_damage_next[i] = particle_damage_prev[i] + particle_damage_delta[i]
+
+
+# ============== Calibration variants (wp.array params for autograd) ==============
+# These kernel variants are bit-identical to their float-param counterparts but
+# take material/cutting parameters as wp.array(requires_grad=True) so that
+# Warp tape autograd can track ∂loss/∂(alpha_min, sharpness, ...).
+#
+# Use case: Stage 2.2 calibration (calibrate_stage2_autograd.py). RL eval and
+# normal forward sim should use the float-param variants for slightly better
+# performance (no array indexing per kernel launch).
+
+@wp.kernel
+def update_edge_damage_kernel_ssa_param_arr(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    edge_a: wp.array(dtype=wp.int32),
+    edge_b: wp.array(dtype=wp.int32),
+    pf_rest: wp.array(dtype=wp.float32),
+    edge_damage: wp.array(dtype=wp.float32),
+    knife_pos: wp.array(dtype=wp.vec3),
+    knife_radius_arr: wp.array(dtype=wp.float32),
+    alpha_min_arr: wp.array(dtype=wp.float32),
+    edge_damage_delta: wp.array(dtype=wp.float32),
+):
+    """Same SSA logic as update_edge_damage_kernel_ssa, but knife_radius
+    and alpha_min are wp.array(requires_grad=True) for autograd tracking.
+    """
+    eid = wp.tid()
+    a = edge_a[eid]
+    b = edge_b[eid]
+    if alpha[a] < 0.01 or alpha[b] < 0.01:
+        return
+
+    pa = pred_pos[a]
+    pb = pred_pos[b]
+    mid = (pa + pb) * 0.5
+
+    knife_radius = knife_radius_arr[0]
+    alpha_min = alpha_min_arr[0]
+
+    kp = knife_pos[0]
+    diff = mid - kp
+    dist_sq = wp.dot(diff, diff)
+    dist_to_center = wp.sqrt(dist_sq + 1.0e-8)
+
+    if dist_to_center > knife_radius * 1.3:
+        return
+
+    edge_vec = pa - pb
+    edge_len_sq = wp.dot(edge_vec, edge_vec)
+    radius = wp.sqrt(edge_len_sq + 1.0e-8) * 0.5
+    if radius < 1.0e-4:
+        return
+
+    intruder_dist = dist_to_center - knife_radius
+    sdist = intruder_dist - radius
+    exp_arg = wp.clamp(-alpha_min * sdist / radius, -50.0, 50.0)
+    pf = 1.0 / (1.0 + wp.exp(exp_arg))
+
+    rest = pf_rest[eid]
+    rest_safe = wp.where(rest > 0.01, rest, 1.0)
+    target = 1.0 - pf / rest_safe
+    target_clamped = wp.log(1.0 + wp.exp(wp.clamp(20.0 * target, -50.0, 50.0))) / 20.0
+    current = edge_damage[eid]
+    dmg_diff = target_clamped - current
+    increment_raw = wp.log(1.0 + wp.exp(wp.clamp(10.0 * dmg_diff, -50.0, 50.0))) / 10.0
+    increment = wp.where(rest > 0.01, increment_raw, 0.0)
+
+    wp.atomic_add(edge_damage_delta, eid, increment)
+
+
+@wp.kernel
+def update_soft_removal_kernel_ssa_param_arr(
+    damage: wp.array(dtype=wp.float32),
+    alpha_prev: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    threshold_arr: wp.array(dtype=wp.float32),
+    sharpness_arr: wp.array(dtype=wp.float32),
+    alpha_next: wp.array(dtype=wp.float32),
+):
+    """Same SSA logic as update_soft_removal_kernel_ssa, but threshold
+    and sharpness are wp.array(requires_grad=True) for autograd tracking.
+    """
+    i = wp.tid()
+    if fixed[i] == 1:
+        alpha_next[i] = alpha_prev[i]
+        return
+    threshold = threshold_arr[0]
+    sharpness = sharpness_arr[0]
+    d = damage[i]
+    exp_arg = wp.clamp(sharpness * (d - threshold), -50.0, 50.0)
+    alpha_next[i] = 1.0 / (1.0 + wp.exp(exp_arg))
+
+
 # ============== Batched Edge Damage (per-env knife_pos) ==============
 
 @wp.kernel

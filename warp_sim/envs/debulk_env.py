@@ -194,6 +194,10 @@ class DebulkEnv(gym.Env):
         self.solver.substeps = 1
         self.solver.knife_radius = self.knife_radius
         self.solver.cutting_update_interval = self.sim_substeps
+        self.solver.use_ssa_soft_removal = bool(cfg.get("use_ssa_soft_removal", False))
+        # Phase 2B (2026-05-07): split cluster_solve mode for Layer A backward
+        # correctness. Default False; opt-in via cfg.
+        self.solver.use_split_cluster_solve = bool(cfg.get("use_split_cluster_solve", False))
 
     def _build_nerve_mask(self, cfg):
         N = self.solver.N
@@ -361,6 +365,12 @@ class DebulkEnv(gym.Env):
         # cluster_quat retains stale rotation from previous episode and Müller
         # iterates from a bad starting point.
         self.solver.reset_cluster_quat()
+        # Path B+ Stage B (2026-05-01): reset cycle-scoped SSA buffer state if
+        # active. No-op in legacy mode. Mirrors reset_cluster_quat as a
+        # "solver-internal state reset between episodes". Without this, cycle
+        # index and buffer contents persist across episodes, causing eventual
+        # capacity exhaustion (RuntimeError) and wrong gradients.
+        self.solver.reset_ssa_buffers()
         self.solver.step_count = 0
         self.step_count = 0
 
@@ -408,6 +418,14 @@ class DebulkEnv(gym.Env):
         for _ in range(self.sim_substeps):
             self.solver._substep()
         wp.synchronize()
+
+        # 4b. Path B+ Stage B (2026-05-01): mirror SSA cycle-scoped state into
+        # self.solver.p["alpha"]/p["damage"]/e["damage"] for downstream
+        # reward/obs/tactile code that reads these directly. No-op in legacy
+        # mode. Must run OUTSIDE any tape recording — env.step is the
+        # non-tape RL/eval interface (calibrators use solver._substep directly
+        # inside their own tape, NOT env.step).
+        self.solver.snapshot_to_p_arrays()
 
         # 5a. Compute tactile feature (M3.4) for next obs — BEFORE reward, since
         #     helpers snapshot/restore solver state. After this call, state == post-physics.

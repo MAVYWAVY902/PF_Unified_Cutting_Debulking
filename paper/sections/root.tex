@@ -1,0 +1,561 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}  % Comment this line out if you need a4paper
+
+%\documentclass[a4paper, 10pt, conference]{ieeeconf}      % Use this line for a4 paper
+
+% \IEEEoverridecommandlockouts                              % This command is only needed if 
+%                                                           % you want to use the \thanks command
+
+% \overrideIEEEmargins                                      % Needed to meet printer requirements.
+
+% %In case you encounter the following error:
+% %Error 1010 The PDF file may be corrupt (unable to open PDF file) OR
+% %Error 1000 An error occurred while parsing a contents stream. Unable to analyze the PDF file.
+% %This is a known problem with pdfLaTeX conversion filter. The file cannot be opened with acrobat reader
+% %Please use one of the alternatives below to circumvent this error by uncommenting one or the other
+% %\pdfobjcompresslevel=0
+% %\pdfminorversion=4
+
+% % See the \addtolength command later in the file to balance the column lengths
+% % on the last page of the document
+
+% % The following packages can be found on http:\\www.ctan.org
+% \usepackage{graphics} % for pdf, bitmapped graphics files
+% \usepackage{epsfig} % for postscript graphics files
+% \usepackage{mathptmx} % assumes new font selection scheme installed
+% \usepackage{times} % assumes new font selection scheme installed
+% \usepackage{amsmath} % assumes amsmath package installed
+% \usepackage{amssymb}  % assumes amsmath package installed
+% \usepackage{array}
+% \usepackage[caption=false]{subfig}
+% \usepackage{textcomp}
+% \usepackage{stfloats}
+% \usepackage{url}
+% \usepackage{verbatim}
+% \usepackage{graphicx}
+% \usepackage{amsmath} % assumes amsmath package installed
+% \usepackage{amssymb}  % assumes amsmath package installed
+% \usepackage{booktabs}
+% \usepackage{enumitem}
+% \usepackage{adjustbox}
+% \usepackage{tabularx}
+% \usepackage{makecell}
+% \usepackage{color}
+% \usepackage{array} 
+% \usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+% \usepackage{newtxtext}
+% \usepackage{newtxmath}
+
+
+\usepackage{amsmath,amsfonts}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage{xcolor}
+\SetKwInOut{Input}{Input}
+\SetKwInOut{Output}{Output}
+\newcommand{\mycmt}[1]{\tcp*[f]{\textcolor{green!50!black}{\fontsize{7}{8}\selectfont #1}}}
+\SetAlgoSkip{0.4em}
+\SetAlCapSkip{0.3em}
+\SetAlgoInsideSkip{0.4em}
+\DontPrintSemicolon
+\SetKwComment{Comment}{$\triangleright$\ }{}
+
+\usepackage{array}
+\usepackage[caption=false]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{graphics}
+\usepackage{epsfig}
+\usepackage{newtxtext}
+\usepackage{newtxmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{adjustbox}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{color}
+\usepackage{titlesec}
+\usepackage{amsthm}
+\usepackage{hyperref}
+\usepackage{float}
+
+\titlespacing*{\subsection}{0pt}{0.6\baselineskip}{0.3\baselineskip}
+\titlespacing*{\subsubsection}{0pt}{0.5\baselineskip}{0.25\baselineskip}
+\titlespacing*{\section}{0pt}{0.7\baselineskip}{0.35\baselineskip}
+
+\SetAlFnt{\footnotesize}
+\SetAlCapFnt{\footnotesize}
+
+\newtheoremstyle{tight}{2pt}{2pt}{\itshape}{}{\bfseries}{.}{0.5em}{}
+\theoremstyle{tight}
+\newtheorem{assumption}{Assumption}
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
+
+\captionsetup[figure]{
+  font=footnotesize,
+  labelfont=bf,
+  labelsep=colon,
+  justification=justified,
+}
+
+\captionsetup[subfloat]{
+  labelformat=simple,
+  textformat=empty,
+  position=bottom,
+  skip=2pt,
+  justification=centering
+}
+
+\renewcommand{\thesubfigure}{(\alph{subfigure})}
+
+
+\title{\LARGE \bf
+ReSeCT: Real-Time Differentiable Simulation under Continuous Topology Change for Soft-Tissue System Identification
+}
+
+
+% \author{Author Omitted for Review}
+\author{Yunxin Fan, Doug L. James, Monroe Kennedy III, Nikolas Blevins}
+
+
+\begin{document}
+
+
+
+\maketitle
+\thispagestyle{empty}
+\pagestyle{empty}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+
+Deformable object simulation, especially cutting and debulking, remains a challenging task due to its natural property of topology changing. Furthermore, this simulation mostly in forward manner where the backpropagation is not allowed, which is not applicable for leanring based task integration. Surgical scene, tissue or tumor property is always ill-define/evaluate domain, where the mechanics of tissue and tumor is always hard to calibrate. In this paper, we proposed a 
+
+\end{abstract}
+
+% ============================================================
+% Section 3.1 — Differentiable Shape-Matching PBD Substrate
+% Target: ~0.8 page of 2-column IEEE conference format
+% Status: 3rd DRAFT 2026-05-15 (REORDERED — was P(F) definition.
+%         Now PBD substrate precedes P(F): reader sees the w_i
+%         interface BEFORE the α extension fills it, so the
+%         w_i := α bridge in §3.2 lands as the climax rather
+%         than a forward reference. Filename kept; content swapped.)
+% ============================================================
+
+\subsection{Differentiable Shape-Matching PBD Solver}
+\label{sec:pbd-substrate}
+
+% --- Paragraph 1: Motivation + contrast with FEM/XPBD ---
+We build on shape-matching PBD~\cite{muller2005} for its real-time,
+end-to-end differentiable cluster solves: each cluster aligns its rest
+shape with its current particles by centering both at their weighted
+centroids and then solving for the rotation that best matches them,
+and pulls each particle part-way back toward this aligned rest---all
+through operations smooth in the inputs. Because everything stays
+local to the cluster (centroid, covariance, rotation, goal
+positions---all over its own particles), we avoid the global linear
+system FEM solves every step, and the iterative constraint projection
+XPBD~\cite{macklin2016xpbd} runs over the whole mesh.
+
+% --- Paragraph 1: Motivation + contrast with FEM/XPBD ---
+We build on shape-matching PBD~\cite{muller2005}. At each substep,
+every cluster fits a single rigid rotation between its rest and
+current configurations in closed form, and pulls each particle
+part-way toward the rotated rest. There is no global system to
+invert---unlike the linear solve FEM issues every step or the
+constraint loop XPBD~\cite{macklin2016xpbd} runs over the whole mesh.
+
+% --- Paragraph 2: Cluster def + 4-step math derivation + diff claim ---
+Concretely, the mesh is divided into overlapping clusters
+$\{C_1, C_2, \ldots\}$---small groups of nearby vertices that share a
+remembered rest shape. Fix one cluster $C$ with current particle
+positions $\{\mathbf{p}_i\}_{i \in C} \subset \mathbb{R}^3$, per-vertex
+weights $\{w_i\}_{i \in C} \subset \mathbb{R}_{\geq 0}$, and rest
+positions $\{\bar{\mathbf{p}}_i\}_{i \in C} \subset \mathbb{R}^3$; the
+per-cluster solve proceeds in four steps. First, the cluster's weighted
+centroids of the current and rest configurations
+$\boldsymbol{\mu}_C, \bar{\boldsymbol{\mu}}_C \in \mathbb{R}^3$ are
+\begin{equation}
+  \boldsymbol{\mu}_C \!=\!
+    \frac{\sum_{i \in C} w_i \mathbf{p}_i}{\sum_{i \in C} w_i},
+  \quad
+  \bar{\boldsymbol{\mu}}_C \!=\!
+    \frac{\sum_{i \in C} w_i \bar{\mathbf{p}}_i}{\sum_{i \in C} w_i};
+  \label{eq:centroid}
+\end{equation}
+aligning these two centroids absorbs the cluster's translation, so the
+remaining task is to recover a pure rotation. Second, the cluster's
+cross-covariance matrix $A_C \in \mathbb{R}^{3 \times 3}$ encodes how
+current deviations from $\boldsymbol{\mu}_C$ relate to rest deviations
+from $\bar{\boldsymbol{\mu}}_C$,
+\begin{equation}
+  A_C = \sum_{i \in C} w_i\,(\mathbf{p}_i - \boldsymbol{\mu}_C)
+                            (\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}}_C)^\top.
+  \label{eq:covariance}
+\end{equation}
+Third, the cluster's rotation $R_C \in \mathrm{SO}(3)$ is the orthogonal
+factor in the polar decomposition $A_C = R_C S_C$, recovered by a short
+fixed iteration of quaternion updates~\cite{muller2016}; aligning the
+two centroids fixes the cluster's implicit translation
+$\mathbf{t}_C \!=\! \boldsymbol{\mu}_C - R_C \bar{\boldsymbol{\mu}}_C
+\in \mathbb{R}^3$, so $R_C$ is the only quantity we explicitly solve.
+Finally, each particle $i \in C$ is pulled toward a goal position
+$\mathbf{g}_i$ and contributes a per-cluster correction $\Delta_i$,
+\begin{equation}
+  \mathbf{g}_i \!=\! R_C(\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}}_C)
+                       + \boldsymbol{\mu}_C
+                \!=\! R_C \bar{\mathbf{p}}_i + \mathbf{t}_C,
+  \quad
+  \Delta_i \!=\! w_i (\mathbf{g}_i - \mathbf{p}_i)
+            \in \mathbb{R}^3.
+  \label{eq:cluster-correction}
+\end{equation}
+Every operation in (\ref{eq:centroid})--(\ref{eq:cluster-correction})
+is smooth in $\mathbf{p}_i$ and $w_i$: the weighted sums and outer
+product are bilinear, the polar iteration is branch-free quaternion
+arithmetic, and the goal map is linear. Gradients therefore flow
+analytically through each cluster solve with no special-case handling.
+
+% --- Paragraph 3: K Jacobi + w_i is the only modulation interface +
+%     forward hook to §3.2 (the bridge) ---
+At each substep, $K$ such cluster solves run in parallel on the GPU in
+a Jacobi pattern: every cluster reads the same shared state in each
+iteration, and the per-vertex corrections from overlapping clusters
+are aggregated into a fresh state for the next iteration. The
+per-vertex weight $w_i$ in
+(\ref{eq:centroid})--(\ref{eq:cluster-correction}) is the \emph{only}
+interface through which a vertex's participation in its overlapping
+clusters can be modulated: it appears in the centroid (so a low-weight
+vertex barely moves $\boldsymbol{\mu}_C, \bar{\boldsymbol{\mu}}_C$), in
+the covariance (so it barely steers $R_C$), and in the correction
+(so it is barely pulled back toward $\mathbf{g}_i$). In standard PBD
+cutting, topology change is realised by discretely flipping
+$w_i \!\to\! 0$ for severed vertices, which destroys the smoothness in
+$w_i$ that (\ref{eq:centroid})--(\ref{eq:cluster-correction}) require
+for end-to-end differentiation. The next section
+(\S\ref{sec:pf-cutting}) replaces this discrete switch with a
+continuous damage field $P(F)$ whose induced soft-removal mask is
+routed back into $w_i$, providing the bridge between continuous
+topology change and differentiable shape matching.
+% \section{INTRODUCTION}
+
+% 1. topology changing simulation.
+% 2. differentiable deformable simulation.
+% 3. reinforcement learning for differentiable deformable simulation.
+
+% \section{PROCEDURE FOR PAPER SUBMISSION}
+
+% \subsection{Selecting a Template (Heading 2)}
+
+% First, confirm that you have the correct template for your paper size. This template has been tailored for output on the US-letter paper size. 
+% It may be used for A4 paper size if the paper size setting is suitably modified.
+
+% \subsection{Maintaining the Integrity of the Specifications}
+
+% The template is used to format your paper and style the text. All margins, column widths, line spaces, and text fonts are prescribed; please do not alter them. You may note peculiarities. For example, the head margin in this template measures proportionately more than is customary. This measurement and others are deliberate, using specifications that anticipate your paper as one part of the entire proceedings, and not as an independent document. Please do not revise any of the current designations
+
+\subsection{Continuous Topology Change via Soft Cluster Weights}
+\label{sec:pf-cutting}
+
+% --- Block 1: high-level definition + edge-level instantiation justifications ---
+We define $P(F)$ as the differentiable probability that a topological
+feature $F$ remains intact under intruder geometry. Although the symbol
+$F$ may suggest a $2$-simplex (face) reading, we instantiate $F$ at the
+edge level ($1$-simplex) for two reasons. First, edges are the natural
+cutting unit for tetrahedral meshes: a knife body $I$ carries a
+$3$-dimensional volume that intersects each edge's local circumsphere
+with positive $3$-measure, yielding a continuous and well-defined
+gradient signal, whereas a face-level formulation would integrate over
+a $2$-dimensional surface with intersection regions one dimension lower
+and a correspondingly weaker signal. Second, edges are sufficient in the simplicial sense: face and tet
+existence reduce to products of edge probabilities. Let $F$ denote the
+event ``the feature is intact'', let $e$, $f$, and $T$ denote a single
+edge ($1$-simplex), face ($2$-simplex), and tet ($3$-simplex)
+respectively, and let $e \in f$ (resp. $e \in T$) range over the three
+(resp. six) edges bounding $f$ (resp. $T$). Treating the existence of
+a face or tet as the joint event ``all of its constituent edges are
+intact'', and assuming the conditional independence of those edge
+events given the intruder $I$, we obtain
+\begin{equation}
+  P(F \mid f, I) \!=\! \prod_{e \in f}\!P(F \mid e, I),
+  \quad
+  P(F \mid T, I) \!=\! \prod_{e \in T}\!P(F \mid e, I).
+  \label{eq:simplicial-product}
+\end{equation}
+Hence the edge-level $P(F)$ strictly subsumes its face- and tet-level
+counterparts, while the converse does not hold.
+
+% --- Block 2: P(F) precise definition + properties ---
+We now make $P(F)$ precise. Consider a tetrahedral mesh
+$\mathcal{M} = (\mathcal{V}, \mathcal{E}, \mathcal{F}, \mathcal{T})$ with
+current vertex positions $\mathbf{p}: \mathcal{V} \to \mathbb{R}^3$, and
+an intruder $I = (\mathbf{c}_I, R_I)$---a rigid spherical body
+instantiated either as the knife during cutting or, at rest, as the
+nearest non-adjacent vertex of each edge (a proxy for natural mesh
+density). For an edge $e = (v_a, v_b)$ with midpoint
+$\mathbf{m}_e = \tfrac{1}{2}(\mathbf{p}_a + \mathbf{p}_b)$ and
+half-length $r_e = \tfrac{1}{2}\|\mathbf{p}_a - \mathbf{p}_b\|$, the
+signed distance $d$ between the edge's circumsphere
+$B(\mathbf{m}_e, r_e)$ and the intruder $B(\mathbf{c}_I, R_I)$ is
+\begin{equation}
+  d(e, I) \;=\; \|\mathbf{m}_e - \mathbf{c}_I\| - R_I - r_e ,
+  \label{eq:sdist}
+\end{equation}
+positive when the spheres are disjoint, zero at tangency, and negative
+under penetration. The differentiable existence probability is then
+\begin{equation}
+  P(F \mid e, I)
+  \;=\; \sigma\!\left(-\,k\,\frac{d(e, I)}{r_e}\right) ,
+  \label{eq:pf}
+\end{equation}
+where $\sigma(x) = \frac{1}{1+e^{-x}}$ and $k > 0$ is a sharpness
+parameter. The dimensionless ratio $\frac{|d|}{r_e}$ is scale-invariant in the
+mesh, so $k$ carries a unit-free meaning. By sigmoid saturation,
+$P(F) \to 1$ when the intruder is far ($d \gg 0$), $P(F) \to 0$ under
+deep penetration ($d \ll 0$), and $P(F) = \tfrac{1}{2}$ at tangency.
+The construction is $C^\infty$ in vertex and intruder positions
+wherever $r_e > 0$; the only singularity at $r_e = 0$ is regularized
+in practice as
+$r_e \!\leftarrow\! \sqrt{r_e^2 + \varepsilon^2}$ with
+$\varepsilon \!=\! 10^{-4}$, ensuring autograd compatibility throughout.
+
+% --- Block 3: damage chain (P(F) → δ_e → δ_v → α) ---
+$P(F)$ propagates to a per-vertex soft-removal mask $\alpha$ through
+three smooth maps. First, $P(F)$ accumulates into a per-edge damage
+state through a monotonic softplus update that encodes the physical
+irreversibility of cutting,
+\begin{equation}
+  \delta_e^{\text{next}} \!=\! \delta_e^{\text{prev}} +
+    \mathrm{softplus}_{\!+}\!\left(1 \!-\! \frac{P(F)_e}{P(F)_e^{\text{rest}}}\right),
+  \label{eq:edge-damage}
+\end{equation}
+where $\mathrm{softplus}_{\!+}(x) \!=\! \tfrac{1}{k_s}\log(1 + e^{k_s x})$
+is a smooth approximation of $\max(x, 0)$ (with sharpness $k_s$) and
+$P(F)_e^{\text{rest}}$ is the rest-configuration value of $P(F)$ at
+edge $e$. Second, edge damages aggregate to per-vertex damages by
+summation over incident edges,
+\begin{equation}
+  \delta_v^{\text{next}} \!=\! \delta_v^{\text{prev}} +
+    \sum_{e \ni v} \Delta_e,
+  \label{eq:vertex-damage}
+\end{equation}
+where $\Delta_e$ is the increment in (\ref{eq:edge-damage}). Third,
+the vertex damage drives the sigmoid soft-removal mask
+\begin{equation}
+  \alpha_v \!=\! \sigma\!\left(-s\,(\delta_v - \tau)\right) \in [0, 1],
+  \label{eq:soft-removal}
+\end{equation}
+with sharpness $s$ and threshold $\tau$.
+
+% --- Block 4: BRIDGE — w_i := α (the climax of the section) ---
+The two layers of the simulator---continuous topology
+((\ref{eq:pf})--(\ref{eq:soft-removal})) and shape-matching dynamics
+((\ref{eq:centroid})--(\ref{eq:cluster-correction}))---are coupled by
+the single assignment
+\begin{equation}
+  w_i \;:=\; \alpha_{v_i}.
+  \label{eq:bridge}
+\end{equation}
+Inserting (\ref{eq:bridge}) into the cluster solve of
+\S\ref{sec:pbd-substrate} routes the soft-removal mask straight into
+the per-vertex weight that
+(\ref{eq:centroid})--(\ref{eq:cluster-correction}) accept as input. A
+fully cut vertex ($\alpha_{v_i} \!=\! 0$) drops out of every
+overlapping cluster's centroid, covariance, and goal-pull
+simultaneously; an intact vertex ($\alpha_{v_i} \!=\! 1$) participates
+fully; intermediate values interpolate continuously between the two.
+Crucially, the mesh structure $\mathcal{M}$ itself never changes
+during cutting: no edges are removed and no clusters are disassembled,
+so the material remaining after a cut is encoded entirely in the
+continuous values of $\alpha$ rather than in the discrete combinatorics
+of $\mathcal{V}, \mathcal{E}, \mathcal{F}, \mathcal{T}$.
+Equivalently, a vertex with $\alpha_v \!=\! 0$ retains its
+data-structural presence in $\mathcal{M}$---index, position, and
+connectivity references untouched---but becomes dynamically inactive:
+no force acts on it, and it contributes nothing to any cluster
+constraint.
+Equation (\ref{eq:bridge}) is the only place the topology and physics
+layers touch, and the only line through which the discrete operation
+of cutting is transposed into a smooth modulation of an existing
+shape-matching interface. Algorithm~\ref{alg:ssa-jacobi} summarises
+one substep of the integrated solver; Figure~\ref{fig:cluster-jacobi}
+illustrates it visually.
+
+% --- Algorithm 1 ---
+\begin{algorithm}[!htbp]
+\small
+\caption{Differentiable PBD substep with $P(F)$ cutting and cycle-scoped buffers.}
+\label{alg:ssa-jacobi}
+\Input{$\mathbf{p}^{\text{prev}}, \mathbf{v}^{\text{prev}},
+       \alpha^{\text{prev}},
+       \delta^{\text{e,prev}}, \delta^{\text{v,prev}},
+       \mathbf{c}_I,\, dt,\, K$}
+\Output{$\mathbf{p}^{\text{next}}, \mathbf{v}^{\text{next}},
+        \alpha^{\text{next}},
+        \delta^{\text{e,next}}, \delta^{\text{v,next}}$}
+
+$\mathbf{p}^{(0)} \leftarrow \mathbf{p}^{\text{prev}} + dt \cdot \mathbf{v}^{\text{prev}}$
+\mycmt{predictor step}\\
+
+\For{$e \in \mathcal{E}$ \KwSty{parallel}}{
+  $P(F)_e \leftarrow \sigma\!\left(-k\,\frac{d(e, \mathbf{c}_I)}{r_e}\right)$
+  \mycmt{Eq.~\ref{eq:pf}}\\
+
+  $\Delta^{\text{e}}_e \leftarrow
+   \mathrm{softplus}_{+}\!\left(1 - \frac{P(F)_e}{P(F)_e^{\text{rest}}}\right)$\\
+}
+
+$\delta^{\text{e,next}} \leftarrow \delta^{\text{e,prev}} + \Delta^{\text{e}}$
+\mycmt{write to fresh buffer}\\
+
+\For{$v \in \mathcal{V}$ \KwSty{parallel}}{
+  $\delta^{\text{v,next}}_v \leftarrow
+   \delta^{\text{v,prev}}_v + \sum_{e \ni v} \Delta^{\text{e}}_e$\\
+
+  $\alpha^{\text{next}}_v \leftarrow
+   \sigma\!\left(-s\,(\delta^{\text{v,next}}_v - \tau)\right)$\\
+}
+
+\For{$c \leftarrow 0$ \KwTo $K{-}1$}{
+  \For{cluster $C$ \KwSty{parallel}}{
+    $w_i \leftarrow \alpha^{\text{next}}_i$
+    \mycmt{bridge, Eq.~\ref{eq:bridge}}\\
+
+    $\mu \leftarrow \frac{1}{\sum_{i \in C} w_i}\sum_{i \in C} w_i\,\mathbf{p}^{(c)}_i$\\
+
+    $A \leftarrow \sum_{i \in C} w_i\,(\mathbf{p}^{(c)}_i - \mu)
+                  (\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}})^{\!\top}$\\
+
+    $R \leftarrow \mathrm{polar}(A)$\\
+
+    $\Delta_i \leftarrow
+     w_i\!\left(R\,(\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}})
+     + \mu - \mathbf{p}^{(c)}_i\right)$\\
+  }
+  $\mathbf{p}^{(c+1)} \leftarrow \mathbf{p}^{(c)} + \mathrm{aggregate}(\Delta)$
+  \mycmt{Jacobi-style; fresh buffer}\\
+}
+
+$\mathbf{p}^{\text{next}} \leftarrow \mathbf{p}^{(K)},\;\;
+ \mathbf{v}^{\text{next}} \leftarrow
+ \frac{\mathbf{p}^{\text{next}} - \mathbf{p}^{\text{prev}}}{dt}$\\
+
+\Return $\mathbf{p}^{\text{next}}, \mathbf{v}^{\text{next}},
+        \alpha^{\text{next}},
+        \delta^{\text{e,next}}, \delta^{\text{v,next}}$
+\vspace{6pt}
+\end{algorithm}
+
+% --- Block 5: cycle-scoped buffer pattern (engineering discipline) ---
+In practice, making Algorithm~\ref{alg:ssa-jacobi} differentiable
+requires one implementation discipline: every state buffer is written
+to a fresh allocation rather than modified in place. With $K$ Jacobi
+iterations, this means $K{+}1$ position buffers; iteration $c$ reads
+$\mathbf{p}^{(c)}$ and writes $\mathbf{p}^{(c+1)}$; the same pattern
+applies to $\alpha$, $\delta^{\text{e}}$, $\delta^{\text{v}}$, and the
+per-iteration cluster rotations. This is a standard prerequisite for
+reverse-mode autodiff: in-place writes to tensors whose pre-update
+values are needed for backward either raise tape errors or silently
+zero out gradients~\cite{difftaichi}. With correct buffers the backward
+pass $\frac{\partial \mathcal{L}}{\partial \theta}$ is automatic; we verify in
+\S\ref{sec:gradient-verify} that the resulting gradients match finite
+differences to machine precision.
+
+
+\subsection{System Identification Framework}
+\label{sec:sysid-framework}
+
+% --- Paragraph 1: Loss design for sys-ID ---
+System identification treats Algorithm~\ref{alg:ssa-jacobi} as a
+differentiable forward map $\theta \rightarrow \mathbf{y}_{\text{sim}}(\theta)$
+and uses Adam to fit measured signals $\mathbf{y}_{\text{real}}$. To
+avoid the long-horizon gradient bias that accumulates across many PBD
+substeps~\cite{antonova2022, suh2022}, each Adam step runs a single
+fresh forward substep from the rest configuration, and cutting-parameter
+losses compare only the final cavity geometry. The per-step loss is
+force-displacement MSE for elastic stiffness (in the spirit of
+Kolawole's volume-MSE inverse FEM~\cite{kolawole2023}, with displacement
+as the boundary input and force as the target), and a soft-IoU plus
+signed-distance match on the continuous $\alpha$ field for cutting
+parameters.
+
+% --- Paragraph 2: 3-vs-2 decision matrix ---
+Three of our physical parameters fall in this single-substep
+regime: bulk stiffness $k$, damage threshold $\alpha_{\min}$, and
+sharpness $s$. We verify in Sec.\ref{sec:sysid-synth} that Adam recovers
+all three to within a few percent on synthetic ground truth in under
+a minute. Friction and damping, by contrast, require non-zero particle
+velocity to develop signal and are therefore not single-substep
+identifiable; we adopt literature values ($\mu$ from
+Misra~\textit{et~al.}~\cite{misra2010}, $\beta$ from
+Mackle~\textit{et~al.}~\cite{mackle2020}), consistent with the
+convention in DiSECt~\cite{heiden2021disect} and the cardiac inverse
+FEM work of Kolawole~\cite{kolawole2023}.
+
+\section{USING THE TEMPLATE}
+
+Use this sample document as your LaTeX source file to create your document. Save this file as {\bf root.tex}. You have to make sure to use the cls file that came with this distribution. If you use a different style file, you cannot expect to get required margins. Note also that when you are creating your out PDF file, the source file is only part of the equation. {\it Your \TeX\ $\rightarrow$ PDF filter determines the output file size. Even if you make all the specifications to output a letter file in the source - if your filter is set to produce A4, you will only get A4 output. }
+
+It is impossible to account for all possible situation, one would encounter using \TeX. If you are using multiple \TeX\ files you must make sure that the ``MAIN`` source file is called root.tex - this is particularly important if your conference is using PaperPlaza's built in \TeX\ to PDF conversion tool.
+
+\subsection{Headings, etc}
+
+Text heads organize the topics on a relational, hierarchical basis. For example, the paper title is the primary text head because all subsequent material relates and elaborates on this one topic. If there are two or more sub-topics, the next level head (uppercase Roman numerals) should be used and, conversely, if there are not at least two sub-topics, then no subheads should be introduced. Styles named ÒHeading 1Ó, ÒHeading 2Ó, ÒHeading 3Ó, and ÒHeading 4Ó are prescribed.
+
+\subsection{Figures and Tables}
+
+Positioning Figures and Tables: Place figures and tables at the top and bottom of columns. Avoid placing them in the middle of columns. Large figures and tables may span across both columns. Figure captions should be below the figures; table heads should appear above the tables. Insert figures and tables after they are cited in the text. Use the abbreviation ÒFig. 1Ó, even at the beginning of a sentence.
+
+\begin{table}[h]
+\caption{An Example of a Table}
+\label{table_example}
+\begin{center}
+\begin{tabular}{|c||c|}
+\hline
+One & Two\\
+\hline
+Three & Four\\
+\hline
+\end{tabular}
+\end{center}
+\end{table}
+
+
+   \begin{figure}[thpb]
+      \centering
+      \framebox{\parbox{3in}{We suggest that you use a text box to insert a graphic (which is ideally a 300 dpi TIFF or EPS file, with all fonts embedded) because, in an document, this method is somewhat more stable than directly inserting a picture.
+}}
+      %\includegraphics[scale=1.0]{figurefile}
+      \caption{Inductance of oscillation winding on amorphous
+       magnetic core versus DC bias magnetic field}
+      \label{figurelabel}
+   \end{figure}
+   
+
+Figure Labels: Use 8 point Times New Roman for Figure labels. Use words rather than symbols or abbreviations when writing Figure axis labels to avoid confusing the reader. As an example, write the quantity ÒMagnetizationÓ, or ÒMagnetization, MÓ, not just ÒMÓ. If including units in the label, present them within parentheses. Do not label axes only with units. In the example, write ÒMagnetization (A/m)Ó or ÒMagnetization {A[m(1)]}Ó, not just ÒA/mÓ. Do not label axes with a ratio of quantities and units. For example, write ÒTemperature (K)Ó, not ÒTemperature/K.Ó
+
+\section{CONCLUSIONS}
+
+A conclusion section is not required. Although a conclusion may review the main points of the paper, do not replicate the abstract as the conclusion. A conclusion might elaborate on the importance of the work or suggest applications and extensions. 
+
+\addtolength{\textheight}{-12cm}   % This command serves to balance the column lengths
+                                  % on the last page of the document manually. It shortens
+                                  % the textheight of the last page by a suitable amount.
+                                  % This command does not take effect until the next page
+                                  % so it should come on the page before the last. Make
+                                  % sure that you do not shorten the textheight too much.
+
+
+
+
+
+\end{document}
