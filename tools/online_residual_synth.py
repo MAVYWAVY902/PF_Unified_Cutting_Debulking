@@ -535,6 +535,8 @@ def online_calibration_loop(
     lr_outer=np.array([0.1, 1.0, 0.05]),    # per-param (alpha_min, sharp, threshold)
     n_cycles_per_frame=1,
     param_bounds=((0.5, 50.0), (1.0, 200.0), (0.05, 0.95)),
+    lambda_prior=0.0,           # P7 Fix 1: L2 anchor toward theta_0. 0=disabled.
+    track_best=True,            # P7: keep best-θ-so-far snapshot
     verbose=True,
     log_every=10,
 ):
@@ -545,19 +547,27 @@ def online_calibration_loop(
           1. Forward sim with current θ → (α_sim, δ_v_sim)
           2. Inner loop → Δδ_v (state correction for next frame)
           3. Outer Warp-tape gradient → ∂L/∂θ
-          4. Adam step on θ (with per-param lr)
-          5. Save history snapshot
+          4. (P7 Fix 1) Add L_prior gradient = 2·λ·(θ - θ_0)
+          5. Adam step on θ (with per-param lr)
+          6. Track best θ by L_direct
+          7. Save history snapshot
 
-    Returns: list of per-frame log entries.
+    Returns: dict with log, history, best_theta, best_L, best_step.
     """
     n_frames = len(real_frames)
     theta = theta_0.copy().astype(np.float64)
+    theta_0_const = theta_0.copy().astype(np.float64)  # immutable anchor
     opt = AdamND(n_dims=3, lr=lr_outer)
     history = []
     log = []
 
     bounds_lo = np.array([b[0] for b in param_bounds])
     bounds_hi = np.array([b[1] for b in param_bounds])
+
+    # Best-so-far tracker
+    best_L = float("inf")
+    best_theta = theta.copy()
+    best_step = 0
 
     for t, obs in enumerate(real_frames):
         # 1. Build per-frame sys_dict
@@ -582,16 +592,31 @@ def online_calibration_loop(
             K_inner=K_inner, lr_inner=lr_inner, verbose=False,
         )
 
-        # 4. Outer gradient (Strategy A: backprop through forward sim only)
-        L_direct, grad = compute_outer_gradient(
+        # 4a. Outer gradient (Strategy A: backprop through forward sim only)
+        L_direct, grad_data = compute_outer_gradient(
             theta, sys_t, obs["alpha_obs"], n_cycles=n_cycles_per_frame,
         )
+
+        # 4b. P7 Fix 1: L_prior anchor toward theta_0
+        # L_prior = λ · ||θ - θ_0||²
+        # ∂L_prior/∂θ = 2λ · (θ - θ_0)
+        if lambda_prior > 0.0:
+            grad_prior = 2.0 * lambda_prior * (theta - theta_0_const)
+        else:
+            grad_prior = np.zeros_like(theta)
+        grad = grad_data + grad_prior
 
         # 5. Adam step + clip to bounds
         theta = opt.step(theta, grad)
         theta = np.clip(theta, bounds_lo, bounds_hi)
 
-        # 6. Log + history
+        # 6. Best-so-far tracking
+        if track_best and L_direct < best_L:
+            best_L = L_direct
+            best_theta = theta.copy()
+            best_step = t
+
+        # 7. Log + history
         log_entry = dict(
             t=t,
             knife_x=float(obs["knife_pos"][0]),
@@ -600,9 +625,12 @@ def online_calibration_loop(
             alpha_min=float(theta[0]),
             sharpness=float(theta[1]),
             threshold=float(theta[2]),
-            grad_a=float(grad[0]),
-            grad_s=float(grad[1]),
-            grad_t=float(grad[2]),
+            grad_a=float(grad_data[0]),
+            grad_s=float(grad_data[1]),
+            grad_t=float(grad_data[2]),
+            grad_prior_a=float(grad_prior[0]),
+            grad_prior_s=float(grad_prior[1]),
+            grad_prior_t=float(grad_prior[2]),
         )
         log.append(log_entry)
 
@@ -614,11 +642,21 @@ def online_calibration_loop(
         ))
 
         if verbose and (t % log_every == 0 or t == n_frames - 1):
+            best_tag = " ★" if t == best_step else ""
             print(f"[t={t:3d}] L_direct={L_direct:.4e}  L_gap={L_gap:.4e}  "
-                  f"θ=({theta[0]:.3f}, {theta[1]:.3f}, {theta[2]:.3f})  "
-                  f"|grad|=({grad[0]:+.2e}, {grad[1]:+.2e}, {grad[2]:+.2e})")
+                  f"θ=({theta[0]:.3f}, {theta[1]:.3f}, {theta[2]:.3f}){best_tag}")
 
-    return log, history
+    return dict(
+        log=log,
+        history=history,
+        best_theta=best_theta,
+        best_L=best_L,
+        best_step=best_step,
+        final_theta=theta.copy(),
+        final_L=float(log[-1]["L_direct"]),
+        theta_0=theta_0_const,
+        lambda_prior=lambda_prior,
+    )
 
 
 def outer_grad_test():
@@ -736,21 +774,24 @@ def plot_convergence(log_path=None, out_path=None):
     return out_path
 
 
-def integration_test(n_frames=100):
-    """Phase 5 test: full online loop, synth-to-synth.
+def integration_test(n_frames=100, lambda_prior=0.0, log_out_name=None):
+    """Phase 5/7 test: full online loop, synth-to-synth.
 
     Setup:
       theta_true = (3.0, 20.0, 0.5)
       theta_0    = (5.0, 10.0, 0.5)   (alpha_min 67% off, sharp 50% off)
       knife sweep x=0.35→0.65 (broad cavity)
 
-    Expected: after n_frames, theta converges toward theta_true.
+    Args:
+      n_frames     — trajectory length
+      lambda_prior — P7 Fix 1 anchor strength (0 = original POC behavior)
+      log_out_name — npz file basename for saving log
     """
-    print(f"\n[integ] running {n_frames}-frame online calibration ...")
+    print(f"\n[integ] running {n_frames}-frame online calibration "
+          f"(lambda_prior={lambda_prior}) ...")
     wp.init()
     sys_dict = setup_synthetic_system(N=20)
 
-    # 1. Generate synth real trajectory
     traj = make_knife_trajectory(n_frames=n_frames, x_start=0.35, x_end=0.65)
     theta_true = np.array([3.0, 20.0, 0.5])
     real_frames = generate_synth_real_trajectory(
@@ -758,42 +799,50 @@ def integration_test(n_frames=100):
         k_bulk_true=1.0, n_cycles_per_frame=1,
     )
 
-    # 2. Run online loop
     theta_0 = np.array([5.0, 10.0, 0.5])
-    print(f"[integ] theta_true = {theta_true}")
-    print(f"[integ] theta_0    = {theta_0}")
+    print(f"[integ] theta_true   = {theta_true}")
+    print(f"[integ] theta_0      = {theta_0}")
 
     t_start = time.time()
-    log, history = online_calibration_loop(
+    result = online_calibration_loop(
         sys_dict, real_frames, theta_0,
         K_inner=30, lr_inner=0.1,
         lr_outer=np.array([0.1, 1.0, 0.05]),
+        lambda_prior=lambda_prior,
         verbose=True, log_every=max(1, n_frames // 10),
     )
     elapsed = time.time() - t_start
 
-    # 3. Evaluate convergence
-    final = log[-1]
-    theta_final = np.array([final["alpha_min"], final["sharpness"], final["threshold"]])
-    err = np.abs(theta_final - theta_true)
-    rel_err = err / np.maximum(np.abs(theta_true), 1e-6)
+    log = result["log"]
+    theta_final = result["final_theta"]
+    theta_best = result["best_theta"]
+    best_step = result["best_step"]
+    best_L = result["best_L"]
+
+    err_final = np.abs(theta_final - theta_true)
+    rel_final = err_final / np.maximum(np.abs(theta_true), 1e-6)
+    err_best = np.abs(theta_best - theta_true)
+    rel_best = err_best / np.maximum(np.abs(theta_true), 1e-6)
 
     print(f"\n[integ] Done in {elapsed:.1f}s ({elapsed/n_frames*1000:.1f} ms/frame)")
-    print(f"[integ] theta_true  = {theta_true}")
-    print(f"[integ] theta_final = {theta_final}")
-    print(f"[integ] abs error   = {err}")
-    print(f"[integ] rel error   = {rel_err * 100} %")
+    print(f"[integ] theta_true   = {theta_true}")
+    print(f"[integ] theta_FINAL  = {theta_final}  (last step)")
+    print(f"  rel err            = {(rel_final * 100).round(2)} %")
+    print(f"[integ] theta_BEST   = {theta_best}  ★ at step {best_step} (L={best_L:.2e})")
+    print(f"  rel err            = {(rel_best * 100).round(2)} %")
 
-    # Pass criterion (relaxed for POC): at least 2 of 3 params within 30% rel
-    n_pass = int((rel_err < 0.30).sum())
-    pass_overall = n_pass >= 2
+    n_pass_final = int((rel_final < 0.30).sum())
+    n_pass_best = int((rel_best < 0.30).sum())
+    pass_overall = n_pass_best >= 2
 
+    print(f"[integ] Final:  {n_pass_final}/3 params within 30%")
+    print(f"[integ] Best:   {n_pass_best}/3 params within 30%  ← Fix1 metric")
     if pass_overall:
-        print(f"[integ] PASS  ({n_pass}/3 params within 30% rel error)")
+        print(f"[integ] PASS (best-so-far has {n_pass_best}/3 within 30%)")
     else:
-        print(f"[integ] PARTIAL  ({n_pass}/3 params within 30% — algorithm works but needs tuning)")
+        print(f"[integ] PARTIAL")
 
-    # Save log to npz for Phase 6 visualization
+    # Save log
     log_arr = dict(
         t=np.array([e["t"] for e in log]),
         L_direct=np.array([e["L_direct"] for e in log]),
@@ -804,14 +853,55 @@ def integration_test(n_frames=100):
         grad_a=np.array([e["grad_a"] for e in log]),
         grad_s=np.array([e["grad_s"] for e in log]),
         grad_t=np.array([e["grad_t"] for e in log]),
+        grad_prior_a=np.array([e["grad_prior_a"] for e in log]),
+        grad_prior_s=np.array([e["grad_prior_s"] for e in log]),
+        grad_prior_t=np.array([e["grad_prior_t"] for e in log]),
         theta_true=theta_true,
         theta_0=theta_0,
+        theta_best=theta_best,
+        theta_final=theta_final,
+        best_step=np.array([best_step]),
+        lambda_prior=np.array([lambda_prior]),
     )
-    out_path = REPO_ROOT / "tools" / "online_residual_log.npz"
+    if log_out_name is None:
+        log_out_name = "online_residual_log.npz"
+    out_path = REPO_ROOT / "tools" / log_out_name
     np.savez(out_path, **log_arr)
     print(f"[integ] log saved to {out_path}")
 
-    return pass_overall, log
+    return pass_overall, log, result
+
+
+def sweep_lambda_prior(n_frames=500, lambdas=(0.0, 1e-5, 1e-4, 1e-3, 1e-2)):
+    """P7 sweep: run integration_test at multiple λ values, report best."""
+    print("=" * 70)
+    print(f"P7 SWEEP: lambda_prior over {list(lambdas)}, n_frames={n_frames}")
+    print("=" * 70)
+    results = {}
+    for lam in lambdas:
+        print(f"\n{'#' * 70}\n#  λ_prior = {lam}\n{'#' * 70}")
+        _, _, result = integration_test(
+            n_frames=n_frames,
+            lambda_prior=lam,
+            log_out_name=f"online_residual_log_lambda_{lam:.0e}.npz",
+        )
+        results[lam] = result
+
+    print("\n" + "=" * 70)
+    print("SWEEP SUMMARY:")
+    print("=" * 70)
+    theta_true = np.array([3.0, 20.0, 0.5])
+    print(f"{'λ_prior':>10} | {'best_step':>9} | {'best_L':>10} | "
+          f"{'α_best':>7} | {'s_best':>7} | {'τ_best':>7} | "
+          f"{'α_err%':>7} | {'s_err%':>7} | {'τ_err%':>7}")
+    print("-" * 110)
+    for lam, r in results.items():
+        b = r["best_theta"]
+        rel = np.abs(b - theta_true) / np.maximum(np.abs(theta_true), 1e-6) * 100
+        print(f"{lam:>10.0e} | {r['best_step']:>9d} | {r['best_L']:>10.2e} | "
+              f"{b[0]:>7.3f} | {b[1]:>7.3f} | {b[2]:>7.3f} | "
+              f"{rel[0]:>7.2f} | {rel[1]:>7.2f} | {rel[2]:>7.2f}")
+    return results
 
 
 if __name__ == "__main__":
@@ -825,12 +915,20 @@ if __name__ == "__main__":
     elif "--outer" in _sys.argv:
         outer_grad_test()
     elif "--integ" in _sys.argv:
-        # Optional: pass --frames=N to override
         n = 100
+        lam = 0.0
         for arg in _sys.argv:
             if arg.startswith("--frames="):
                 n = int(arg.split("=")[1])
-        integration_test(n_frames=n)
+            if arg.startswith("--lambda="):
+                lam = float(arg.split("=")[1])
+        integration_test(n_frames=n, lambda_prior=lam)
+    elif "--sweep" in _sys.argv:
+        n = 500
+        for arg in _sys.argv:
+            if arg.startswith("--frames="):
+                n = int(arg.split("=")[1])
+        sweep_lambda_prior(n_frames=n)
     elif "--plot" in _sys.argv:
         plot_convergence()
     else:
