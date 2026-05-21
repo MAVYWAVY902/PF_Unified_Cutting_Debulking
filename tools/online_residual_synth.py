@@ -258,6 +258,53 @@ def compute_damage_residual(
 
 
 # =============================================================================
+# Outer loop: Warp-tape backward for ∂L/∂θ on (alpha_min, sharpness, threshold)
+# =============================================================================
+
+def compute_outer_gradient(
+    theta,                # np.array(3,) — current (alpha_min, sharpness, threshold)
+    sys_dict,             # dict with single knife_pos
+    alpha_obs,            # np.array(N,) — observation
+    n_cycles=1,
+):
+    """Computes ∂L_direct/∂θ where L_direct = Σ (α_sim - α_obs)²
+
+    Strategy A (detached residual): outer gradient flows ONLY through
+    forward sim w.r.t. θ. Uses existing Warp tape pattern from
+    calibrate_stage2_autograd.py.
+
+    Returns:
+        loss: float (L_direct, normalized by N)
+        grad: np.array(3,) — ∂L/∂(alpha_min, sharpness, threshold)
+    """
+    N = sys_dict["N"]
+    params = make_params(
+        alpha_min=float(theta[0]),
+        sharpness=float(theta[1]),
+        threshold=float(theta[2]),
+        knife_radius=0.1,
+        requires_grad=True,
+    )
+    target_wp = wp.array(alpha_obs.astype(np.float32), dtype=wp.float32)
+    loss_buf = wp.zeros(1, dtype=wp.float32, requires_grad=True)
+
+    with wp.Tape() as tape:
+        alpha_sim_wp = run_ssa_full(params, sys_dict, n_cycles=n_cycles)
+        wp.launch(mse_loss_kernel, dim=N,
+                  inputs=[alpha_sim_wp, target_wp, loss_buf])
+
+    tape.backward(loss=loss_buf)
+
+    loss = float(loss_buf.numpy()[0]) / float(N)
+    grad = np.array([
+        float(params["alpha_min"].grad.numpy()[0]) / float(N),
+        float(params["sharpness"].grad.numpy()[0]) / float(N),
+        float(params["threshold"].grad.numpy()[0]) / float(N),
+    ])
+    return loss, grad
+
+
+# =============================================================================
 # Synth 'real' trajectory generator
 # =============================================================================
 
@@ -475,6 +522,56 @@ def inner_loop_test():
     return True
 
 
+def outer_grad_test():
+    """Phase 4 test: verify outer gradient points toward theta_true.
+
+    theta_true = (3.0, 20.0, 0.5)
+    theta_wrong = (5.0, 10.0, 0.5)
+
+    Since alpha_min needs to DECREASE (5→3), gradient should be POSITIVE.
+    Since sharpness needs to INCREASE (10→20), gradient should be NEGATIVE.
+    Threshold matches, gradient should be near zero.
+    """
+    print("\n[outer] testing gradient direction ...")
+    wp.init()
+    sys_dict = setup_synthetic_system(N=20)
+    sys_dict["knife_pos"] = np.array([[0.5, 0.5, 0.5]], dtype=np.float32)
+
+    # 1. Generate alpha_obs from theta_true
+    theta_true = np.array([3.0, 20.0, 0.5])
+    params_true = make_params(
+        alpha_min=float(theta_true[0]), sharpness=float(theta_true[1]),
+        threshold=float(theta_true[2]), requires_grad=False,
+    )
+    alpha_obs = run_ssa_full(params_true, sys_dict, n_cycles=1).numpy().copy()
+
+    # 2. Compute gradient at theta_wrong
+    theta_wrong = np.array([5.0, 10.0, 0.5])
+    loss, grad = compute_outer_gradient(theta_wrong, sys_dict, alpha_obs, n_cycles=1)
+
+    print(f"[outer] theta_wrong = (α_min={theta_wrong[0]}, sharp={theta_wrong[1]}, τ={theta_wrong[2]})")
+    print(f"[outer] theta_true  = (α_min={theta_true[0]}, sharp={theta_true[1]}, τ={theta_true[2]})")
+    print(f"[outer] loss = {loss:.4e}")
+    print(f"[outer] grad = (∂L/∂α_min={grad[0]:+.4e}, ∂L/∂sharp={grad[1]:+.4e}, "
+          f"∂L/∂τ={grad[2]:+.4e})")
+    print(f"[outer] expected directions:")
+    print(f"  ∂L/∂α_min > 0  (so Adam decreases α_min from 5 to 3)  → got {grad[0]:+.2e}  "
+          f"{'✓' if grad[0] > 0 else '✗'}")
+    print(f"  ∂L/∂sharp < 0  (so Adam increases sharp from 10 to 20)  → got {grad[1]:+.2e}  "
+          f"{'✓' if grad[1] < 0 else '✗'}")
+    print(f"  |∂L/∂τ| small  (τ already correct)  → got {abs(grad[2]):.2e}  "
+          f"{'✓' if abs(grad[2]) < max(abs(grad[0]), abs(grad[1])) else '⚠'}")
+
+    pass_dir_a = grad[0] > 0
+    pass_dir_s = grad[1] < 0
+    if pass_dir_a and pass_dir_s:
+        print(f"[outer] PASS  (both gradient directions point toward theta_true)")
+        return True
+    else:
+        print(f"[outer] FAIL  (gradient does NOT point toward theta_true)")
+        return False
+
+
 if __name__ == "__main__":
     import sys as _sys
     if "--smoke" in _sys.argv:
@@ -483,7 +580,10 @@ if __name__ == "__main__":
         trajectory_test()
     elif "--inner" in _sys.argv:
         inner_loop_test()
+    elif "--outer" in _sys.argv:
+        outer_grad_test()
     else:
         smoke_test()
         trajectory_test()
         inner_loop_test()
+        outer_grad_test()
