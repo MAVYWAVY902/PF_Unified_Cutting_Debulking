@@ -671,6 +671,71 @@ def outer_grad_test():
         return False
 
 
+def plot_convergence(log_path=None, out_path=None):
+    """Phase 6: plot online residual calibration convergence.
+
+    Generates 2x2 grid:
+      (0,0) alpha_min trajectory vs true
+      (0,1) sharpness trajectory vs true
+      (1,0) threshold trajectory vs true
+      (1,1) L_direct + L_gap log-scale vs frame
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if log_path is None:
+        log_path = REPO_ROOT / "tools" / "online_residual_log.npz"
+    if out_path is None:
+        out_path = REPO_ROOT / "tools" / "online_residual_convergence.png"
+
+    log = np.load(log_path)
+    t = log["t"]
+    theta_true = log["theta_true"]
+    theta_0 = log["theta_0"]
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    fig.suptitle(
+        "ReSECT Online Residual Calibration — Synth-to-Synth (POC)\n"
+        f"θ_0=({theta_0[0]:.1f}, {theta_0[1]:.1f}, {theta_0[2]:.2f})  →  "
+        f"θ_true=({theta_true[0]:.1f}, {theta_true[1]:.1f}, {theta_true[2]:.2f})",
+        fontsize=11,
+    )
+
+    param_names = ["alpha_min (κ)", "sharpness (s)", "threshold (τ)"]
+    param_keys = ["alpha_min", "sharpness", "threshold"]
+    positions = [(0, 0), (0, 1), (1, 0)]
+
+    for (r, c), name, key, true_v in zip(positions, param_names, param_keys, theta_true):
+        ax = axes[r, c]
+        ax.plot(t, log[key], "b-", label="estimate", linewidth=1.5)
+        ax.axhline(true_v, color="red", linestyle="--", label="ground truth", linewidth=1.2)
+        ax.axhline(theta_0[positions.index((r, c))], color="gray", linestyle=":",
+                   label="init θ_0", linewidth=1.0)
+        ax.set_xlabel("frame")
+        ax.set_ylabel(name)
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        final = float(log[key][-1])
+        rel = abs(final - true_v) / max(abs(true_v), 1e-6) * 100
+        ax.set_title(f"{name}: final={final:.3f}  rel_err={rel:.2f}%", fontsize=10)
+
+    # Loss panel
+    ax = axes[1, 1]
+    ax.semilogy(t, log["L_direct"], "b-", label="L_direct (cavity gap)", linewidth=1.2)
+    ax.semilogy(t, log["L_gap"], "g--", label="L_gap (residual norm)", linewidth=1.0)
+    ax.set_xlabel("frame")
+    ax.set_ylabel("loss (log)")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3, which="both")
+    ax.set_title("Loss trajectories", fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"[plot] saved {out_path}")
+    return out_path
+
+
 def integration_test(n_frames=100):
     """Phase 5 test: full online loop, synth-to-synth.
 
@@ -766,6 +831,8 @@ if __name__ == "__main__":
             if arg.startswith("--frames="):
                 n = int(arg.split("=")[1])
         integration_test(n_frames=n)
+    elif "--plot" in _sys.argv:
+        plot_convergence()
     else:
         smoke_test()
         trajectory_test()
