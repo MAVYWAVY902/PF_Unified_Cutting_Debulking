@@ -958,6 +958,176 @@ def integration_test(n_frames=100, lambda_prior=0.0, lambda_traj=0.0, log_out_na
     return pass_overall, log, result
 
 
+def plot_cold_start_comparison(results, out_path=None):
+    """P9 comparison: overlay param trajectories from multiple cold-start runs."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if out_path is None:
+        out_path = REPO_ROOT / "tools" / "online_residual_cold_start.png"
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle(
+        f"P9 Cold-Start Robustness  (λ_traj=0.5, n_frames=500)",
+        fontsize=12,
+    )
+
+    theta_true = np.array([3.0, 20.0, 0.5])
+    colors = ["C0", "C1", "C2", "C3", "C4"]
+
+    for i, (name, key, true_v) in enumerate([
+        ("α_min", "alpha_min", theta_true[0]),
+        ("sharpness", "sharpness", theta_true[1]),
+        ("threshold", "threshold", theta_true[2]),
+    ]):
+        ax = axes[i // 2, i % 2]
+        for c, r in zip(colors, results):
+            log = r["log"]
+            ax.plot(log["t"], log[key], color=c, label=r["label"], linewidth=1.2)
+        ax.axhline(true_v, color="red", linestyle="--", linewidth=1, label="true")
+        ax.set_xlabel("frame")
+        ax.set_ylabel(name)
+        ax.legend(fontsize=7, loc="best")
+        ax.grid(alpha=0.3)
+        ax.set_title(name)
+
+    # 4th panel: L_direct comparison (log scale)
+    ax = axes[1, 1]
+    for c, r in zip(colors, results):
+        log = r["log"]
+        ax.semilogy(log["t"], log["L_direct"], color=c, label=r["label"], linewidth=1.0)
+    ax.set_xlabel("frame")
+    ax.set_ylabel("L_direct (log)")
+    ax.legend(fontsize=7, loc="best")
+    ax.grid(alpha=0.3, which="both")
+    ax.set_title("Loss decay (log scale)")
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"[plot] saved {out_path}")
+    return out_path
+
+
+def cold_start_robustness_test(
+    n_frames=500,
+    lambda_traj=0.5,
+    inits=None,                         # list of (label, theta_0) tuples
+):
+    """P9: probe L_traj robustness against extreme cold-start inits.
+
+    Each init is run for n_frames with the WINNING lambda_traj from P8.
+    Report convergence pattern + final accuracy + best-so-far for each.
+    """
+    if inits is None:
+        # Default set: moderate → extreme → boundary cases
+        inits = [
+            ("baseline (P5 init)",  np.array([5.0, 10.0, 0.5])),    # 67%, 50%, 0%
+            ("EXTREME both dir",    np.array([10.0, 5.0, 0.3])),    # 233%, 75%, 40%
+            ("VERY extreme",        np.array([15.0, 3.0, 0.7])),    # 400%, 85%, 40%
+            ("flipped (sharp ↑↑)",  np.array([1.0, 50.0, 0.5])),    # 67% under, 150% over
+            ("at θ_true",           np.array([3.0, 20.0, 0.5])),    # 0% (sanity: stays)
+        ]
+
+    print("=" * 80)
+    print(f"P9 COLD-START ROBUSTNESS  (λ_traj={lambda_traj}, n_frames={n_frames})")
+    print("=" * 80)
+
+    theta_true = np.array([3.0, 20.0, 0.5])
+
+    wp.init()
+    sys_dict = setup_synthetic_system(N=20)
+    traj = make_knife_trajectory(n_frames=n_frames, x_start=0.35, x_end=0.65)
+    real_frames = generate_synth_real_trajectory(
+        sys_dict, theta_true, traj, k_bulk_true=1.0, n_cycles_per_frame=1,
+    )
+
+    results = []
+    for label, theta_0 in inits:
+        rel_init = np.abs(theta_0 - theta_true) / np.maximum(np.abs(theta_true), 1e-6) * 100
+        print(f"\n[{label}]  θ_0 = {theta_0}  (init err {rel_init.round(0)}%)")
+        result = online_calibration_loop(
+            sys_dict, real_frames, theta_0,
+            K_inner=30, lr_inner=0.1,
+            lr_outer=np.array([0.1, 1.0, 0.05]),
+            lambda_prior=0.0,
+            lambda_traj=lambda_traj,
+            verbose=False,
+        )
+        # quick stats
+        final = result["final_theta"]
+        best = result["best_theta"]
+        rel_f = np.abs(final - theta_true) / np.maximum(np.abs(theta_true), 1e-6) * 100
+        rel_b = np.abs(best - theta_true) / np.maximum(np.abs(theta_true), 1e-6) * 100
+
+        # Frames-to-converge: first t where all 3 rel_err < 10%
+        log = result["log"]
+        frames_to_10 = -1
+        for entry in log:
+            r = np.abs(np.array([entry["alpha_min"], entry["sharpness"], entry["threshold"]])
+                       - theta_true) / np.maximum(np.abs(theta_true), 1e-6) * 100
+            if np.all(r < 10):
+                frames_to_10 = entry["t"]
+                break
+
+        # Save log for plotting
+        log_arr = dict(
+            t=np.array([e["t"] for e in log]),
+            L_direct=np.array([e["L_direct"] for e in log]),
+            L_gap=np.array([e["L_gap"] for e in log]),
+            L_traj=np.array([e["L_traj"] for e in log]),
+            alpha_min=np.array([e["alpha_min"] for e in log]),
+            sharpness=np.array([e["sharpness"] for e in log]),
+            threshold=np.array([e["threshold"] for e in log]),
+            theta_true=theta_true,
+            theta_0=theta_0,
+            theta_best=best,
+            theta_final=final,
+        )
+        safe_label = (label.replace(" ", "_").replace("(", "").replace(")", "")
+                      .replace(",", "").replace("↑", "U").replace("→", "-"))
+        np.savez(REPO_ROOT / "tools" / f"online_residual_log_cold_{safe_label}.npz", **log_arr)
+
+        results.append({
+            "label": label,
+            "theta_0": theta_0,
+            "rel_init": rel_init,
+            "final": final,
+            "rel_final": rel_f,
+            "best": best,
+            "rel_best": rel_b,
+            "best_step": result["best_step"],
+            "best_L": result["best_L"],
+            "final_L": result["final_L"],
+            "frames_to_10": frames_to_10,
+            "log": log_arr,
+        })
+        print(f"  → final θ = ({final[0]:.3f}, {final[1]:.3f}, {final[2]:.3f})  rel_err={rel_f.round(2)}%")
+        print(f"  → best  θ = ({best[0]:.3f}, {best[1]:.3f}, {best[2]:.3f})  rel_err={rel_b.round(2)}%  at step {result['best_step']}")
+        print(f"  → frames to <10% rel err: {frames_to_10 if frames_to_10 >= 0 else 'NEVER'}")
+        print(f"  → final_L = {result['final_L']:.2e}, best_L = {result['best_L']:.2e}")
+
+    # Plot
+    plot_cold_start_comparison(results)
+
+    # Summary table
+    print("\n" + "=" * 100)
+    print("P9 COLD-START ROBUSTNESS SUMMARY:")
+    print("=" * 100)
+    print(f"{'label':>25} | {'init err %':>20} | {'final err %':>22} | {'best err %':>22} | "
+          f"{'→<10%':>5} | {'final_L':>10}")
+    print("-" * 130)
+    for r in results:
+        ri = "/".join(f"{x:.0f}" for x in r["rel_init"])
+        rf = "/".join(f"{x:.2f}" for x in r["rel_final"])
+        rb = "/".join(f"{x:.2f}" for x in r["rel_best"])
+        ftc = f"{r['frames_to_10']}" if r["frames_to_10"] >= 0 else "NEVER"
+        print(f"{r['label']:>25} | {ri:>20} | {rf:>22} | {rb:>22} | "
+              f"{ftc:>5} | {r['final_L']:>10.2e}")
+
+    return results
+
+
 def sweep_lambda_traj(n_frames=500, lambdas=(0.0, 0.1, 0.3, 0.5, 1.0)):
     """P8 sweep: run integration_test at multiple λ_traj values, report best.
 
@@ -1061,6 +1231,15 @@ if __name__ == "__main__":
             if arg.startswith("--frames="):
                 n = int(arg.split("=")[1])
         sweep_lambda_traj(n_frames=n)
+    elif "--cold" in _sys.argv:
+        n = 500
+        lam_t = 0.5
+        for arg in _sys.argv:
+            if arg.startswith("--frames="):
+                n = int(arg.split("=")[1])
+            if arg.startswith("--lambda_traj="):
+                lam_t = float(arg.split("=")[1])
+        cold_start_robustness_test(n_frames=n, lambda_traj=lam_t)
     elif "--plot" in _sys.argv:
         plot_convergence()
     else:
