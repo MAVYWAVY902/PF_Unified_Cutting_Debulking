@@ -90,6 +90,80 @@ class AdamND:
 
 
 # =============================================================================
+# Synth 'real' trajectory generator
+# =============================================================================
+
+def make_knife_trajectory(n_frames: int, x_start: float = 0.4, x_end: float = 0.7):
+    """Linear knife sweep along x-axis. y, z fixed at 0.5 (matches
+    setup_synthetic_system 1D particle line).
+
+    Returns: np.array shape (n_frames, 3)
+    """
+    xs = np.linspace(x_start, x_end, n_frames)
+    traj = np.zeros((n_frames, 3), dtype=np.float32)
+    traj[:, 0] = xs
+    traj[:, 1] = 0.5
+    traj[:, 2] = 0.5
+    return traj
+
+
+def synth_force_proxy(alpha_arr: np.ndarray, k_bulk: float, dt: float = 0.005,
+                      mass: float = 1.0) -> float:
+    """Approximate axial reaction force on knife from cavity-particle response.
+
+    For synth POC: F ~ k_bulk × (1 - mean(alpha)) × (some unit factor).
+    Real version would integrate shape_delta over knife-contact particles.
+    """
+    mean_damage = float((1.0 - alpha_arr).mean())
+    return k_bulk * mean_damage * (mass / dt) * 0.001  # scale to ~Newton range
+
+
+def generate_synth_real_trajectory(
+    sys_dict,
+    theta_true,            # (alpha_min, sharpness, threshold) np array shape (3,)
+    knife_trajectory,      # (n_frames, 3) np array of knife positions
+    k_bulk_true=1.0,
+    n_cycles_per_frame=1,
+):
+    """Run run_ssa_full at each knife position to produce 'real' observations.
+
+    Each frame, the knife at u_t produces a cavity α_t. We record:
+      alpha_obs   — the synth ground-truth cavity
+      force_obs   — synthetic axial force (proxy formula)
+      knife_pos   — the u_t used
+
+    Note: we re-run ssa from REST at each frame (n_cycles cycles), not
+    accumulate damage across frames. This is a simplification for POC —
+    real cutting would accumulate. Sufficient for testing the param-recovery
+    loop because each frame is an independent (u_t, α_t) pair.
+
+    Returns: list of dicts (one per frame).
+    """
+    frames = []
+    for t, kp in enumerate(knife_trajectory):
+        sys_t = dict(sys_dict)
+        sys_t["knife_pos"] = np.array([kp], dtype=np.float32)
+
+        params_true = make_params(
+            alpha_min=float(theta_true[0]),
+            sharpness=float(theta_true[1]),
+            threshold=float(theta_true[2]),
+            knife_radius=0.1,
+            requires_grad=False,
+        )
+        alpha_t = run_ssa_full(params_true, sys_t, n_cycles=n_cycles_per_frame).numpy().copy()
+        force_t = synth_force_proxy(alpha_t, k_bulk_true)
+
+        frames.append(dict(
+            t=t,
+            knife_pos=kp.copy(),
+            alpha_obs=alpha_t,
+            force_obs=force_t,
+        ))
+    return frames
+
+
+# =============================================================================
 # Smoke test — verifies imports + Adam works
 # =============================================================================
 
@@ -124,5 +198,49 @@ def smoke_test():
     print("[smoke] PASS")
 
 
+def trajectory_test():
+    """Phase 2 test: generate a 20-frame synth trajectory and verify
+    cavity grows along the knife sweep.
+    """
+    print("\n[traj] generating 20-frame synth 'real' trajectory ...")
+    wp.init()
+    sys_dict = setup_synthetic_system(N=20)
+    traj = make_knife_trajectory(n_frames=20, x_start=0.4, x_end=0.7)
+
+    theta_true = np.array([3.0, 20.0, 0.5])  # alpha_min, sharpness, threshold
+    frames = generate_synth_real_trajectory(
+        sys_dict, theta_true, traj,
+        k_bulk_true=1.0, n_cycles_per_frame=1,
+    )
+
+    # Sanity: as knife moves through particle line, cavity should appear
+    # at different positions. Print debulked frac per frame.
+    print(f"[traj] {len(frames)} frames generated")
+    print(f"       knife_x: {traj[0,0]:.2f} → {traj[-1,0]:.2f}")
+    debulked_per_frame = [(f["alpha_obs"] < 0.5).mean() for f in frames]
+    force_per_frame = [f["force_obs"] for f in frames]
+
+    for t in [0, 5, 10, 15, 19]:
+        kx = frames[t]["knife_pos"][0]
+        deb = debulked_per_frame[t]
+        F = frames[t]["force_obs"]
+        a_min = frames[t]["alpha_obs"].min()
+        a_max = frames[t]["alpha_obs"].max()
+        print(f"  frame {t:2d}: knife_x={kx:.3f}  debulked={deb:.3f}  "
+              f"α=[{a_min:.3f}, {a_max:.3f}]  F={F:.4f}")
+
+    # Check trajectory is non-trivial (cavity varies across frames)
+    deb_arr = np.array(debulked_per_frame)
+    assert deb_arr.max() > 0.01, "Trajectory generated no damage — knife too far"
+    print(f"[traj] PASS  (debulked range: [{deb_arr.min():.3f}, {deb_arr.max():.3f}])")
+
+
 if __name__ == "__main__":
-    smoke_test()
+    import sys as _sys
+    if "--smoke" in _sys.argv:
+        smoke_test()
+    elif "--traj" in _sys.argv:
+        trajectory_test()
+    else:
+        smoke_test()
+        trajectory_test()
