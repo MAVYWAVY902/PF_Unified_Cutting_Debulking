@@ -305,6 +305,62 @@ def compute_outer_gradient(
 
 
 # =============================================================================
+# L_traj (P8 Mod 3): trajectory consistency loss
+# =============================================================================
+
+def compute_traj_loss(
+    theta,                    # current (alpha_min, sharp, tau)
+    history,                  # list of dicts from online_calibration_loop
+    sys_dict,                 # base sys_dict (knife_pos overridden per snapshot)
+    n_samples=4,
+    history_window=20,
+    n_cycles_per_frame=1,
+    rng=None,
+):
+    """L_traj = (1/n_samples) Σ_h ‖α^sim(θ; u_h) - α^obs_h‖²
+
+    Enforces trajectory-wide identifiability by demanding that the current
+    θ simultaneously explains 4 randomly-sampled past observations.
+
+    Algorithm (mirrors Liang L_hist but for cutting):
+      1. Sample n_samples random indices from the LAST history_window snapshots
+      2. For each sample h:
+         a. Build sys_h with h.knife_pos
+         b. Compute L_direct + gradient via Warp tape using current θ
+      3. Average loss + gradient over samples
+
+    Returns:
+        (L_traj_value, grad_traj) — both scalar / (3,) np.array
+        If len(history) < n_samples, returns (0, zeros) (warmup phase).
+    """
+    if len(history) < n_samples:
+        return 0.0, np.zeros(3)
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # Window: last `history_window` (or all if shorter)
+    window = history[-history_window:] if len(history) >= history_window else history[:]
+    indices = rng.choice(len(window), size=n_samples, replace=False)
+
+    total_loss = 0.0
+    total_grad = np.zeros(3)
+    for idx in indices:
+        h = window[idx]
+        sys_h = dict(sys_dict)
+        sys_h["knife_pos"] = np.array([h["knife_pos"]], dtype=np.float32)
+        # Reuse compute_outer_gradient — it does its own Warp tape backward.
+        L_h, grad_h = compute_outer_gradient(
+            theta, sys_h, h["alpha_obs"],
+            n_cycles=n_cycles_per_frame,
+        )
+        total_loss += L_h
+        total_grad += grad_h
+
+    return total_loss / n_samples, total_grad / n_samples
+
+
+# =============================================================================
 # Synth 'real' trajectory generator
 # =============================================================================
 
@@ -536,6 +592,10 @@ def online_calibration_loop(
     n_cycles_per_frame=1,
     param_bounds=((0.5, 50.0), (1.0, 200.0), (0.05, 0.95)),
     lambda_prior=0.0,           # P7 Fix 1: L2 anchor toward theta_0. 0=disabled.
+    lambda_traj=0.0,            # P8 Mod 3: trajectory consistency. 0=disabled.
+    n_traj_samples=4,           # P8: snapshots per outer step (Liang default)
+    traj_history_window=20,     # P8: window from which to sample (Liang default)
+    rng_seed=42,                # P8: reproducibility for L_traj sampling
     track_best=True,            # P7: keep best-θ-so-far snapshot
     verbose=True,
     log_every=10,
@@ -569,6 +629,9 @@ def online_calibration_loop(
     best_theta = theta.copy()
     best_step = 0
 
+    # P8: RNG for L_traj snapshot sampling
+    rng = np.random.default_rng(rng_seed)
+
     for t, obs in enumerate(real_frames):
         # 1. Build per-frame sys_dict
         sys_t = dict(sys_dict)
@@ -598,13 +661,24 @@ def online_calibration_loop(
         )
 
         # 4b. P7 Fix 1: L_prior anchor toward theta_0
-        # L_prior = λ · ||θ - θ_0||²
-        # ∂L_prior/∂θ = 2λ · (θ - θ_0)
         if lambda_prior > 0.0:
             grad_prior = 2.0 * lambda_prior * (theta - theta_0_const)
         else:
             grad_prior = np.zeros_like(theta)
-        grad = grad_data + grad_prior
+
+        # 4c. P8 Mod 3: L_traj — trajectory consistency on 4 history snapshots
+        if lambda_traj > 0.0:
+            L_traj, grad_traj = compute_traj_loss(
+                theta, history, sys_dict,
+                n_samples=n_traj_samples,
+                history_window=traj_history_window,
+                n_cycles_per_frame=n_cycles_per_frame,
+                rng=rng,
+            )
+        else:
+            L_traj, grad_traj = 0.0, np.zeros_like(theta)
+
+        grad = grad_data + grad_prior + lambda_traj * grad_traj
 
         # 5. Adam step + clip to bounds
         theta = opt.step(theta, grad)
@@ -631,10 +705,14 @@ def online_calibration_loop(
             grad_prior_a=float(grad_prior[0]),
             grad_prior_s=float(grad_prior[1]),
             grad_prior_t=float(grad_prior[2]),
+            L_traj=float(L_traj),
+            grad_traj_a=float(grad_traj[0]),
+            grad_traj_s=float(grad_traj[1]),
+            grad_traj_t=float(grad_traj[2]),
         )
         log.append(log_entry)
 
-        # History (for future L_traj — not used in this Phase 5 POC)
+        # History (used by L_traj on subsequent frames)
         history.append(dict(
             knife_pos=obs["knife_pos"].copy(),
             alpha_obs=obs["alpha_obs"].copy(),
@@ -643,7 +721,8 @@ def online_calibration_loop(
 
         if verbose and (t % log_every == 0 or t == n_frames - 1):
             best_tag = " ★" if t == best_step else ""
-            print(f"[t={t:3d}] L_direct={L_direct:.4e}  L_gap={L_gap:.4e}  "
+            traj_tag = f"  L_traj={L_traj:.4e}" if lambda_traj > 0 else ""
+            print(f"[t={t:3d}] L_dir={L_direct:.4e}  L_gap={L_gap:.4e}{traj_tag}  "
                   f"θ=({theta[0]:.3f}, {theta[1]:.3f}, {theta[2]:.3f}){best_tag}")
 
     return dict(
@@ -656,6 +735,7 @@ def online_calibration_loop(
         final_L=float(log[-1]["L_direct"]),
         theta_0=theta_0_const,
         lambda_prior=lambda_prior,
+        lambda_traj=lambda_traj,
     )
 
 
@@ -774,7 +854,7 @@ def plot_convergence(log_path=None, out_path=None):
     return out_path
 
 
-def integration_test(n_frames=100, lambda_prior=0.0, log_out_name=None):
+def integration_test(n_frames=100, lambda_prior=0.0, lambda_traj=0.0, log_out_name=None):
     """Phase 5/7 test: full online loop, synth-to-synth.
 
     Setup:
@@ -788,7 +868,7 @@ def integration_test(n_frames=100, lambda_prior=0.0, log_out_name=None):
       log_out_name — npz file basename for saving log
     """
     print(f"\n[integ] running {n_frames}-frame online calibration "
-          f"(lambda_prior={lambda_prior}) ...")
+          f"(λ_prior={lambda_prior}, λ_traj={lambda_traj}) ...")
     wp.init()
     sys_dict = setup_synthetic_system(N=20)
 
@@ -809,6 +889,7 @@ def integration_test(n_frames=100, lambda_prior=0.0, log_out_name=None):
         K_inner=30, lr_inner=0.1,
         lr_outer=np.array([0.1, 1.0, 0.05]),
         lambda_prior=lambda_prior,
+        lambda_traj=lambda_traj,
         verbose=True, log_every=max(1, n_frames // 10),
     )
     elapsed = time.time() - t_start
@@ -856,12 +937,17 @@ def integration_test(n_frames=100, lambda_prior=0.0, log_out_name=None):
         grad_prior_a=np.array([e["grad_prior_a"] for e in log]),
         grad_prior_s=np.array([e["grad_prior_s"] for e in log]),
         grad_prior_t=np.array([e["grad_prior_t"] for e in log]),
+        L_traj=np.array([e["L_traj"] for e in log]),
+        grad_traj_a=np.array([e["grad_traj_a"] for e in log]),
+        grad_traj_s=np.array([e["grad_traj_s"] for e in log]),
+        grad_traj_t=np.array([e["grad_traj_t"] for e in log]),
         theta_true=theta_true,
         theta_0=theta_0,
         theta_best=theta_best,
         theta_final=theta_final,
         best_step=np.array([best_step]),
         lambda_prior=np.array([lambda_prior]),
+        lambda_traj=np.array([lambda_traj]),
     )
     if log_out_name is None:
         log_out_name = "online_residual_log.npz"
@@ -870,6 +956,43 @@ def integration_test(n_frames=100, lambda_prior=0.0, log_out_name=None):
     print(f"[integ] log saved to {out_path}")
 
     return pass_overall, log, result
+
+
+def sweep_lambda_traj(n_frames=500, lambdas=(0.0, 0.1, 0.3, 0.5, 1.0)):
+    """P8 sweep: run integration_test at multiple λ_traj values, report best.
+
+    Uses lambda_prior=0 to isolate L_traj contribution.
+    """
+    print("=" * 70)
+    print(f"P8 SWEEP: lambda_traj over {list(lambdas)}, n_frames={n_frames}")
+    print("=" * 70)
+    results = {}
+    for lam in lambdas:
+        print(f"\n{'#' * 70}\n#  λ_traj = {lam}\n{'#' * 70}")
+        _, _, result = integration_test(
+            n_frames=n_frames,
+            lambda_prior=0.0,
+            lambda_traj=lam,
+            log_out_name=f"online_residual_log_traj_{lam:.1f}.npz",
+        )
+        results[lam] = result
+
+    print("\n" + "=" * 70)
+    print("P8 L_TRAJ SWEEP SUMMARY:")
+    print("=" * 70)
+    theta_true = np.array([3.0, 20.0, 0.5])
+    print(f"{'λ_traj':>8} | {'best_step':>9} | {'best_L':>10} | "
+          f"{'α_final':>8} | {'s_final':>8} | {'τ_final':>8} | "
+          f"{'α_err%':>7} | {'s_err%':>7} | {'τ_err%':>7}")
+    print("-" * 120)
+    for lam, r in results.items():
+        # Report FINAL params (not best) because L_traj should stabilize final
+        f = r["final_theta"]
+        rel = np.abs(f - theta_true) / np.maximum(np.abs(theta_true), 1e-6) * 100
+        print(f"{lam:>8.2f} | {r['best_step']:>9d} | {r['best_L']:>10.2e} | "
+              f"{f[0]:>8.3f} | {f[1]:>8.3f} | {f[2]:>8.3f} | "
+              f"{rel[0]:>7.2f} | {rel[1]:>7.2f} | {rel[2]:>7.2f}")
+    return results
 
 
 def sweep_lambda_prior(n_frames=500, lambdas=(0.0, 1e-5, 1e-4, 1e-3, 1e-2)):
@@ -916,19 +1039,28 @@ if __name__ == "__main__":
         outer_grad_test()
     elif "--integ" in _sys.argv:
         n = 100
-        lam = 0.0
+        lam_p = 0.0
+        lam_t = 0.0
         for arg in _sys.argv:
             if arg.startswith("--frames="):
                 n = int(arg.split("=")[1])
-            if arg.startswith("--lambda="):
-                lam = float(arg.split("=")[1])
-        integration_test(n_frames=n, lambda_prior=lam)
+            if arg.startswith("--lambda=") or arg.startswith("--lambda_prior="):
+                lam_p = float(arg.split("=")[1])
+            if arg.startswith("--lambda_traj="):
+                lam_t = float(arg.split("=")[1])
+        integration_test(n_frames=n, lambda_prior=lam_p, lambda_traj=lam_t)
     elif "--sweep" in _sys.argv:
         n = 500
         for arg in _sys.argv:
             if arg.startswith("--frames="):
                 n = int(arg.split("=")[1])
         sweep_lambda_prior(n_frames=n)
+    elif "--sweep_traj" in _sys.argv:
+        n = 500
+        for arg in _sys.argv:
+            if arg.startswith("--frames="):
+                n = int(arg.split("=")[1])
+        sweep_lambda_traj(n_frames=n)
     elif "--plot" in _sys.argv:
         plot_convergence()
     else:
