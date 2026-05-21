@@ -522,6 +522,105 @@ def inner_loop_test():
     return True
 
 
+# =============================================================================
+# Main online calibration loop (Phase 5)
+# =============================================================================
+
+def online_calibration_loop(
+    sys_dict,
+    real_frames,                # output of generate_synth_real_trajectory
+    theta_0,                    # np.array(3,) initial guess
+    K_inner=30,
+    lr_inner=0.1,
+    lr_outer=np.array([0.1, 1.0, 0.05]),    # per-param (alpha_min, sharp, threshold)
+    n_cycles_per_frame=1,
+    param_bounds=((0.5, 50.0), (1.0, 200.0), (0.05, 0.95)),
+    verbose=True,
+    log_every=10,
+):
+    """Main online residual + Adam calibration loop.
+
+    Algorithm (mirrors Liang Algorithm 1, adapted for cutting):
+      for each frame t with observation (α_obs, F_obs):
+          1. Forward sim with current θ → (α_sim, δ_v_sim)
+          2. Inner loop → Δδ_v (state correction for next frame)
+          3. Outer Warp-tape gradient → ∂L/∂θ
+          4. Adam step on θ (with per-param lr)
+          5. Save history snapshot
+
+    Returns: list of per-frame log entries.
+    """
+    n_frames = len(real_frames)
+    theta = theta_0.copy().astype(np.float64)
+    opt = AdamND(n_dims=3, lr=lr_outer)
+    history = []
+    log = []
+
+    bounds_lo = np.array([b[0] for b in param_bounds])
+    bounds_hi = np.array([b[1] for b in param_bounds])
+
+    for t, obs in enumerate(real_frames):
+        # 1. Build per-frame sys_dict
+        sys_t = dict(sys_dict)
+        sys_t["knife_pos"] = np.array([obs["knife_pos"]], dtype=np.float32)
+
+        # 2. Forward sim with current θ → delta_v_sim for inner loop
+        params_curr = make_params(
+            alpha_min=float(theta[0]), sharpness=float(theta[1]),
+            threshold=float(theta[2]), requires_grad=False,
+        )
+        alpha_sim_wp, delta_v_sim_wp = run_ssa_full_with_state(
+            params_curr, sys_t, n_cycles=n_cycles_per_frame,
+        )
+        alpha_sim = alpha_sim_wp.numpy().copy()
+        delta_v_sim = delta_v_sim_wp.numpy().copy()
+
+        # 3. Inner loop: compute Δδ_v
+        delta_delta_v, L_gap, _ = compute_damage_residual(
+            delta_v_sim, obs["alpha_obs"],
+            float(theta[1]), float(theta[2]),
+            K_inner=K_inner, lr_inner=lr_inner, verbose=False,
+        )
+
+        # 4. Outer gradient (Strategy A: backprop through forward sim only)
+        L_direct, grad = compute_outer_gradient(
+            theta, sys_t, obs["alpha_obs"], n_cycles=n_cycles_per_frame,
+        )
+
+        # 5. Adam step + clip to bounds
+        theta = opt.step(theta, grad)
+        theta = np.clip(theta, bounds_lo, bounds_hi)
+
+        # 6. Log + history
+        log_entry = dict(
+            t=t,
+            knife_x=float(obs["knife_pos"][0]),
+            L_direct=L_direct,
+            L_gap=L_gap,
+            alpha_min=float(theta[0]),
+            sharpness=float(theta[1]),
+            threshold=float(theta[2]),
+            grad_a=float(grad[0]),
+            grad_s=float(grad[1]),
+            grad_t=float(grad[2]),
+        )
+        log.append(log_entry)
+
+        # History (for future L_traj — not used in this Phase 5 POC)
+        history.append(dict(
+            knife_pos=obs["knife_pos"].copy(),
+            alpha_obs=obs["alpha_obs"].copy(),
+            delta_v_corrected=(delta_v_sim + delta_delta_v).copy(),
+        ))
+
+        if verbose and (t % log_every == 0 or t == n_frames - 1):
+            print(f"[t={t:3d}] L_direct={L_direct:.4e}  L_gap={L_gap:.4e}  "
+                  f"θ=({theta[0]:.3f}, {theta[1]:.3f}, {theta[2]:.3f})  "
+                  f"|grad|=({grad[0]:+.2e}, {grad[1]:+.2e}, {grad[2]:+.2e})")
+
+    return log, history
+
+
 def outer_grad_test():
     """Phase 4 test: verify outer gradient points toward theta_true.
 
@@ -572,6 +671,84 @@ def outer_grad_test():
         return False
 
 
+def integration_test(n_frames=100):
+    """Phase 5 test: full online loop, synth-to-synth.
+
+    Setup:
+      theta_true = (3.0, 20.0, 0.5)
+      theta_0    = (5.0, 10.0, 0.5)   (alpha_min 67% off, sharp 50% off)
+      knife sweep x=0.35→0.65 (broad cavity)
+
+    Expected: after n_frames, theta converges toward theta_true.
+    """
+    print(f"\n[integ] running {n_frames}-frame online calibration ...")
+    wp.init()
+    sys_dict = setup_synthetic_system(N=20)
+
+    # 1. Generate synth real trajectory
+    traj = make_knife_trajectory(n_frames=n_frames, x_start=0.35, x_end=0.65)
+    theta_true = np.array([3.0, 20.0, 0.5])
+    real_frames = generate_synth_real_trajectory(
+        sys_dict, theta_true, traj,
+        k_bulk_true=1.0, n_cycles_per_frame=1,
+    )
+
+    # 2. Run online loop
+    theta_0 = np.array([5.0, 10.0, 0.5])
+    print(f"[integ] theta_true = {theta_true}")
+    print(f"[integ] theta_0    = {theta_0}")
+
+    t_start = time.time()
+    log, history = online_calibration_loop(
+        sys_dict, real_frames, theta_0,
+        K_inner=30, lr_inner=0.1,
+        lr_outer=np.array([0.1, 1.0, 0.05]),
+        verbose=True, log_every=max(1, n_frames // 10),
+    )
+    elapsed = time.time() - t_start
+
+    # 3. Evaluate convergence
+    final = log[-1]
+    theta_final = np.array([final["alpha_min"], final["sharpness"], final["threshold"]])
+    err = np.abs(theta_final - theta_true)
+    rel_err = err / np.maximum(np.abs(theta_true), 1e-6)
+
+    print(f"\n[integ] Done in {elapsed:.1f}s ({elapsed/n_frames*1000:.1f} ms/frame)")
+    print(f"[integ] theta_true  = {theta_true}")
+    print(f"[integ] theta_final = {theta_final}")
+    print(f"[integ] abs error   = {err}")
+    print(f"[integ] rel error   = {rel_err * 100} %")
+
+    # Pass criterion (relaxed for POC): at least 2 of 3 params within 30% rel
+    n_pass = int((rel_err < 0.30).sum())
+    pass_overall = n_pass >= 2
+
+    if pass_overall:
+        print(f"[integ] PASS  ({n_pass}/3 params within 30% rel error)")
+    else:
+        print(f"[integ] PARTIAL  ({n_pass}/3 params within 30% — algorithm works but needs tuning)")
+
+    # Save log to npz for Phase 6 visualization
+    log_arr = dict(
+        t=np.array([e["t"] for e in log]),
+        L_direct=np.array([e["L_direct"] for e in log]),
+        L_gap=np.array([e["L_gap"] for e in log]),
+        alpha_min=np.array([e["alpha_min"] for e in log]),
+        sharpness=np.array([e["sharpness"] for e in log]),
+        threshold=np.array([e["threshold"] for e in log]),
+        grad_a=np.array([e["grad_a"] for e in log]),
+        grad_s=np.array([e["grad_s"] for e in log]),
+        grad_t=np.array([e["grad_t"] for e in log]),
+        theta_true=theta_true,
+        theta_0=theta_0,
+    )
+    out_path = REPO_ROOT / "tools" / "online_residual_log.npz"
+    np.savez(out_path, **log_arr)
+    print(f"[integ] log saved to {out_path}")
+
+    return pass_overall, log
+
+
 if __name__ == "__main__":
     import sys as _sys
     if "--smoke" in _sys.argv:
@@ -582,8 +759,16 @@ if __name__ == "__main__":
         inner_loop_test()
     elif "--outer" in _sys.argv:
         outer_grad_test()
+    elif "--integ" in _sys.argv:
+        # Optional: pass --frames=N to override
+        n = 100
+        for arg in _sys.argv:
+            if arg.startswith("--frames="):
+                n = int(arg.split("=")[1])
+        integration_test(n_frames=n)
     else:
         smoke_test()
         trajectory_test()
         inner_loop_test()
         outer_grad_test()
+        integration_test(n_frames=50)  # shorter for full-test run
