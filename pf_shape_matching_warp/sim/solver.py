@@ -172,9 +172,14 @@ class ShapeMatchingSolver:
         self._ssa_cycle_index = 0
 
     def reset_ssa_buffers(self):
-        """Reset cycle index + zero all buffers. Call BEFORE starting a new
-        forward pass that will be backproped through (e.g. before each
+        """Reset cycle index + zero all SSA buffer pools. Call BEFORE starting
+        a new forward pass that will be backproped through (e.g. before each
         calibration iteration's tape recording). Forward-only RL eval can skip.
+
+        IMPORTANT: this resets ONLY the SSA buffer pools (alpha/edge_damage/
+        particle_damage). It does NOT reset pos/vel/cluster_quat/main alpha
+        buffer. For a complete "rest state" reset suitable for sys-ID's
+        per-trajectory restart, use reset_to_rest(rest_vertices) instead.
         """
         if not self.use_ssa_soft_removal or self._ssa_alpha_buffers is None:
             return
@@ -186,6 +191,50 @@ class ShapeMatchingSolver:
         for buf in self._ssa_particle_damage_buffers:
             buf.zero_()
         self._ssa_cycle_index = 0
+
+    def reset_to_rest(self, rest_vertices):
+        """Full reset of ALL evolved state to a clean rest pose.
+
+        Sys-ID per-trajectory restart: when starting a calibration trajectory
+        from scratch, the solver state must be reset to the mesh rest pose with
+        zero velocity, zero damage, and identity cluster rotations. Without
+        all of these, residual state from a prior call contaminates the new
+        trajectory (silent bug — physics looks plausible but Test 3 ≠ Test 2).
+
+        Resets:
+          - pos / old_pos / pred_pos      ← rest_vertices
+          - vel                            ← 0
+          - alpha (main + SSA pools)      ← 1
+          - damage (main + SSA pools)     ← 0
+          - edge_damage (main + SSA pools) ← 0
+          - cluster_quat                   ← identity (Müller warm-start)
+          - step_count                     ← 0
+          - SSA cycle_index                ← 0
+
+        Args:
+            rest_vertices: (N, 3) np.array of rest positions
+
+        Note: knife pose / knife_active are NOT reset (they're per-frame
+        controls, not evolved state).
+        """
+        import numpy as _np
+        rest_wp = wp.array(_np.asarray(rest_vertices, dtype=_np.float32),
+                            dtype=wp.vec3, device=self.device)
+        wp.copy(self.p["pos"], rest_wp)
+        wp.copy(self.p["old_pos"], rest_wp)
+        wp.copy(self.p["pred_pos"], rest_wp)
+        self.p["vel"].zero_()
+        # Main (non-SSA) buffers
+        self.p["alpha"].fill_(1.0)
+        self.p["damage"].zero_()
+        if self.e is not None:
+            self.e["damage"].zero_()
+        # SSA buffer pools (alpha → 1, damages → 0)
+        self.reset_ssa_buffers()
+        # Cluster warm-start quaternions back to identity
+        wp.launch(reset_cluster_quat_kernel, dim=self.num_clusters,
+                  inputs=[self.c["cluster_quat"]], device=self.device)
+        self.step_count = 0
 
     def _current_alpha(self):
         """Returns the wp.array buffer that should be read for alpha at the

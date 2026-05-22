@@ -42,6 +42,114 @@ wp.config.verify_autograd_array_access = True
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+
+@wp.kernel
+def corrected_alpha_sigmoid_kernel(
+    delta_v_corrected: wp.array(dtype=wp.float32),
+    sharpness:         wp.array(dtype=wp.float32),     # (1,) param
+    threshold:         wp.array(dtype=wp.float32),     # (1,) param
+    alpha_corrected:   wp.array(dtype=wp.float32),
+):
+    """Compute α_corrected = sigmoid(-s · (δv_corrected - τ)) per particle.
+
+    Used to implement Liang 2023's L_gap loss inside Warp Tape:
+        δv_corrected = δv_sim + Δδ_v  (Δδ_v is constant from inner loop)
+        α_corrected = sigmoid(-s·(δv_corrected - τ))
+        L_gap = mean (α_corrected - α_obs)²
+
+    Gradient w.r.t. sharpness and threshold flows automatically via Warp;
+    gradient w.r.t. α_min flows through δv_sim (forward sim).
+    """
+    i = wp.tid()
+    dv = delta_v_corrected[i]
+    s = sharpness[0]
+    tau = threshold[0]
+    # σ(-s·(dv-τ)) = 1 / (1 + exp(s·(dv-τ)))
+    alpha_corrected[i] = 1.0 / (1.0 + wp.exp(s * (dv - tau)))
+
+
+@wp.kernel
+def add_residual_kernel(
+    delta_v_sim:        wp.array(dtype=wp.float32),
+    delta_v_residual:   wp.array(dtype=wp.float32),    # constant Δδ_v from inner loop
+    delta_v_corrected:  wp.array(dtype=wp.float32),
+):
+    """Compute δv_corrected[i] = δv_sim[i] + Δδ_v[i].
+    Δδ_v is treated as constant in the tape (no grad through it).
+    """
+    i = wp.tid()
+    delta_v_corrected[i] = delta_v_sim[i] + delta_v_residual[i]
+
+
+@wp.kernel
+def masked_mse_loss_kernel(
+    alpha_sim: wp.array(dtype=wp.float32),
+    alpha_target: wp.array(dtype=wp.float32),
+    mask: wp.array(dtype=wp.int32),
+    loss_buf: wp.array(dtype=wp.float32),
+):
+    """Per-particle MSE summed only over particles where mask[i]==1.
+
+    Used to mimic real-world observation visibility: only the surface (or
+    a subset of the surface) is observable from cameras. Internal particles
+    contribute zero to the loss and zero gradient.
+    """
+    i = wp.tid()
+    if mask[i] == 1:
+        diff = alpha_sim[i] - alpha_target[i]
+        wp.atomic_add(loss_buf, 0, diff * diff)
+
+
+def compute_observable_mask(sys_dict: dict, mode: str = "surface",
+                            margin: float = 0.02) -> np.ndarray:
+    """Return (N,) int32 mask: 1 = observable from sensors, 0 = internal/occluded.
+
+    Modes (mimics what cameras can actually see in real setup):
+      'all'       — all particles observable (no masking; for baseline comparison)
+      'surface'   — all particles touching the surface mesh (≈top + sides)
+      'top'       — only y ≥ y_max - margin (D405 from above)
+      'top+side'  — top OR x ≥ x_max - margin (D405 + 1 side RGB)
+      'top+2side' — top + 2 perpendicular side faces
+
+    Default 'surface' = best case for cube observability.
+    """
+    pos = sys_dict["pos"]
+    N = sys_dict["N"]
+    mask = np.zeros(N, dtype=np.int32)
+
+    if mode == "all":
+        mask[:] = 1
+        return mask
+
+    bbox_lo = pos.min(axis=0); bbox_hi = pos.max(axis=0)
+
+    if mode == "surface":
+        sf = sys_dict.get("surface_faces")
+        if sf is None:
+            raise ValueError("mode='surface' requires sys_dict to have 'surface_faces'")
+        surface_verts = np.unique(sf.ravel())
+        mask[surface_verts] = 1
+        return mask
+
+    if mode == "top":
+        mask[pos[:, 1] >= bbox_hi[1] - margin] = 1
+        return mask
+
+    if mode == "top+side":
+        is_top = pos[:, 1] >= bbox_hi[1] - margin
+        is_side = pos[:, 0] >= bbox_hi[0] - margin
+        mask[is_top | is_side] = 1
+        return mask
+
+    if mode == "top+2side":
+        is_top = pos[:, 1] >= bbox_hi[1] - margin
+        is_side1 = pos[:, 0] >= bbox_hi[0] - margin
+        is_side2 = pos[:, 2] >= bbox_hi[2] - margin
+        mask[is_top | is_side1 | is_side2] = 1
+        return mask
+
+    raise ValueError(f"unknown observable mask mode: {mode!r}")
+
 # Reuse existing infra
 from tools.calibrate_stage2_autograd import (  # noqa: E402
     setup_synthetic_system,
@@ -50,6 +158,192 @@ from tools.calibrate_stage2_autograd import (  # noqa: E402
     mse_loss_kernel,
     Adam2D,
 )
+
+
+# =============================================================================
+# 3D cube geometry for synth POC (replaces 1D line in cumulative-regime tests)
+# =============================================================================
+
+def setup_cube_system(N_per_dim: int = 8,
+                     extent: tuple = (0.1, 0.9),
+                     knife_center: tuple = (0.5, 0.5, 0.5)) -> dict:
+    """3D cubic lattice of N_per_dim^3 particles in [extent[0], extent[1]]^3
+    with 6-neighbor edges (3 edges per particle along +x, +y, +z).
+
+    Returns the same dict shape as setup_synthetic_system so all existing
+    kernels and helpers work unchanged. This gives a 3D synth POC that's
+    much closer to real cutting (volume mesh, particles fully populate the
+    knife's swept volume).
+
+    Sizing:
+        N_per_dim=8   →  N=512   E=1344     (recommended for fast POC)
+        N_per_dim=10  →  N=1000  E=2700
+        N_per_dim=16  →  N=4096  E=11520    (heavy, only if needed)
+
+    The active "informative band" around the knife scales with cube volume
+    captured by the knife sweep, which dramatically improves α_min gradient
+    signal vs the 1D line (where only 1-2 particles are active per frame).
+    """
+    lo, hi = extent
+    xs = np.linspace(lo, hi, N_per_dim, dtype=np.float32)
+    spacing = float(xs[1] - xs[0])
+
+    X, Y, Z = np.meshgrid(xs, xs, xs, indexing='ij')
+    pos_np = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=1).astype(np.float32)
+    N = N_per_dim ** 3
+
+    def lin(i, j, k):
+        return i * N_per_dim * N_per_dim + j * N_per_dim + k
+
+    edge_a_list, edge_b_list = [], []
+    for i in range(N_per_dim):
+        for j in range(N_per_dim):
+            for k in range(N_per_dim):
+                a = lin(i, j, k)
+                if i + 1 < N_per_dim:
+                    edge_a_list.append(a); edge_b_list.append(lin(i + 1, j, k))
+                if j + 1 < N_per_dim:
+                    edge_a_list.append(a); edge_b_list.append(lin(i, j + 1, k))
+                if k + 1 < N_per_dim:
+                    edge_a_list.append(a); edge_b_list.append(lin(i, j, k + 1))
+    edge_a = np.asarray(edge_a_list, dtype=np.int32)
+    edge_b = np.asarray(edge_b_list, dtype=np.int32)
+    E = len(edge_a)
+    pf_rest = np.full(E, spacing, dtype=np.float32)
+
+    return dict(
+        pos=pos_np,
+        edge_a=edge_a,
+        edge_b=edge_b,
+        pf_rest=pf_rest,
+        knife_pos=np.array([list(knife_center)], dtype=np.float32),
+        N=N, E=E,
+    )
+
+
+def make_cube_knife_trajectory(n_frames: int,
+                               x_start: float = 0.2,
+                               x_end: float = 0.8,
+                               y: float = 0.5,
+                               z: float = 0.5) -> np.ndarray:
+    """Linear knife sweep along x at constant (y, z).
+    Defaults: enter cube at x=0.2, exit at x=0.8, slicing through center.
+    """
+    xs = np.linspace(x_start, x_end, n_frames)
+    traj = np.zeros((n_frames, 3), dtype=np.float32)
+    traj[:, 0] = xs
+    traj[:, 1] = y
+    traj[:, 2] = z
+    return traj
+
+
+def load_msh_system(msh_path: str,
+                    knife_center: tuple = (0.15, 0.3, 0.15)) -> dict:
+    """Load a tet .msh file and convert to sys_dict for pf_damage kernels.
+
+    Edges are derived from the 6 edges of each tetrahedron and deduplicated.
+    pf_rest is the Euclidean rest length of each edge.
+
+    Surface faces: prefer existing 'triangle' cell blocks (gmsh tags them when
+    the mesh was built with boundary physical groups). Fallback: derive from
+    tets (faces belonging to exactly 1 tet).
+
+    Returns dict with: pos, edge_a, edge_b, pf_rest, knife_pos, N, E, bbox,
+    surface_faces (F, 3) int32 — for surface-mesh rendering.
+    """
+    import meshio
+    m = meshio.read(msh_path)
+    pos = np.asarray(m.points, dtype=np.float32)
+    N = len(pos)
+    bbox = (pos.min(axis=0), pos.max(axis=0))
+
+    tets_list = [cb.data for cb in m.cells if cb.type == "tetra"]
+    if not tets_list:
+        raise ValueError(f"no 'tetra' cells in {msh_path}")
+    tets = np.concatenate(tets_list, axis=0).astype(np.int32)
+    n_tets = len(tets)
+
+    edge_pairs = np.empty((n_tets * 6, 2), dtype=np.int64)
+    p = 0
+    for a, b in [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]:
+        seg = np.stack([tets[:, a], tets[:, b]], axis=1)
+        edge_pairs[p:p + n_tets] = seg
+        p += n_tets
+    edge_pairs_sorted = np.sort(edge_pairs, axis=1)
+    unique_edges = np.unique(edge_pairs_sorted, axis=0)
+    edge_a = unique_edges[:, 0].astype(np.int32)
+    edge_b = unique_edges[:, 1].astype(np.int32)
+    E = len(edge_a)
+    pf_rest = np.linalg.norm(pos[edge_a] - pos[edge_b], axis=1).astype(np.float32)
+
+    # Surface faces: prefer existing triangle blocks, fallback to tet boundary.
+    tri_blocks = [cb.data for cb in m.cells if cb.type == "triangle"]
+    if tri_blocks:
+        surface_faces = np.concatenate(tri_blocks, axis=0).astype(np.int32)
+    else:
+        from collections import defaultdict
+        face_count = defaultdict(int)
+        face_first = {}
+        for tet in tets:
+            a, b, c, d = int(tet[0]), int(tet[1]), int(tet[2]), int(tet[3])
+            for face in [(a, c, b), (a, b, d), (a, d, c), (b, c, d)]:
+                key = tuple(sorted(face))
+                face_count[key] += 1
+                if key not in face_first:
+                    face_first[key] = face
+        boundary = [face_first[k] for k, cnt in face_count.items() if cnt == 1]
+        surface_faces = np.asarray(boundary, dtype=np.int32)
+
+    return dict(
+        pos=pos,
+        edge_a=edge_a,
+        edge_b=edge_b,
+        pf_rest=pf_rest,
+        knife_pos=np.array([list(knife_center)], dtype=np.float32),
+        N=N, E=E,
+        bbox=bbox,
+        surface_faces=surface_faces,
+    )
+
+
+def make_surface_knife_trajectory(bbox: tuple,
+                                  n_frames: int,
+                                  surface_axis: str = "y",
+                                  margin_fraction: float = 0.15) -> np.ndarray:
+    """Slow surface-knife sweep across the top face of a mesh bbox.
+
+    Knife center at axis_max (so half the sphere is exposed above the surface,
+    half embedded below). Sweeps along the longer non-up axis, with the other
+    non-up axis fixed at center.
+
+    Args:
+        bbox            — (lo, hi) tuple of (3,) np arrays
+        n_frames        — trajectory length (more = slower per-frame motion)
+        surface_axis    — which axis is up ('x', 'y', or 'z')
+        margin_fraction — fraction of sweep-axis span left as margin at each end
+
+    Returns:
+        (n_frames, 3) np.array of knife center positions.
+    """
+    axis_map = {"x": 0, "y": 1, "z": 2}
+    up = axis_map[surface_axis]
+    lo, hi = bbox
+    surface_pos = float(hi[up])
+
+    other = [i for i in range(3) if i != up]
+    spans = sorted([(float(hi[i] - lo[i]), i) for i in other], reverse=True)
+    sweep_axis, other_axis = spans[0][1], spans[1][1]
+
+    span = float(hi[sweep_axis] - lo[sweep_axis])
+    x0 = float(lo[sweep_axis] + margin_fraction * span)
+    x1 = float(hi[sweep_axis] - margin_fraction * span)
+    other_center = float((hi[other_axis] + lo[other_axis]) / 2.0)
+
+    traj = np.zeros((n_frames, 3), dtype=np.float32)
+    traj[:, sweep_axis] = np.linspace(x0, x1, n_frames, dtype=np.float32)
+    traj[:, up] = surface_pos
+    traj[:, other_axis] = other_center
+    return traj
 from pf_shape_matching_warp.sim.pf_damage import (  # noqa: E402
     update_edge_damage_kernel_ssa_param_arr,
     apply_edge_damage_ssa_kernel,
@@ -64,11 +358,27 @@ from pf_shape_matching_warp.sim.pf_damage import (  # noqa: E402
 # Helper: run_ssa returning both alpha and delta_v (mirrors run_ssa_full)
 # =============================================================================
 
-def run_ssa_full_with_state(params: dict, sys_dict: dict, n_cycles: int = 1):
-    """Identical to run_ssa_full but returns BOTH alpha and particle_damage
-    final wp.arrays (needed for residual mapping on damage state).
+def run_ssa_full_with_state(
+    params: dict,
+    sys_dict: dict,
+    n_cycles: int = 1,
+    state_in: dict = None,
+):
+    """Cycle-scoped SSA forward; returns final (alpha, particle_damage, edge_damage) wp.arrays.
 
-    Returns: (alpha_final_wp, delta_v_final_wp)
+    state_in: optional dict carrying frame-to-frame persistent state.
+        Keys (all np.ndarray with float32 dtype):
+            "alpha":            (N,) — initial alpha for cycle 0
+            "edge_damage":      (E,) — initial edge_damage_buffers[0]
+            "particle_damage":  (N,) — initial particle_damage_buffers[0]
+        If None, initializes to REST: alpha=1, both damages=0 (legacy behavior).
+
+    Detachment property: state_in is loaded via np.ndarray -> fresh wp.array,
+    so the Warp Tape sees only the CURRENT call's cycles. Cross-frame gradient
+    flow is intentionally blocked (Liang 2023 detached-state pattern; Mod 1
+    softplus residual Δδ_v absorbs cumulative state error).
+
+    Returns: (alpha_final_wp, particle_damage_final_wp, edge_damage_final_wp)
     """
     N, E = sys_dict["N"], sys_dict["E"]
     pos = wp.array(sys_dict["pos"], dtype=wp.vec3)
@@ -78,17 +388,32 @@ def run_ssa_full_with_state(params: dict, sys_dict: dict, n_cycles: int = 1):
     knife_pos = wp.array(sys_dict["knife_pos"], dtype=wp.vec3)
     fixed = wp.array(np.zeros(N, dtype=np.int32), dtype=wp.int32)
 
+    if state_in is None:
+        alpha_init_np = np.ones(N, dtype=np.float32)
+        edge_dmg_init_np = np.zeros(E, dtype=np.float32)
+        part_dmg_init_np = np.zeros(N, dtype=np.float32)
+    else:
+        alpha_init_np = np.asarray(state_in["alpha"], dtype=np.float32)
+        edge_dmg_init_np = np.asarray(state_in["edge_damage"], dtype=np.float32)
+        part_dmg_init_np = np.asarray(state_in["particle_damage"], dtype=np.float32)
+        assert alpha_init_np.shape == (N,), f"state_in[alpha] shape {alpha_init_np.shape} != ({N},)"
+        assert edge_dmg_init_np.shape == (E,), f"state_in[edge_damage] shape {edge_dmg_init_np.shape} != ({E},)"
+        assert part_dmg_init_np.shape == (N,), f"state_in[particle_damage] shape {part_dmg_init_np.shape} != ({N},)"
+
     alpha_buffers = [
-        wp.array(np.ones(N, dtype=np.float32), dtype=wp.float32, requires_grad=True)
-        for _ in range(n_cycles + 1)
+        wp.array(alpha_init_np if i == 0 else np.ones(N, dtype=np.float32),
+                 dtype=wp.float32, requires_grad=True)
+        for i in range(n_cycles + 1)
     ]
     edge_damage_buffers = [
-        wp.zeros(E, dtype=wp.float32, requires_grad=True)
-        for _ in range(n_cycles + 1)
+        wp.array(edge_dmg_init_np if i == 0 else np.zeros(E, dtype=np.float32),
+                 dtype=wp.float32, requires_grad=True)
+        for i in range(n_cycles + 1)
     ]
     particle_damage_buffers = [
-        wp.zeros(N, dtype=wp.float32, requires_grad=True)
-        for _ in range(n_cycles + 1)
+        wp.array(part_dmg_init_np if i == 0 else np.zeros(N, dtype=np.float32),
+                 dtype=wp.float32, requires_grad=True)
+        for i in range(n_cycles + 1)
     ]
 
     for cycle in range(n_cycles):
@@ -128,7 +453,7 @@ def run_ssa_full_with_state(params: dict, sys_dict: dict, n_cycles: int = 1):
             alpha_buffers[cycle + 1],
         ])
 
-    return alpha_buffers[-1], particle_damage_buffers[-1]
+    return alpha_buffers[-1], particle_damage_buffers[-1], edge_damage_buffers[-1]
 
 
 # =============================================================================
@@ -266,12 +591,17 @@ def compute_outer_gradient(
     sys_dict,             # dict with single knife_pos
     alpha_obs,            # np.array(N,) — observation
     n_cycles=1,
+    state_in: dict = None,    # persistent state from previous frame
+    knife_radius: float = 0.1,
+    observable_mask: np.ndarray = None,  # (N,) int32: 1=observable, 0=internal/hidden
+    delta_delta_v_const: np.ndarray = None,  # (N,) Liang-style residual; if given, use L_gap
 ):
     """Computes ∂L_direct/∂θ where L_direct = Σ (α_sim - α_obs)²
 
     Strategy A (detached residual): outer gradient flows ONLY through
-    forward sim w.r.t. θ. Uses existing Warp tape pattern from
-    calibrate_stage2_autograd.py.
+    forward sim w.r.t. θ in the CURRENT frame's SSA cycle. When state_in
+    is supplied, it serves as the initial condition (loaded as fresh
+    wp.array → cross-frame gradient is blocked by detachment).
 
     Returns:
         loss: float (L_direct, normalized by N)
@@ -282,24 +612,70 @@ def compute_outer_gradient(
         alpha_min=float(theta[0]),
         sharpness=float(theta[1]),
         threshold=float(theta[2]),
-        knife_radius=0.1,
+        knife_radius=knife_radius,
         requires_grad=True,
     )
     target_wp = wp.array(alpha_obs.astype(np.float32), dtype=wp.float32)
     loss_buf = wp.zeros(1, dtype=wp.float32, requires_grad=True)
 
+    # Normalization: by N (default) or by # observable particles (with mask)
+    if observable_mask is None:
+        n_eff = float(N)
+        mask_wp = None
+    else:
+        n_eff = float(int(observable_mask.sum()))
+        if n_eff <= 0:
+            raise ValueError("observable_mask has no observable particles (sum=0)")
+        mask_wp = wp.array(observable_mask.astype(np.int32), dtype=wp.int32)
+
     with wp.Tape() as tape:
-        alpha_sim_wp = run_ssa_full(params, sys_dict, n_cycles=n_cycles)
-        wp.launch(mse_loss_kernel, dim=N,
-                  inputs=[alpha_sim_wp, target_wp, loss_buf])
+        if state_in is None:
+            # Note: L_gap mode needs δv_sim, so we use state-aware path even when state_in=None
+            if delta_delta_v_const is not None:
+                alpha_sim_wp, delta_v_sim_wp, _ed_wp = run_ssa_full_with_state(
+                    params, sys_dict, n_cycles=n_cycles, state_in=None,
+                )
+            else:
+                alpha_sim_wp = run_ssa_full(params, sys_dict, n_cycles=n_cycles)
+                delta_v_sim_wp = None
+        else:
+            alpha_sim_wp, delta_v_sim_wp, _ed_wp = run_ssa_full_with_state(
+                params, sys_dict, n_cycles=n_cycles, state_in=state_in,
+            )
+
+        if delta_delta_v_const is not None:
+            # L_gap mode (Liang 2023):
+            #   α_corrected = sigmoid(-s·(δv_sim + Δδ_v - τ))
+            #   L = mean (α_corrected - α_obs)²
+            # Δδ_v is constant in tape (np.array → fresh wp.array, no grad).
+            dv_resid_wp = wp.array(delta_delta_v_const.astype(np.float32), dtype=wp.float32)
+            dv_corrected_wp = wp.zeros(N, dtype=wp.float32, requires_grad=True)
+            wp.launch(add_residual_kernel, dim=N, inputs=[
+                delta_v_sim_wp, dv_resid_wp, dv_corrected_wp,
+            ])
+            alpha_corrected_wp = wp.zeros(N, dtype=wp.float32, requires_grad=True)
+            wp.launch(corrected_alpha_sigmoid_kernel, dim=N, inputs=[
+                dv_corrected_wp, params["sharpness"], params["threshold"],
+                alpha_corrected_wp,
+            ])
+            output_wp = alpha_corrected_wp
+        else:
+            output_wp = alpha_sim_wp
+
+        if mask_wp is None:
+            wp.launch(mse_loss_kernel, dim=N,
+                      inputs=[output_wp, target_wp, loss_buf])
+        else:
+            wp.launch(masked_mse_loss_kernel, dim=N,
+                      inputs=[output_wp, target_wp, mask_wp, loss_buf])
 
     tape.backward(loss=loss_buf)
 
-    loss = float(loss_buf.numpy()[0]) / float(N)
+    loss = float(loss_buf.numpy()[0]) / n_eff
     grad = np.array([
-        float(params["alpha_min"].grad.numpy()[0]) / float(N),
-        float(params["sharpness"].grad.numpy()[0]) / float(N),
-        float(params["threshold"].grad.numpy()[0]) / float(N),
+        float(params["alpha_min"].grad.numpy()[0]) / n_eff,
+        float(params["sharpness"].grad.numpy()[0]) / n_eff,
+        float(params["threshold"].grad.numpy()[0]) / n_eff,
     ])
     return loss, grad
 
@@ -316,6 +692,8 @@ def compute_traj_loss(
     history_window=20,
     n_cycles_per_frame=1,
     rng=None,
+    knife_radius=0.1,
+    observable_mask=None,
 ):
     """L_traj = (1/n_samples) Σ_h ‖α^sim(θ; u_h) - α^obs_h‖²
 
@@ -350,9 +728,14 @@ def compute_traj_loss(
         sys_h = dict(sys_dict)
         sys_h["knife_pos"] = np.array([h["knife_pos"]], dtype=np.float32)
         # Reuse compute_outer_gradient — it does its own Warp tape backward.
+        # Fix 1: replay from frame_h's INPUT state (state_pre), not rest.
+        # In legacy mode (persistent_state=False) state_pre is None → rest behavior preserved.
         L_h, grad_h = compute_outer_gradient(
             theta, sys_h, h["alpha_obs"],
             n_cycles=n_cycles_per_frame,
+            state_in=h.get("state_pre"),
+            knife_radius=knife_radius,
+            observable_mask=observable_mask,
         )
         total_loss += L_h
         total_grad += grad_h
@@ -395,6 +778,7 @@ def generate_synth_real_trajectory(
     knife_trajectory,      # (n_frames, 3) np array of knife positions
     k_bulk_true=1.0,
     n_cycles_per_frame=1,
+    accumulate=True,       # NEW: persistent damage across frames
 ):
     """Run run_ssa_full at each knife position to produce 'real' observations.
 
@@ -403,14 +787,20 @@ def generate_synth_real_trajectory(
       force_obs   — synthetic axial force (proxy formula)
       knife_pos   — the u_t used
 
-    Note: we re-run ssa from REST at each frame (n_cycles cycles), not
-    accumulate damage across frames. This is a simplification for POC —
-    real cutting would accumulate. Sufficient for testing the param-recovery
-    loop because each frame is an independent (u_t, α_t) pair.
+    accumulate=True (DEFAULT): damage persists across frames (matches real cutting).
+      Frame t's SSA cycle starts from frame t-1's output state. This is the
+      regime where Fix 1 (persistent-state online calibration) is the
+      correct physics.
+
+    accumulate=False (LEGACY): each frame re-runs from REST. Preserved for
+      backward compatibility with POC P1-P11 robustness numbers. Use only
+      for reproducing pre-Fix-1 baselines.
 
     Returns: list of dicts (one per frame).
     """
+    N, E = sys_dict["N"], sys_dict["E"]
     frames = []
+    state_persistent = None  # None = rest at frame 0
     for t, kp in enumerate(knife_trajectory):
         sys_t = dict(sys_dict)
         sys_t["knife_pos"] = np.array([kp], dtype=np.float32)
@@ -422,7 +812,20 @@ def generate_synth_real_trajectory(
             knife_radius=0.1,
             requires_grad=False,
         )
-        alpha_t = run_ssa_full(params_true, sys_t, n_cycles=n_cycles_per_frame).numpy().copy()
+        if accumulate:
+            alpha_wp, part_dmg_wp, edge_dmg_wp = run_ssa_full_with_state(
+                params_true, sys_t, n_cycles=n_cycles_per_frame,
+                state_in=state_persistent,
+            )
+            alpha_t = alpha_wp.numpy().copy()
+            # Update persistent state for the next frame
+            state_persistent = dict(
+                alpha=alpha_t.astype(np.float32),
+                edge_damage=edge_dmg_wp.numpy().astype(np.float32),
+                particle_damage=part_dmg_wp.numpy().astype(np.float32),
+            )
+        else:
+            alpha_t = run_ssa_full(params_true, sys_t, n_cycles=n_cycles_per_frame).numpy().copy()
         force_t = synth_force_proxy(alpha_t, k_bulk_true)
 
         frames.append(dict(
@@ -527,7 +930,7 @@ def inner_loop_test():
         alpha_min=float(theta_true[0]), sharpness=float(theta_true[1]),
         threshold=float(theta_true[2]), requires_grad=False,
     )
-    alpha_obs_wp, delta_v_true_wp = run_ssa_full_with_state(params_true, sys_dict, n_cycles=1)
+    alpha_obs_wp, delta_v_true_wp, _ = run_ssa_full_with_state(params_true, sys_dict, n_cycles=1)
     alpha_obs = alpha_obs_wp.numpy()
     delta_v_true = delta_v_true_wp.numpy()
 
@@ -537,7 +940,7 @@ def inner_loop_test():
         alpha_min=float(theta_wrong[0]), sharpness=float(theta_wrong[1]),
         threshold=float(theta_wrong[2]), requires_grad=False,
     )
-    alpha_sim_wp, delta_v_sim_wp = run_ssa_full_with_state(params_wrong, sys_dict, n_cycles=1)
+    alpha_sim_wp, delta_v_sim_wp, _ = run_ssa_full_with_state(params_wrong, sys_dict, n_cycles=1)
     alpha_sim = alpha_sim_wp.numpy()
     delta_v_sim = delta_v_sim_wp.numpy()
 
@@ -591,6 +994,18 @@ def online_calibration_loop(
     lr_outer=np.array([0.1, 1.0, 0.05]),    # per-param (alpha_min, sharp, threshold)
     n_cycles_per_frame=1,
     param_bounds=((0.5, 50.0), (1.0, 200.0), (0.05, 0.95)),
+    persistent_state=True,      # Fix 1: detached persistent state across frames. False=legacy.
+    knife_radius=0.1,           # propagated to make_params (was previously hardcoded 0.1)
+    observable_mask=None,       # (N,) int32 or None. None = all particles in loss; otherwise mask out invisible particles.
+    loss_mode='direct',         # 'direct' (current): L = ||α_sim - α_obs||²  (DiSECt-style)
+                                # 'gap' (Liang 2023): L = ||α_sim_corrected - α_obs||²
+                                #     where α_corrected uses Δδ_v from inner loop as constant
+    state_update_mode='D',      # Fix 1 follow-up: state propagation strategy
+                                #   'D' (NEW default): state_persistent = raw sim state (no residual).
+                                #        Mod 1 residual computed only for L_gap diagnostic, NOT used
+                                #        to advance state. Cumulative-regime correct.
+                                #   'C' (legacy): state_persistent = sim + residual correction.
+                                #        Pegs τ to clamp under cumulative regime. Kept for ablation.
     lambda_prior=0.0,           # P7 Fix 1: L2 anchor toward theta_0. 0=disabled.
     lambda_traj=0.0,            # P8 Mod 3: trajectory consistency. 0=disabled.
     n_traj_samples=4,           # P8: snapshots per outer step (Liang default)
@@ -638,10 +1053,21 @@ def online_calibration_loop(
     # P10: separate RNG for obs noise (independent of sampling RNG)
     noise_rng = np.random.default_rng(noise_seed)
 
+    # Fix 1: detached persistent state across frames. None = rest at frame 0.
+    state_persistent = None
+
     for t, obs in enumerate(real_frames):
         # 1. Build per-frame sys_dict
         sys_t = dict(sys_dict)
         sys_t["knife_pos"] = np.array([obs["knife_pos"]], dtype=np.float32)
+
+        # Fix 1: snapshot the INPUT state for this frame (used by history → L_traj)
+        # state_pre is what gets fed into THIS frame's SSA cycle.
+        if persistent_state:
+            state_pre_this_frame = (None if state_persistent is None
+                                    else dict(state_persistent))
+        else:
+            state_pre_this_frame = None
 
         # P10: inject fresh Gaussian noise to α_obs (simulates perception noise)
         if obs_noise_std > 0.0:
@@ -650,16 +1076,20 @@ def online_calibration_loop(
         else:
             alpha_obs_noisy = obs["alpha_obs"]
 
-        # 2. Forward sim with current θ → delta_v_sim for inner loop
+        # 2. Forward sim with current θ → (alpha, delta_v, edge_dmg) for inner loop
         params_curr = make_params(
             alpha_min=float(theta[0]), sharpness=float(theta[1]),
-            threshold=float(theta[2]), requires_grad=False,
+            threshold=float(theta[2]),
+            knife_radius=knife_radius,
+            requires_grad=False,
         )
-        alpha_sim_wp, delta_v_sim_wp = run_ssa_full_with_state(
+        alpha_sim_wp, delta_v_sim_wp, edge_dmg_sim_wp = run_ssa_full_with_state(
             params_curr, sys_t, n_cycles=n_cycles_per_frame,
+            state_in=state_pre_this_frame,
         )
         alpha_sim = alpha_sim_wp.numpy().copy()
         delta_v_sim = delta_v_sim_wp.numpy().copy()
+        edge_dmg_sim = edge_dmg_sim_wp.numpy().copy()
 
         # 3. Inner loop: compute Δδ_v on NOISY obs
         delta_delta_v, L_gap, _ = compute_damage_residual(
@@ -668,9 +1098,15 @@ def online_calibration_loop(
             K_inner=K_inner, lr_inner=lr_inner, verbose=False,
         )
 
-        # 4a. Outer gradient (Strategy A) — on NOISY obs
+        # 4a. Outer gradient (Strategy A) — on NOISY obs, with same state_in
+        # loss_mode='gap' uses Liang's residual-based loss; 'direct' uses raw α MSE
+        ddv_for_loss = delta_delta_v if loss_mode == 'gap' else None
         L_direct, grad_data = compute_outer_gradient(
             theta, sys_t, alpha_obs_noisy, n_cycles=n_cycles_per_frame,
+            state_in=state_pre_this_frame,
+            knife_radius=knife_radius,
+            observable_mask=observable_mask,
+            delta_delta_v_const=ddv_for_loss,
         )
 
         # 4b. P7 Fix 1: L_prior anchor toward theta_0
@@ -687,6 +1123,8 @@ def online_calibration_loop(
                 history_window=traj_history_window,
                 n_cycles_per_frame=n_cycles_per_frame,
                 rng=rng,
+                knife_radius=knife_radius,
+                observable_mask=observable_mask,
             )
         else:
             L_traj, grad_traj = 0.0, np.zeros_like(theta)
@@ -746,12 +1184,42 @@ def online_calibration_loop(
         log.append(log_entry)
 
         # History (used by L_traj on subsequent frames) — STORE NOISY obs
-        # so L_traj resamples are consistent with what was actually observed
+        # so L_traj resamples are consistent with what was actually observed.
+        # Fix 1: also store state_pre (input state to this frame) so L_traj
+        # replay starts from the correct cumulative state, not rest.
         history.append(dict(
             knife_pos=obs["knife_pos"].copy(),
             alpha_obs=alpha_obs_noisy.copy(),
             delta_v_corrected=(delta_v_sim + delta_delta_v).copy(),
+            state_pre=state_pre_this_frame,   # None in legacy mode
         ))
+
+        # Fix 1: advance persistent state for next frame.
+        # Two strategies (see state_update_mode docstring above):
+        #   'D' (DEFAULT): raw sim state, no residual injection. Empirically
+        #        gives clean convergence in cumulative regime when active
+        #        particles per frame ≥ ~50.
+        #   'C' (legacy): residual-corrected state. Mod 1's Δδ_v added to dv;
+        #        α recomputed via current-θ sigmoid. Pegs τ to clamp.
+        if persistent_state:
+            if state_update_mode == 'D':
+                state_persistent = dict(
+                    alpha=alpha_sim.astype(np.float32),
+                    edge_damage=edge_dmg_sim.astype(np.float32),
+                    particle_damage=delta_v_sim.astype(np.float32),
+                )
+            elif state_update_mode == 'C':
+                delta_v_next = (delta_v_sim + delta_delta_v).astype(np.float32)
+                alpha_next = _sigmoid(
+                    -float(theta[1]) * (delta_v_next - float(theta[2]))
+                ).astype(np.float32)
+                state_persistent = dict(
+                    alpha=alpha_next,
+                    edge_damage=edge_dmg_sim.astype(np.float32),
+                    particle_damage=delta_v_next,
+                )
+            else:
+                raise ValueError(f"unknown state_update_mode={state_update_mode!r}, expected 'C' or 'D'")
 
         if verbose and (t % log_every == 0 or t == n_frames - 1):
             best_tag = " ★" if t == best_step else ""
@@ -771,7 +1239,97 @@ def online_calibration_loop(
         lambda_prior=lambda_prior,
         lambda_traj=lambda_traj,
         obs_noise_std=obs_noise_std,
+        persistent_state=persistent_state,
+        state_update_mode=state_update_mode,
+        loss_mode=loss_mode,
     )
+
+
+def persistent_state_test():
+    """Fix 1 sanity: persistent-state synth trajectory should show cavity
+    growing monotonically across frames (no resets to rest).
+
+    Test design:
+      1. Build N=20 1D particle line, knife sweep x=0.35 → 0.65, 40 frames.
+      2. Generate trajectories TWO ways:
+           (a) accumulate=True  (Fix 1, new default)
+           (b) accumulate=False (legacy, frame-independent)
+      3. Verify:
+           (a) cavity monotonically grows: debulked_frac_t >= debulked_frac_{t-1}
+           (b) alpha is monotonically non-increasing per vertex
+           (c) legacy mode shows non-monotonic cavity (proves the regimes differ)
+
+    PASS criterion: accumulate=True is monotonic; accumulate=False is not.
+    """
+    print("\n[persist] testing persistent-state synth trajectory ...")
+    wp.init()
+    sys_dict = setup_synthetic_system(N=20)
+    n_frames = 40
+    traj = make_knife_trajectory(n_frames=n_frames, x_start=0.35, x_end=0.65)
+    theta_true = np.array([3.0, 20.0, 0.5])
+
+    # --- Mode A: accumulate=True (Fix 1) ---
+    frames_acc = generate_synth_real_trajectory(
+        sys_dict, theta_true, traj, k_bulk_true=1.0,
+        n_cycles_per_frame=1, accumulate=True,
+    )
+    deb_acc = np.array([(f["alpha_obs"] < 0.5).mean() for f in frames_acc])
+    alpha_acc = np.stack([f["alpha_obs"] for f in frames_acc])  # (T, N)
+
+    # --- Mode B: accumulate=False (legacy) ---
+    frames_leg = generate_synth_real_trajectory(
+        sys_dict, theta_true, traj, k_bulk_true=1.0,
+        n_cycles_per_frame=1, accumulate=False,
+    )
+    deb_leg = np.array([(f["alpha_obs"] < 0.5).mean() for f in frames_leg])
+    alpha_leg = np.stack([f["alpha_obs"] for f in frames_leg])
+
+    print(f"[persist] accumulate=True   debulked frac: "
+          f"min={deb_acc.min():.3f}, max={deb_acc.max():.3f}, "
+          f"final={deb_acc[-1]:.3f}")
+    print(f"[persist] accumulate=False  debulked frac: "
+          f"min={deb_leg.min():.3f}, max={deb_leg.max():.3f}, "
+          f"final={deb_leg[-1]:.3f}")
+
+    # Check (a): cavity monotonically grows in accumulate mode
+    # Allow tiny float noise (1e-3) on the debulked fraction.
+    deb_diff_acc = np.diff(deb_acc)
+    monotone_cavity = np.all(deb_diff_acc >= -1e-3)
+    print(f"[persist] (a) accumulate cavity monotonic (Δdeb ≥ -1e-3): "
+          f"{'PASS' if monotone_cavity else 'FAIL'}  "
+          f"(min Δdeb = {deb_diff_acc.min():.4f})")
+
+    # Check (b): alpha per-vertex monotonically non-increasing in accumulate mode
+    alpha_diff_acc = np.diff(alpha_acc, axis=0)  # (T-1, N)
+    # Allow tiny float noise per element
+    monotone_alpha = bool(np.all(alpha_diff_acc <= 1e-3))
+    max_increase = float(alpha_diff_acc.max())
+    print(f"[persist] (b) accumulate alpha non-increasing per vertex "
+          f"(max Δα ≤ 1e-3): {'PASS' if monotone_alpha else 'FAIL'}  "
+          f"(max per-vertex Δα = {max_increase:.4f})")
+
+    # Check (c): legacy mode shows NON-monotonic cavity (different regime)
+    # Knife sweep means each frame independently sees a *moving* knife → cavity
+    # appears at different positions → non-monotonic across frames.
+    deb_diff_leg = np.diff(deb_leg)
+    non_monotone_legacy = bool(np.any(deb_diff_leg < -1e-3))
+    print(f"[persist] (c) legacy cavity NON-monotonic (proves regimes differ): "
+          f"{'PASS' if non_monotone_legacy else 'FAIL'}  "
+          f"(min Δdeb_legacy = {deb_diff_leg.min():.4f})")
+
+    # Show concrete progression in accumulate mode
+    print("[persist] accumulate-mode cavity progression (every 5 frames):")
+    for t in [0, 5, 10, 15, 20, 25, 30, 35, 39]:
+        if t < n_frames:
+            print(f"  frame {t:2d}: knife_x={traj[t,0]:.3f}  "
+                  f"deb={deb_acc[t]:.3f}  "
+                  f"α=[{alpha_acc[t].min():.3f}, {alpha_acc[t].max():.3f}]")
+
+    all_pass = monotone_cavity and monotone_alpha and non_monotone_legacy
+    print(f"[persist] {'PASS' if all_pass else 'FAIL'}  "
+          f"(monotone_cavity={monotone_cavity}, monotone_alpha={monotone_alpha}, "
+          f"legacy_non_monotone={non_monotone_legacy})")
+    return all_pass
 
 
 def outer_grad_test():
@@ -991,6 +1549,374 @@ def integration_test(n_frames=100, lambda_prior=0.0, lambda_traj=0.0, log_out_na
     print(f"[integ] log saved to {out_path}")
 
     return pass_overall, log, result
+
+
+# =============================================================================
+# Cube integration test — Fix 1 cumulative-regime canonical validation
+# =============================================================================
+
+def cube_integration_test(
+    N_per_dim: int = 12,
+    extent: tuple = (0.3, 0.7),
+    n_frames: int = 200,
+    state_update_mode: str = 'D',
+    lambda_prior: float = 0.0,
+    lambda_traj: float = 0.0,
+    knife_radius: float = 0.1,
+    log_out_name: str = None,
+):
+    """Canonical cumulative-regime POC on 3D cube.
+
+    Setup:
+        cube N_per_dim^3 particles in extent³ (default 12³ = 1728 particles in
+        [0.3, 0.7]³ → spacing 0.036, ~86 active particles per frame at r=0.1).
+        knife sweep along x at center, 200 frames.
+        θ_true = (3.0, 20.0, 0.5)   θ_0 = (5.0, 10.0, 0.5)
+
+    Expected (default args):
+        rel_err α_min  < 5%
+        rel_err sharp  < 5%
+        rel_err τ      < 5%      (no clamp pegging — proves Mode D works)
+
+    Args:
+        N_per_dim       — cube resolution along each axis (12 = sweet spot)
+        extent          — cube extent in each axis
+        n_frames        — trajectory length
+        state_update_mode — 'D' (default, new) or 'C' (legacy ablation)
+        lambda_prior    — P7 anchor strength (0=disabled)
+        lambda_traj     — P8 trajectory-consistency weight (0=disabled)
+        knife_radius    — knife influence radius
+        log_out_name    — npz file basename for saving log
+    """
+    print(f"\n[cube] cumulative-regime POC on cube {N_per_dim}³ extent {extent}")
+    print(f"[cube] mode={state_update_mode}  n_frames={n_frames}  "
+          f"λ_prior={lambda_prior}  λ_traj={lambda_traj}")
+    wp.init()
+
+    sys_dict = setup_cube_system(N_per_dim=N_per_dim, extent=extent)
+    print(f"[cube] N={sys_dict['N']}  E={sys_dict['E']}  knife_r={knife_radius}")
+    spacing = (extent[1] - extent[0]) / (N_per_dim - 1)
+    active_est = int((4.0 / 3.0) * np.pi * knife_radius**3 / spacing**3)
+    print(f"[cube] spacing={spacing:.4f}  est. active per frame ≈ {active_est}  "
+          f"({'PASS' if active_est >= 50 else 'WARN: < 50 threshold'})")
+
+    # Knife sweep limited to middle 60% of extent to enter/exit cleanly
+    lo, hi = extent; span = hi - lo
+    traj = make_cube_knife_trajectory(
+        n_frames=n_frames,
+        x_start=lo + 0.1 * span,
+        x_end=hi - 0.1 * span,
+        y=(lo + hi) / 2,
+        z=(lo + hi) / 2,
+    )
+
+    theta_true = np.array([3.0, 20.0, 0.5])
+    theta_0 = np.array([5.0, 10.0, 0.5])
+    print(f"[cube] θ_true   = {theta_true}")
+    print(f"[cube] θ_0      = {theta_0}")
+
+    real_frames = generate_synth_real_trajectory(
+        sys_dict, theta_true, traj, k_bulk_true=1.0,
+        n_cycles_per_frame=1, accumulate=True,
+    )
+    cavity_init = float((real_frames[0]["alpha_obs"] < 0.5).mean())
+    cavity_final = float((real_frames[-1]["alpha_obs"] < 0.5).mean())
+    print(f"[cube] cavity fraction: t=0 {cavity_init:.3f}  →  t={n_frames-1} {cavity_final:.3f}")
+
+    t_start = time.time()
+    result = online_calibration_loop(
+        sys_dict, real_frames, theta_0,
+        K_inner=30, lr_inner=0.1,
+        lr_outer=np.array([0.1, 1.0, 0.05]),
+        state_update_mode=state_update_mode,
+        lambda_prior=lambda_prior,
+        lambda_traj=lambda_traj,
+        verbose=True, log_every=max(1, n_frames // 10),
+    )
+    elapsed = time.time() - t_start
+
+    log = result["log"]
+    theta_final = result["final_theta"]
+    theta_best = result["best_theta"]
+
+    err_final = np.abs(theta_final - theta_true)
+    rel_final = err_final / np.maximum(np.abs(theta_true), 1e-6)
+    err_best = np.abs(theta_best - theta_true)
+    rel_best = err_best / np.maximum(np.abs(theta_true), 1e-6)
+
+    # Steady-state stats: last half of frames
+    half = n_frames // 2
+    ss_alpha = np.array([e["alpha_min"] for e in log[-half:]])
+    ss_sharp = np.array([e["sharpness"] for e in log[-half:]])
+    ss_tau = np.array([e["threshold"] for e in log[-half:]])
+    ss = np.array([ss_alpha.mean(), ss_sharp.mean(), ss_tau.mean()])
+    rel_ss = np.abs(ss - theta_true) / np.maximum(np.abs(theta_true), 1e-6)
+    osc = np.array([ss_alpha.std(), ss_sharp.std(), ss_tau.std()])
+
+    print(f"\n[cube] Done in {elapsed:.1f}s ({elapsed/n_frames*1000:.1f} ms/frame)")
+    print(f"[cube] θ_true       = {theta_true}")
+    print(f"[cube] θ_FINAL      = {theta_final.round(3)}  rel_err = {(rel_final*100).round(2)} %")
+    print(f"[cube] θ_BEST       = {theta_best.round(3)}  rel_err = {(rel_best*100).round(2)} %  (step {result['best_step']})")
+    print(f"[cube] θ_SS (last half avg) = {ss.round(3)}  rel_err = {(rel_ss*100).round(2)} %")
+    print(f"[cube] θ_SS std = {osc.round(4)}  (oscillation in steady state)")
+
+    # Clamp check: did any param hit a bound?
+    tau_at_clamp_upper = theta_final[2] >= 0.949
+    tau_at_clamp_lower = theta_final[2] <= 0.051
+    if tau_at_clamp_upper or tau_at_clamp_lower:
+        print(f"[cube] ⚠️ τ pegged at clamp ({'upper' if tau_at_clamp_upper else 'lower'}) "
+              f"— gradient was misdirected. Check state_update_mode.")
+    else:
+        print(f"[cube] ✓ τ converged interior (no clamp peg) — healthy gradient direction")
+
+    # Pass/fail: rel_ss < 5% on all 3 params
+    pass_ss = bool((rel_ss * 100 < 5).all())
+    pass_final = bool((rel_final * 100 < 5).all())
+    if pass_ss and pass_final:
+        print(f"[cube] PASS  (all 3 params < 5% rel_err on both final and steady-state)")
+    elif pass_ss:
+        print(f"[cube] PARTIAL  (steady-state < 5% but final not — oscillating around true)")
+    elif pass_final:
+        print(f"[cube] PARTIAL  (final < 5% but steady-state not — late convergence)")
+    else:
+        print(f"[cube] FAIL  (rel_err > 5% on at least one param)")
+
+    # Save log
+    log_arr = dict(
+        t=np.array([e["t"] for e in log]),
+        L_direct=np.array([e["L_direct"] for e in log]),
+        L_gap=np.array([e["L_gap"] for e in log]),
+        alpha_min=np.array([e["alpha_min"] for e in log]),
+        sharpness=np.array([e["sharpness"] for e in log]),
+        threshold=np.array([e["threshold"] for e in log]),
+        grad_a=np.array([e["grad_a"] for e in log]),
+        grad_s=np.array([e["grad_s"] for e in log]),
+        grad_t=np.array([e["grad_t"] for e in log]),
+        L_traj=np.array([e["L_traj"] for e in log]),
+        theta_true=theta_true,
+        theta_0=theta_0,
+        theta_best=theta_best,
+        theta_final=theta_final,
+        theta_ss=ss,
+        N_per_dim=np.array([N_per_dim]),
+        extent=np.array(extent),
+        n_frames=np.array([n_frames]),
+        state_update_mode=np.array([state_update_mode]),
+    )
+    if log_out_name is None:
+        log_out_name = f"online_residual_log_cube_{N_per_dim}.npz"
+    out_path = REPO_ROOT / "tools" / log_out_name
+    np.savez(out_path, **log_arr)
+    print(f"[cube] log saved to {out_path}")
+
+    return pass_ss and pass_final, log, result
+
+
+# =============================================================================
+# Real-mesh integration test — surface knife, real cube_tet.msh
+# =============================================================================
+
+def mesh_integration_test(
+    mesh_path: str = None,
+    n_frames: int = 400,
+    state_update_mode: str = 'D',
+    loss_mode: str = 'direct',
+    lambda_prior: float = 0.0,
+    lambda_traj: float = 0.0,
+    knife_radius: float = 0.025,
+    surface_axis: str = 'y',
+    theta_true: tuple = (3.0, 20.0, 0.5),
+    theta_0: tuple = (5.0, 10.0, 0.5),
+    log_out_name: str = None,
+):
+    """Real-mesh cumulative-regime POC. One sim acts as `real` (θ_true),
+    another runs calibration to recover θ from those observations.
+
+    Setup:
+        - cube_tet.msh (or any tet mesh) loaded via load_msh_system
+        - surface knife: half-exposed at top face (max of surface_axis)
+        - slow sweep across the longer non-up axis
+        - Mode D state propagation (no residual injection)
+        - cumulative damage across frames
+
+    Validates the real-to-sim pipeline on the actual mesh you'll use in
+    phantom experiments (or its synthetic twin), not the regular lattice.
+
+    Args:
+        mesh_path        — path to .msh (default: resources/cube/cube_tet.msh)
+        n_frames         — trajectory length (slower with more frames)
+        state_update_mode — 'D' (new default) or 'C' (legacy ablation)
+        lambda_prior     — P7 anchor strength
+        lambda_traj      — P8 traj consistency weight
+        knife_radius     — small surface tool (default 0.025)
+        surface_axis     — which axis is up ('x', 'y', 'z')
+        theta_true       — (α_min, sharpness, τ) for the 'real' observation
+        theta_0          — initial guess for calibration
+
+    Returns:
+        (pass: bool, log: list, result: dict)
+    """
+    if mesh_path is None:
+        mesh_path = str(REPO_ROOT / "resources" / "cube" / "cube_tet.msh")
+
+    print(f"\n[mesh-integ] cumulative-regime POC on real mesh")
+    print(f"[mesh-integ] mesh={mesh_path}")
+    print(f"[mesh-integ] mode={state_update_mode}  n_frames={n_frames}  "
+          f"λ_prior={lambda_prior}  λ_traj={lambda_traj}")
+    wp.init()
+
+    sys_dict = load_msh_system(mesh_path)
+    bbox_lo, bbox_hi = sys_dict["bbox"]
+    spacing = float(np.median(np.linalg.norm(
+        sys_dict["pos"][sys_dict["edge_a"]] - sys_dict["pos"][sys_dict["edge_b"]],
+        axis=1)))
+    # Surface knife → half-sphere embedded → (2/3)π r³ active volume
+    density = sys_dict["N"] / np.prod(bbox_hi - bbox_lo)
+    half_vol = (2.0 / 3.0) * np.pi * knife_radius ** 3
+    active_est = int(half_vol * density)
+    print(f"[mesh-integ] N={sys_dict['N']}  E={sys_dict['E']}  "
+          f"median spacing={spacing:.4f}")
+    print(f"[mesh-integ] knife_r={knife_radius}  active per frame ≈ {active_est}  "
+          f"({'PASS ≥ 50' if active_est >= 50 else 'WARN < 50 threshold'})")
+
+    # Surface trajectory
+    traj = make_surface_knife_trajectory(
+        bbox=(bbox_lo, bbox_hi),
+        n_frames=n_frames,
+        surface_axis=surface_axis,
+        margin_fraction=0.15,
+    )
+    print(f"[mesh-integ] trajectory: surface={surface_axis}={float(bbox_hi[{'x':0,'y':1,'z':2}[surface_axis]]):.3f}  "
+          f"sweep [{traj[0]} → {traj[-1]}]")
+
+    theta_true_np = np.asarray(theta_true, dtype=np.float64)
+    theta_0_np = np.asarray(theta_0, dtype=np.float64)
+    print(f"[mesh-integ] θ_true   = {theta_true_np}")
+    print(f"[mesh-integ] θ_0      = {theta_0_np}")
+
+    real_frames = generate_synth_real_trajectory(
+        sys_dict, theta_true_np, traj, k_bulk_true=1.0,
+        n_cycles_per_frame=1, accumulate=True,
+    )
+    # IMPORTANT: knife_radius is currently held inside `make_params` as 0.1 by
+    # default. We need our small surface-knife radius to propagate. Re-build
+    # frames if needed — but simpler: patch make_params inside the inner SSA
+    # via state. Actually generate_synth_real_trajectory uses make_params with
+    # knife_radius=0.1 baked in. Need to override.
+    # For now, run generate manually with the right knife_radius:
+    real_frames = []
+    state_p = None
+    for kp in traj:
+        sys_t = dict(sys_dict)
+        sys_t["knife_pos"] = np.array([kp], dtype=np.float32)
+        params_true = make_params(
+            alpha_min=float(theta_true_np[0]),
+            sharpness=float(theta_true_np[1]),
+            threshold=float(theta_true_np[2]),
+            knife_radius=knife_radius,           # ← USE OUR SMALL RADIUS
+            requires_grad=False,
+        )
+        a_wp, dv_wp, ed_wp = run_ssa_full_with_state(
+            params_true, sys_t, n_cycles=1, state_in=state_p,
+        )
+        a_np = a_wp.numpy().copy()
+        real_frames.append(dict(
+            t=len(real_frames),
+            knife_pos=np.asarray(kp, dtype=np.float32).copy(),
+            alpha_obs=a_np,
+            force_obs=synth_force_proxy(a_np, 1.0),
+        ))
+        state_p = dict(
+            alpha=a_np.astype(np.float32),
+            edge_damage=ed_wp.numpy().astype(np.float32),
+            particle_damage=dv_wp.numpy().astype(np.float32),
+        )
+    cavity_init = float((real_frames[0]["alpha_obs"] < 0.5).mean())
+    cavity_final = float((real_frames[-1]["alpha_obs"] < 0.5).mean())
+    print(f"[mesh-integ] cavity fraction: t=0 {cavity_init:.4f}  →  t={n_frames-1} {cavity_final:.4f}")
+
+    t_start = time.time()
+    result = online_calibration_loop(
+        sys_dict, real_frames, theta_0_np,
+        K_inner=30, lr_inner=0.1,
+        lr_outer=np.array([0.1, 1.0, 0.05]),
+        knife_radius=knife_radius,    # match the obs-generating knife
+        state_update_mode=state_update_mode,
+        loss_mode=loss_mode,
+        lambda_prior=lambda_prior,
+        lambda_traj=lambda_traj,
+        verbose=True, log_every=max(1, n_frames // 10),
+    )
+    elapsed = time.time() - t_start
+
+    log = result["log"]
+    theta_final = result["final_theta"]
+    theta_best = result["best_theta"]
+
+    err_final = np.abs(theta_final - theta_true_np)
+    rel_final = err_final / np.maximum(np.abs(theta_true_np), 1e-6)
+    err_best = np.abs(theta_best - theta_true_np)
+    rel_best = err_best / np.maximum(np.abs(theta_true_np), 1e-6)
+
+    half = n_frames // 2
+    ss_alpha = np.array([e["alpha_min"] for e in log[-half:]])
+    ss_sharp = np.array([e["sharpness"] for e in log[-half:]])
+    ss_tau = np.array([e["threshold"] for e in log[-half:]])
+    ss = np.array([ss_alpha.mean(), ss_sharp.mean(), ss_tau.mean()])
+    rel_ss = np.abs(ss - theta_true_np) / np.maximum(np.abs(theta_true_np), 1e-6)
+    osc = np.array([ss_alpha.std(), ss_sharp.std(), ss_tau.std()])
+
+    print(f"\n[mesh-integ] Done in {elapsed:.1f}s ({elapsed/n_frames*1000:.1f} ms/frame)")
+    print(f"[mesh-integ] θ_true       = {theta_true_np}")
+    print(f"[mesh-integ] θ_FINAL      = {theta_final.round(3)}  rel_err = {(rel_final*100).round(2)} %")
+    print(f"[mesh-integ] θ_BEST       = {theta_best.round(3)}  rel_err = {(rel_best*100).round(2)} %  (step {result['best_step']})")
+    print(f"[mesh-integ] θ_SS (last-half avg) = {ss.round(3)}  rel_err = {(rel_ss*100).round(2)} %  std={osc.round(4)}")
+
+    tau_at_clamp_upper = theta_final[2] >= 0.949
+    tau_at_clamp_lower = theta_final[2] <= 0.051
+    if tau_at_clamp_upper or tau_at_clamp_lower:
+        print(f"[mesh-integ] ⚠️ τ pegged at clamp ({'upper' if tau_at_clamp_upper else 'lower'}) "
+              f"— check state_update_mode and knife/mesh sizing.")
+    else:
+        print(f"[mesh-integ] ✓ τ converged interior (no clamp peg)")
+
+    pass_ss = bool((rel_ss * 100 < 5).all())
+    pass_final = bool((rel_final * 100 < 5).all())
+    if pass_ss and pass_final:
+        print(f"[mesh-integ] PASS  (all 3 params < 5% rel_err)")
+    elif pass_ss or pass_final:
+        print(f"[mesh-integ] PARTIAL")
+    else:
+        print(f"[mesh-integ] FAIL")
+
+    log_arr = dict(
+        t=np.array([e["t"] for e in log]),
+        L_direct=np.array([e["L_direct"] for e in log]),
+        L_gap=np.array([e["L_gap"] for e in log]),
+        alpha_min=np.array([e["alpha_min"] for e in log]),
+        sharpness=np.array([e["sharpness"] for e in log]),
+        threshold=np.array([e["threshold"] for e in log]),
+        grad_a=np.array([e["grad_a"] for e in log]),
+        grad_s=np.array([e["grad_s"] for e in log]),
+        grad_t=np.array([e["grad_t"] for e in log]),
+        L_traj=np.array([e["L_traj"] for e in log]),
+        theta_true=theta_true_np,
+        theta_0=theta_0_np,
+        theta_best=theta_best,
+        theta_final=theta_final,
+        theta_ss=ss,
+        mesh_path=np.array([mesh_path]),
+        n_frames=np.array([n_frames]),
+        knife_radius=np.array([knife_radius]),
+        state_update_mode=np.array([state_update_mode]),
+    )
+    if log_out_name is None:
+        log_out_name = "online_residual_log_mesh.npz"
+    out_path = REPO_ROOT / "tools" / log_out_name
+    np.savez(out_path, **log_arr)
+    print(f"[mesh-integ] log saved to {out_path}")
+
+    return (pass_ss and pass_final), log, result
 
 
 def disturbance_recovery_test(
@@ -1581,6 +2507,8 @@ if __name__ == "__main__":
     import sys as _sys
     if "--smoke" in _sys.argv:
         smoke_test()
+    elif "--persist" in _sys.argv:
+        persistent_state_test()
     elif "--traj" in _sys.argv:
         trajectory_test()
     elif "--inner" in _sys.argv:
@@ -1599,6 +2527,54 @@ if __name__ == "__main__":
             if arg.startswith("--lambda_traj="):
                 lam_t = float(arg.split("=")[1])
         integration_test(n_frames=n, lambda_prior=lam_p, lambda_traj=lam_t)
+    elif "--cube" in _sys.argv:
+        n = 200
+        N_pd = 12
+        mode = 'D'
+        lam_p = 0.0
+        lam_t = 0.0
+        for arg in _sys.argv:
+            if arg.startswith("--frames="):
+                n = int(arg.split("=")[1])
+            elif arg.startswith("--N_per_dim=") or arg.startswith("--N="):
+                N_pd = int(arg.split("=")[1])
+            elif arg.startswith("--mode="):
+                mode = arg.split("=")[1]
+            elif arg.startswith("--lambda_prior="):
+                lam_p = float(arg.split("=")[1])
+            elif arg.startswith("--lambda_traj="):
+                lam_t = float(arg.split("=")[1])
+        cube_integration_test(
+            N_per_dim=N_pd, n_frames=n,
+            state_update_mode=mode,
+            lambda_prior=lam_p, lambda_traj=lam_t,
+        )
+    elif "--mesh" in _sys.argv:
+        n = 400
+        mode = 'D'
+        kr = 0.025
+        mesh_path = None
+        lam_p = 0.0
+        lam_t = 0.0
+        for arg in _sys.argv:
+            if arg.startswith("--frames="):
+                n = int(arg.split("=")[1])
+            elif arg.startswith("--mode="):
+                mode = arg.split("=")[1]
+            elif arg.startswith("--knife_radius="):
+                kr = float(arg.split("=")[1])
+            elif arg.startswith("--mesh_path="):
+                mesh_path = arg.split("=")[1]
+            elif arg.startswith("--lambda_prior="):
+                lam_p = float(arg.split("=")[1])
+            elif arg.startswith("--lambda_traj="):
+                lam_t = float(arg.split("=")[1])
+        mesh_integration_test(
+            mesh_path=mesh_path, n_frames=n,
+            state_update_mode=mode,
+            knife_radius=kr,
+            lambda_prior=lam_p, lambda_traj=lam_t,
+        )
     elif "--sweep" in _sys.argv:
         n = 500
         for arg in _sys.argv:
