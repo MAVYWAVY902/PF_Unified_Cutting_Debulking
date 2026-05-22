@@ -597,6 +597,8 @@ def online_calibration_loop(
     traj_history_window=20,     # P8: window from which to sample (Liang default)
     obs_noise_std=0.0,          # P10: Gaussian noise on α_obs per frame. 0=clean.
     noise_seed=12345,           # P10: separate RNG for obs noise (deterministic)
+    disturbances=None,          # P11: list of (frame, delta_theta) to inject after lock
+    reset_adam_on_disturbance=False,  # P11: optional — reset Adam moments at disturbance
     rng_seed=42,                # P8: reproducibility for L_traj sampling
     track_best=True,            # P7: keep best-θ-so-far snapshot
     verbose=True,
@@ -695,6 +697,25 @@ def online_calibration_loop(
         theta = opt.step(theta, grad)
         theta = np.clip(theta, bounds_lo, bounds_hi)
 
+        # 5b. P11: inject disturbance if scheduled at this frame
+        disturbance_applied = None
+        if disturbances is not None:
+            for d_frame, d_delta in disturbances:
+                if t == d_frame:
+                    d_delta = np.asarray(d_delta, dtype=np.float64)
+                    theta_pre = theta.copy()
+                    theta = np.clip(theta + d_delta, bounds_lo, bounds_hi)
+                    disturbance_applied = {
+                        "delta": d_delta.copy(),
+                        "theta_pre": theta_pre,
+                        "theta_post": theta.copy(),
+                    }
+                    if reset_adam_on_disturbance:
+                        opt.reset()
+                    if verbose:
+                        print(f"  ★★★ DISTURBANCE at t={t}: Δθ = {d_delta}  "
+                              f"({theta_pre.round(3)} → {theta.round(3)})")
+
         # 6. Best-so-far tracking
         if track_best and L_direct < best_L:
             best_L = L_direct
@@ -720,6 +741,7 @@ def online_calibration_loop(
             grad_traj_a=float(grad_traj[0]),
             grad_traj_s=float(grad_traj[1]),
             grad_traj_t=float(grad_traj[2]),
+            disturbance=disturbance_applied,
         )
         log.append(log_entry)
 
@@ -969,6 +991,157 @@ def integration_test(n_frames=100, lambda_prior=0.0, lambda_traj=0.0, log_out_na
     print(f"[integ] log saved to {out_path}")
 
     return pass_overall, log, result
+
+
+def disturbance_recovery_test(
+    n_frames=600,
+    lambda_traj=0.5,
+    disturbances=None,
+    reset_adam=False,
+):
+    """P11: inject perturbations to θ AFTER lock to test stable-equilibrium
+    hypothesis. If algorithm has true gradient-driven attraction to θ_true,
+    perturbations should be recovered.
+
+    Default disturbance schedule (designed to test isolated + combined hits):
+      frame 200: α_min jump   3.0 → 5.0  (after first lock)
+      frame 350: sharpness jump  20 → 10  (after first recovery)
+      frame 500: all 3 jump simultaneously to (5.0, 10.0, 0.7)
+    """
+    if disturbances is None:
+        disturbances = [
+            (200, np.array([+2.0, 0.0, 0.0])),    # α_min +2  (3→5)
+            (350, np.array([0.0, -10.0, 0.0])),   # sharp -10 (20→10)
+            (500, np.array([+2.0, -10.0, +0.2])), # combined (3,20,0.5)→(5,10,0.7)
+        ]
+
+    print("=" * 80)
+    print(f"P11 DISTURBANCE RECOVERY TEST  (λ_traj={lambda_traj}, n_frames={n_frames})")
+    print(f"  Disturbance schedule:")
+    for d_frame, d_delta in disturbances:
+        print(f"    frame {d_frame}: Δθ = {d_delta}")
+    print("=" * 80)
+
+    wp.init()
+    sys_dict = setup_synthetic_system(N=20)
+    traj = make_knife_trajectory(n_frames=n_frames, x_start=0.35, x_end=0.65)
+    theta_true = np.array([3.0, 20.0, 0.5])
+    real_frames = generate_synth_real_trajectory(
+        sys_dict, theta_true, traj, k_bulk_true=1.0, n_cycles_per_frame=1,
+    )
+
+    theta_0 = np.array([5.0, 10.0, 0.5])
+    result = online_calibration_loop(
+        sys_dict, real_frames, theta_0,
+        K_inner=30, lr_inner=0.1,
+        lr_outer=np.array([0.1, 1.0, 0.05]),
+        lambda_prior=0.0,
+        lambda_traj=lambda_traj,
+        disturbances=disturbances,
+        reset_adam_on_disturbance=reset_adam,
+        verbose=True, log_every=max(1, n_frames // 30),
+    )
+    log = result["log"]
+
+    # Recovery analysis: for each disturbance, measure time to re-lock
+    print("\n" + "=" * 80)
+    print("RECOVERY ANALYSIS")
+    print("=" * 80)
+    for d_frame, d_delta in disturbances:
+        # Post-disturbance, find first frame where all |θ - θ_true| / θ_true < 1%
+        recovery_frame = None
+        max_excursion = 0.0
+        for entry in log:
+            if entry["t"] <= d_frame:
+                continue
+            theta_t = np.array([entry["alpha_min"], entry["sharpness"], entry["threshold"]])
+            rel_err = np.abs(theta_t - theta_true) / np.maximum(np.abs(theta_true), 1e-6)
+            max_excursion = max(max_excursion, rel_err.max())
+            if rel_err.max() < 0.01:
+                recovery_frame = entry["t"]
+                break
+
+        if recovery_frame is not None:
+            recovery_time = recovery_frame - d_frame
+            print(f"  Disturbance at frame {d_frame}, Δ={d_delta.round(2)}: "
+                  f"recovered to <1% by frame {recovery_frame} (recovery time = {recovery_time} frames)")
+        else:
+            print(f"  Disturbance at frame {d_frame}, Δ={d_delta.round(2)}: "
+                  f"NOT recovered to <1% within {n_frames - d_frame} frames "
+                  f"(max excursion {max_excursion*100:.1f}%)")
+
+    # Save log
+    log_arr = dict(
+        t=np.array([e["t"] for e in log]),
+        L_direct=np.array([e["L_direct"] for e in log]),
+        L_gap=np.array([e["L_gap"] for e in log]),
+        alpha_min=np.array([e["alpha_min"] for e in log]),
+        sharpness=np.array([e["sharpness"] for e in log]),
+        threshold=np.array([e["threshold"] for e in log]),
+        theta_true=theta_true,
+        theta_0=theta_0,
+        disturbance_frames=np.array([d[0] for d in disturbances]),
+        disturbance_deltas=np.array([d[1] for d in disturbances]),
+    )
+    out_path = REPO_ROOT / "tools" / "online_residual_log_disturbance.npz"
+    np.savez(out_path, **log_arr)
+    print(f"\n[plot] saving disturbance recovery figure ...")
+
+    plot_disturbance_recovery(log_arr)
+    return result, log_arr
+
+
+def plot_disturbance_recovery(log_arr, out_path=None):
+    """P11 visualization: param trajectories with disturbance markers."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if out_path is None:
+        out_path = REPO_ROOT / "tools" / "online_residual_disturbance.png"
+
+    t = log_arr["t"]
+    theta_true = log_arr["theta_true"]
+    d_frames = log_arr["disturbance_frames"]
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle("P11 Disturbance Recovery Test  (λ_traj=0.5)\n"
+                 "Manual θ perturbations injected → test stable-equilibrium hypothesis",
+                 fontsize=12)
+
+    for i, (name, key, true_v) in enumerate([
+        ("α_min", "alpha_min", theta_true[0]),
+        ("sharpness", "sharpness", theta_true[1]),
+        ("threshold", "threshold", theta_true[2]),
+    ]):
+        ax = axes[i // 2, i % 2]
+        ax.plot(t, log_arr[key], "b-", linewidth=1.2, label="θ estimate")
+        ax.axhline(true_v, color="red", linestyle="--", linewidth=1, label="θ_true")
+        for d_f in d_frames:
+            ax.axvline(d_f, color="orange", linestyle=":", linewidth=1.2, alpha=0.7)
+            ax.text(d_f, ax.get_ylim()[1] * 0.95, f"  DIST",
+                    rotation=90, fontsize=7, color="orange", va="top")
+        ax.set_xlabel("frame")
+        ax.set_ylabel(name)
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        ax.set_title(name, fontsize=10)
+
+    # Loss panel
+    ax = axes[1, 1]
+    ax.semilogy(t, log_arr["L_direct"], "b-", linewidth=1.2, label="L_direct")
+    for d_f in d_frames:
+        ax.axvline(d_f, color="orange", linestyle=":", linewidth=1.2, alpha=0.7)
+    ax.set_xlabel("frame")
+    ax.set_ylabel("L_direct (log)")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3, which="both")
+    ax.set_title("Loss with disturbance spikes", fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"[plot] saved {out_path}")
+    return out_path
 
 
 def sweep_obs_noise(
@@ -1456,6 +1629,16 @@ if __name__ == "__main__":
             if arg.startswith("--lambda_traj="):
                 lam_t = float(arg.split("=")[1])
         sweep_obs_noise(n_frames=n, lambda_traj=lam_t)
+    elif "--disturb" in _sys.argv:
+        n = 600
+        lam_t = 0.5
+        reset = "--reset_adam" in _sys.argv
+        for arg in _sys.argv:
+            if arg.startswith("--frames="):
+                n = int(arg.split("=")[1])
+            if arg.startswith("--lambda_traj="):
+                lam_t = float(arg.split("=")[1])
+        disturbance_recovery_test(n_frames=n, lambda_traj=lam_t, reset_adam=reset)
     elif "--plot" in _sys.argv:
         plot_convergence()
     else:
