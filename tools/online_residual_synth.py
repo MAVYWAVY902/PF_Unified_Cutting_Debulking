@@ -583,6 +583,164 @@ def compute_damage_residual(
 
 
 # =============================================================================
+# ReSECT Liang inner loop (V2: edge-spring energy + cohesive zone)
+# =============================================================================
+
+def compute_liang_inner_residuals(
+    pos_pred,                          # (N, 3) sim-predicted positions
+    dv_pred,                           # (N,) sim-predicted cumulative damage
+    pos_target,                        # (N, 3) observed positions (from D405)
+    alpha_target,                      # (N,) observed cavity field
+    theta,                             # np.array(3,) (α_min, sharpness, τ)
+    edges_a, edges_b, edges_rest,     # edge graph + rest lengths (E,) int + (E,) float
+    observable_mask=None,              # (N,) int32 — visibility mask (1=observed)
+    n_iter=30,
+    lr_pos=1e-3,
+    lr_dv=0.1,
+    lambda_cav=1.0,
+    lambda_E=1.0,
+    verbose=False,
+):
+    """ReSECT inner loop adapted from Liang 2023 Eq.6 to cohesive-zone cutting.
+
+    Jointly optimizes a 2-channel residual (Δx ∈ R^{N×3}, Δδv ∈ R^N≥0) to
+    minimize the 4-term mismatch between sim prediction and real observation:
+
+        L_inner = D_pos       = ‖(x_pred + Δx) - x_target‖²
+                + λ_cav · D_cav     = ‖σ(-s·(δv_pred + Δδv - τ)) - α_target‖²
+                + λ_E   · E_edge    = Σ_(a,b) (‖x_a' - x_b'‖ - rest)²   [V2 spring]
+                +         R_softplus  (Δδv = softplus(δ_raw) ≥ 0, cohesive zone
+                                       irreversibility)
+
+    The E_edge term (mass-spring approximation of XPBD energy, DiSECt-style)
+    constrains Δx to physically plausible deformations — without it, Δx can
+    overfit noisy obs. The softplus reparameterization enforces damage
+    irreversibility, mirroring the cohesive zone's monotonic damage state.
+
+    Args:
+        pos_pred, dv_pred         — current sim state (from ShapeMatchingSolver
+                                     forward)
+        pos_target, alpha_target  — what real obs (D405 + cavity reconstruct)
+                                     says the state should be
+        theta                     — current (α_min, s, τ) cohesive-zone params
+                                     (only s, τ enter the cavity sigmoid; α_min
+                                     does not appear in the inner objective)
+        edges_a, edges_b, edges_rest — mesh edge graph + rest lengths
+        observable_mask           — (N,) bool/int32: 1 if particle observed,
+                                     0 if hidden. Both D_pos and D_cav respect it.
+        lr_pos, lr_dv             — Adam learning rates for the two channels
+                                     (different scales: positions are O(0.1 m),
+                                     damage is O(1))
+        lambda_cav, lambda_E      — relative weights of the data and regularizer
+                                     terms
+
+    Returns:
+        Δx        : (N, 3) float32 position residual
+        Δδv       : (N,)   float32 ≥ 0 damage residual
+        info      : dict with final L_pos, L_cav, L_E, L_total, L_init
+    """
+    N = pos_pred.shape[0]
+    s, tau = float(theta[1]), float(theta[2])
+
+    pos_pred = np.asarray(pos_pred, dtype=np.float64)
+    pos_target = np.asarray(pos_target, dtype=np.float64)
+    dv_pred = np.asarray(dv_pred, dtype=np.float64)
+    alpha_target = np.asarray(alpha_target, dtype=np.float64)
+    edges_a = np.asarray(edges_a, dtype=np.int64)
+    edges_b = np.asarray(edges_b, dtype=np.int64)
+    edges_rest = np.asarray(edges_rest, dtype=np.float64)
+
+    if observable_mask is None:
+        mask_pos = np.ones((N, 1), dtype=np.float64)
+        mask_alpha = np.ones(N, dtype=np.float64)
+    else:
+        mask_pos = (np.asarray(observable_mask) == 1).astype(np.float64).reshape(N, 1)
+        mask_alpha = mask_pos[:, 0]
+
+    # Optimization variables
+    delta_x = np.zeros((N, 3), dtype=np.float64)
+    delta_dv_raw = np.zeros(N, dtype=np.float64)   # softplus param → Δδv ≥ 0
+
+    # Adam state (two independent optimizers, one per channel)
+    m_x = np.zeros((N, 3)); v_x = np.zeros((N, 3))
+    m_dv = np.zeros(N); v_dv = np.zeros(N)
+    b1, b2, eps_adam = 0.9, 0.999, 1e-8
+
+    L_init = None
+    for k in range(n_iter):
+        # ---- forward (4 terms) ----
+        pos_corr = pos_pred + delta_x
+        delta_dv = _softplus(delta_dv_raw)
+        dv_corr = dv_pred + delta_dv
+        alpha_corr = _sigmoid(-s * (dv_corr - tau))
+
+        diff_pos = (pos_corr - pos_target) * mask_pos          # (N, 3)
+        diff_alpha = (alpha_corr - alpha_target) * mask_alpha   # (N,)
+
+        L_pos = float((diff_pos ** 2).sum())
+        L_cav = float((diff_alpha ** 2).sum())
+
+        edge_vec = pos_corr[edges_a] - pos_corr[edges_b]        # (E, 3)
+        edge_len = np.linalg.norm(edge_vec, axis=1)             # (E,)
+        edge_residual = edge_len - edges_rest                    # (E,)
+        L_E = float((edge_residual ** 2).sum())
+
+        L_total = L_pos + lambda_cav * L_cav + lambda_E * L_E
+
+        if L_init is None:
+            L_init = (L_pos, L_cav, L_E, L_total)
+
+        # ---- analytic gradients ----
+        # 1. ∂L_pos/∂Δx = 2·diff_pos
+        grad_x_pos = 2.0 * diff_pos
+
+        # 2. ∂(λ_cav·L_cav)/∂Δδv via ∂α/∂δv = -s·α(1-α)
+        grad_dv_cav = (2.0 * diff_alpha * (-s) * alpha_corr * (1.0 - alpha_corr))
+        # chain through softplus: ∂Δδv/∂raw = σ(raw)
+        grad_raw_cav = grad_dv_cav * _softplus_deriv(delta_dv_raw)
+
+        # 3. ∂(λ_E·L_E)/∂Δx — edge spring gradient
+        # ∂L_E/∂(x_a) = Σ_(edges incident on a) 2·(L-rest)·(x_a - x_b)/L
+        # ∂L_E/∂(x_b) = -∂L_E/∂(x_a)
+        # Vectorized via np.add.at scatter:
+        edge_factor = 2.0 * edge_residual / np.maximum(edge_len, 1e-12)  # (E,)
+        edge_force = edge_vec * edge_factor[:, None]                       # (E, 3)
+        grad_x_E = np.zeros((N, 3))
+        np.add.at(grad_x_E, edges_a, +edge_force)
+        np.add.at(grad_x_E, edges_b, -edge_force)
+
+        grad_x_total = grad_x_pos + lambda_E * grad_x_E
+        grad_raw_total = lambda_cav * grad_raw_cav
+
+        # ---- Adam updates (separate for the two channels) ----
+        m_x = b1 * m_x + (1.0 - b1) * grad_x_total
+        v_x = b2 * v_x + (1.0 - b2) * grad_x_total ** 2
+        m_x_hat = m_x / (1.0 - b1 ** (k + 1))
+        v_x_hat = v_x / (1.0 - b2 ** (k + 1))
+        delta_x = delta_x - lr_pos * m_x_hat / (np.sqrt(v_x_hat) + eps_adam)
+
+        m_dv = b1 * m_dv + (1.0 - b1) * grad_raw_total
+        v_dv = b2 * v_dv + (1.0 - b2) * grad_raw_total ** 2
+        m_dv_hat = m_dv / (1.0 - b1 ** (k + 1))
+        v_dv_hat = v_dv / (1.0 - b2 ** (k + 1))
+        delta_dv_raw = delta_dv_raw - lr_dv * m_dv_hat / (np.sqrt(v_dv_hat) + eps_adam)
+
+        if verbose and (k % 5 == 0 or k == n_iter - 1):
+            print(f"    inner k={k:2d}  L_pos={L_pos:.4e}  L_cav={L_cav:.4e}  "
+                  f"L_E={L_E:.4e}  L_total={L_total:.4e}")
+
+    # Final residuals
+    delta_dv_final = _softplus(delta_dv_raw)
+    info = dict(
+        L_pos=L_pos, L_cav=L_cav, L_E=L_E, L_total=L_total,
+        L_init_pos=L_init[0], L_init_cav=L_init[1],
+        L_init_E=L_init[2], L_init_total=L_init[3],
+        reduction_total=L_init[3] / max(L_total, 1e-12),
+    )
+    return delta_x.astype(np.float32), delta_dv_final.astype(np.float32), info
+
+
+# =============================================================================
 # Outer loop: Warp-tape backward for ∂L/∂θ on (alpha_min, sharpness, threshold)
 # =============================================================================
 

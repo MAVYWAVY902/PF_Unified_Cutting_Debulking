@@ -47,6 +47,9 @@ from .pf_damage import (
     update_soft_removal_kernel_ssa,
     apply_edge_damage_ssa_kernel,
     apply_particle_damage_ssa_kernel,
+    # Day 6b (2026-05-22): wp.array theta path for ReSECT autograd through θ
+    update_edge_damage_kernel_ssa_param_arr,
+    update_soft_removal_kernel_ssa_param_arr,
 )
 
 
@@ -138,6 +141,13 @@ class ShapeMatchingSolver:
         self._ssa_edge_damage_buffers = None        # list[wp.array(num_edges)]
         self._ssa_particle_damage_buffers = None    # list[wp.array(N)]
         self._ssa_cycle_index = 0                   # which buffer slot to write next
+
+        # Day 6b (2026-05-22): optional wp.array path for θ — when set, the
+        # cutting block uses *_ssa_param_arr kernels so autograd flows back to
+        # theta via wp.Tape (enabling Warp ↔ PyTorch autograd bridge).
+        # Keys: 'alpha_min', 'sharpness', 'threshold', 'knife_radius' as wp.array(shape=(1,))
+        # Set via set_theta_wp({...}); pass None to revert to legacy float path.
+        self.theta_wp = None
 
     def _alloc_ssa_buffers(self):
         """Lazy allocation of cycle-scoped buffer lists for SSA cutting path.
@@ -235,6 +245,30 @@ class ShapeMatchingSolver:
         wp.launch(reset_cluster_quat_kernel, dim=self.num_clusters,
                   inputs=[self.c["cluster_quat"]], device=self.device)
         self.step_count = 0
+
+    def set_theta_wp(self, theta_dict):
+        """Set θ as wp.arrays for autograd-aware forward (Day 6b).
+
+        theta_dict: {'alpha_min', 'sharpness', 'threshold', 'knife_radius'}
+                    each a wp.array(shape=(1,), dtype=float32, requires_grad=True)
+        Pass None to revert to the legacy Python-float path.
+
+        When set, the cutting block in step() will use *_ssa_param_arr kernels.
+        Caller responsible for keeping the wp.arrays alive while step() runs.
+        """
+        if theta_dict is None:
+            self.theta_wp = None
+            return
+        required = {"alpha_min", "sharpness", "threshold", "knife_radius"}
+        if not required.issubset(theta_dict.keys()):
+            raise ValueError(f"theta_dict missing keys: {required - set(theta_dict.keys())}")
+        self.theta_wp = dict(theta_dict)
+        # Also update Python float mirror (for consistency with read sites
+        # that don't go through the cutting kernel — e.g., logging)
+        self.alpha_min = float(theta_dict["alpha_min"].numpy()[0])
+        self.soft_removal_sharpness = float(theta_dict["sharpness"].numpy()[0])
+        self.aspiration_threshold = float(theta_dict["threshold"].numpy()[0])
+        self.knife_radius = float(theta_dict["knife_radius"].numpy()[0])
 
     def _current_alpha(self):
         """Returns the wp.array buffer that should be read for alpha at the
@@ -632,19 +666,36 @@ class ShapeMatchingSolver:
                 pd_next = self._ssa_particle_damage_buffers[c + 1]
 
                 # Edge damage: read from ed_prev, write delta, apply prev+delta→next
+                # Day 6b (2026-05-22): dispatch to *_param_arr variant if theta_wp set
                 self.e["damage_delta"].zero_()
-                wp.launch(
-                    update_edge_damage_kernel_ssa,
-                    dim=num_edges,
-                    inputs=[
-                        self.p["pred_pos"], alpha_prev,
-                        self.e["a"], self.e["b"],
-                        self.e["pf_rest"], ed_prev,
-                        self.knife_pos, self.knife_radius, self.alpha_min,
-                        self.e["damage_delta"],
-                    ],
-                    device=self.device,
-                )
+                if self.theta_wp is not None:
+                    wp.launch(
+                        update_edge_damage_kernel_ssa_param_arr,
+                        dim=num_edges,
+                        inputs=[
+                            self.p["pred_pos"], alpha_prev,
+                            self.e["a"], self.e["b"],
+                            self.e["pf_rest"], ed_prev,
+                            self.knife_pos,
+                            self.theta_wp["knife_radius"],
+                            self.theta_wp["alpha_min"],
+                            self.e["damage_delta"],
+                        ],
+                        device=self.device,
+                    )
+                else:
+                    wp.launch(
+                        update_edge_damage_kernel_ssa,
+                        dim=num_edges,
+                        inputs=[
+                            self.p["pred_pos"], alpha_prev,
+                            self.e["a"], self.e["b"],
+                            self.e["pf_rest"], ed_prev,
+                            self.knife_pos, self.knife_radius, self.alpha_min,
+                            self.e["damage_delta"],
+                        ],
+                        device=self.device,
+                    )
                 wp.launch(
                     apply_edge_damage_ssa_kernel,
                     dim=num_edges,
@@ -682,16 +733,30 @@ class ShapeMatchingSolver:
                 )
 
                 # Soft removal: read alpha_prev (gating + carry-over), write alpha_next
-                wp.launch(
-                    update_soft_removal_kernel_ssa,
-                    dim=N,
-                    inputs=[
-                        pd_next, alpha_prev, self.p["fixed"],
-                        self.aspiration_threshold, self.soft_removal_sharpness,
-                        alpha_next,
-                    ],
-                    device=self.device,
-                )
+                # Day 6b: param_arr dispatch when theta_wp set
+                if self.theta_wp is not None:
+                    wp.launch(
+                        update_soft_removal_kernel_ssa_param_arr,
+                        dim=N,
+                        inputs=[
+                            pd_next, alpha_prev, self.p["fixed"],
+                            self.theta_wp["threshold"],
+                            self.theta_wp["sharpness"],
+                            alpha_next,
+                        ],
+                        device=self.device,
+                    )
+                else:
+                    wp.launch(
+                        update_soft_removal_kernel_ssa,
+                        dim=N,
+                        inputs=[
+                            pd_next, alpha_prev, self.p["fixed"],
+                            self.aspiration_threshold, self.soft_removal_sharpness,
+                            alpha_next,
+                        ],
+                        device=self.device,
+                    )
 
                 # Advance cycle index. Now self._current_alpha() returns
                 # alpha_buffers[c+1] (the just-written cycle) for downstream
