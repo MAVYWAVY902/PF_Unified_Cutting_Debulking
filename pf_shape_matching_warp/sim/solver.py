@@ -22,6 +22,7 @@ from .kernels import (
     reset_cluster_quat_kernel,       # reset warm-start on env.reset
     apply_kernel,                # legacy — kept for forward-only paths
     apply_kernel_ssa,            # SSA — Stage A (2026-04-22), writes to shape_delta
+    apply_kernel_ssa_param_arr,  # Day 3b (2026-05-23): stiffness as wp.array for sys-ID autograd
     apply_shape_delta_kernel,    # legacy in-place atomic_add (forward-only safe)
     # Layer A SSA (2026-05-05): cycle-scoped buffer pattern for autograd
     # correctness through 6-iter Jacobi loop. See
@@ -247,13 +248,18 @@ class ShapeMatchingSolver:
         self.step_count = 0
 
     def set_theta_wp(self, theta_dict):
-        """Set θ as wp.arrays for autograd-aware forward (Day 6b).
+        """Set θ as wp.arrays for autograd-aware forward (Day 6b + Day 3b).
 
-        theta_dict: {'alpha_min', 'sharpness', 'threshold', 'knife_radius'}
+        theta_dict: {'alpha_min', 'sharpness', 'threshold', 'knife_radius',
+                     'stiffness' (optional, Day 3b 2026-05-23)}
                     each a wp.array(shape=(1,), dtype=float32, requires_grad=True)
         Pass None to revert to the legacy Python-float path.
 
-        When set, the cutting block in step() will use *_ssa_param_arr kernels.
+        When set:
+          - cutting block uses *_ssa_param_arr kernels (Day 6b)
+          - shape-matching apply uses apply_kernel_ssa_param_arr (Day 3b) IFF
+            'stiffness' key is present; otherwise stiffness stays as float.
+
         Caller responsible for keeping the wp.arrays alive while step() runs.
         """
         if theta_dict is None:
@@ -269,6 +275,8 @@ class ShapeMatchingSolver:
         self.soft_removal_sharpness = float(theta_dict["sharpness"].numpy()[0])
         self.aspiration_threshold = float(theta_dict["threshold"].numpy()[0])
         self.knife_radius = float(theta_dict["knife_radius"].numpy()[0])
+        if "stiffness" in theta_dict:
+            self.stiffness = float(theta_dict["stiffness"].numpy()[0])
 
     def _current_alpha(self):
         """Returns the wp.array buffer that should be read for alpha at the
@@ -548,17 +556,31 @@ class ShapeMatchingSolver:
             # in split mode shape_delta is cycle-scoped pool[it] (already zero from alloc).
             if not self.use_split_cluster_solve:
                 _shape_delta_it.zero_()
-            wp.launch(
-                apply_kernel_ssa,
-                dim=N,
-                inputs=[
-                    _deltas_it, _delta_counts_it,
-                    self.p["damage"], self._current_alpha(), self.p["fixed"],
-                    self.stiffness,
-                    _shape_delta_it,
-                ],
-                device=self.device,
-            )
+            # Day 3b (2026-05-23): dispatch to *_param_arr when stiffness in theta_wp
+            if self.theta_wp is not None and "stiffness" in self.theta_wp:
+                wp.launch(
+                    apply_kernel_ssa_param_arr,
+                    dim=N,
+                    inputs=[
+                        _deltas_it, _delta_counts_it,
+                        self.p["damage"], self._current_alpha(), self.p["fixed"],
+                        self.theta_wp["stiffness"],
+                        _shape_delta_it,
+                    ],
+                    device=self.device,
+                )
+            else:
+                wp.launch(
+                    apply_kernel_ssa,
+                    dim=N,
+                    inputs=[
+                        _deltas_it, _delta_counts_it,
+                        self.p["damage"], self._current_alpha(), self.p["fixed"],
+                        self.stiffness,
+                        _shape_delta_it,
+                    ],
+                    device=self.device,
+                )
             # Layer A SSA dispatch (2026-05-05): apply shape_delta via
             # cycle-scoped fresh buffer when SSA OR split mode, legacy atomic_add otherwise.
             if self.use_ssa_soft_removal or self.use_split_cluster_solve:

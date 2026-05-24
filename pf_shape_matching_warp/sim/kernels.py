@@ -895,6 +895,39 @@ def apply_kernel_ssa(
     wp.atomic_add(shape_delta, i, correction)
 
 
+# ============== Apply (SSA + param_arr for sys-ID autograd) ==============
+# Day 3b (2026-05-23): stiffness as wp.array(requires_grad=True) for sys-ID.
+# Same physics as apply_kernel_ssa, but stiffness sourced from wp.array[0]
+# so the autograd tape records ∂correction/∂stiffness.
+#
+# Note: this kernel is called from EVERY Jacobi iter × EVERY substep × T outer
+# cycles → backward graph through stiffness is ~144 launches deep (for T=3,
+# substeps=8, num_iter=6). See day3b_stiffness_fd_parity.py for the rel_err
+# parity gate (target <5%, looser than Day 6b's <2% due to graph length).
+
+@wp.kernel
+def apply_kernel_ssa_param_arr(
+    deltas: wp.array(dtype=wp.vec3),
+    delta_counts: wp.array(dtype=wp.int32),
+    damage: wp.array(dtype=wp.float32),
+    alpha: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    stiffness_arr: wp.array(dtype=wp.float32),
+    shape_delta: wp.array(dtype=wp.vec3),
+):
+    i = wp.tid()
+    if alpha[i] < 0.01 or fixed[i] == 1 or delta_counts[i] == 0:
+        return
+
+    stiffness = stiffness_arr[0]
+    dmg = damage[i]
+    local_stiff = stiffness * (1.0 - dmg * 0.95)
+    inv_count = 1.0 / wp.float32(delta_counts[i])
+    correction = local_stiff * inv_count * deltas[i]
+
+    wp.atomic_add(shape_delta, i, correction)
+
+
 @wp.kernel
 def apply_shape_delta_kernel(
     pred_pos: wp.array(dtype=wp.vec3),
