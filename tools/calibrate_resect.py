@@ -1,24 +1,28 @@
-"""Day 9: validate freezing sharpness=20 (treat as algorithmic constant, not optimized).
+"""CANONICAL ReSECT sys-ID entry (renamed from day9_fix_sharpness_validation 2026-05-23).
 
-Motivation (from conversation):
-   sharpness is mostly a numerical smoothing parameter for autograd, not a
-   real physical parameter. Real material yield is ~binary; sigmoid sharpness
-   only sets transition zone width. If we treat sharpness as a fixed constant
-   (literature/pre-calibrated value), we get:
-     - Simpler θ (2D: α_min, τ vs 3D)
-     - Better identifiability (sharpness was slowest-converging dim in Day 8)
-     - Cleaner ICRA narrative (2 physical params + 1 fixed smoothing)
+Pipeline (Layer 5, see project_day9_fix_sharpness_locked_2026_05_23.md):
+   θ_optimize = (α_min, τ) 2D   [sharpness FROZEN, see SHARPNESS_FIXED below]
+   Layers 1-4 (kernels, solver.step, WarpFullForwardOp, gd_inner_loop_stable)
+   stay 3-element θ for compat. Freeze is a Layer-5-only hack:
+     - theta.grad[1] = 0 each step
+     - theta[1] snapped to SHARPNESS_FIXED post-Adam (defends float drift)
 
-Test 1: Step 5 long run (200 ep) with sharpness frozen=20
-   Compare (α_min, τ) recovery to baseline free-sharpness Day 8 result.
-   Predict: ≥ similar accuracy, faster convergence.
+Replaces (DEPRECATED):
+   tools/calibrate_stage2_autograd.py  — Stage B 2D (α, sharp), no τ, no ReSECT
+   tools/day8_step5_long_run.py        — Day 8 free-sharp 200-ep baseline
 
-Test 2: T_init multi-init basin (5 inits, 100 ep) with sharpness frozen=20
-   Compare convergence rate (how many inits converge to <10% err).
-   Predict: more robust (less coupling, smaller search space).
+For real phantom (Stage 2.2):
+   SHARPNESS_FIXED ← from literature / pre-calibration. DO NOT use 20 blindly.
+   Future Day 3b adds stiffness dim → θ becomes 3D (α_min, τ, stiffness),
+   sharpness still frozen.
 
-Implementation: minimal — keep θ as 3-tensor for WarpFullForwardOp compat,
-but zero theta.grad[1] before opt.step + snap theta[1]=SHARPNESS_FIXED after.
+This file is the historical Day 9 validation harness. It runs two tests:
+   Test 1: 200-ep long run × 3 lrs (best: lr=0.05 → α 0.48% / τ 0.25%)
+   Test 2: 5-init basin sweep (3/5 converge — same count as free-sharp,
+           but rescues init 2 (sharp_init=30, far from truth))
+
+For Stage 2.2 production (TBD): adapt run_resect_loop_fix_sharp() to read real
+phantom obs (pos, alpha or surface IoU) instead of synth gen_obs_multistep_param_arr.
 """
 import sys
 from pathlib import Path

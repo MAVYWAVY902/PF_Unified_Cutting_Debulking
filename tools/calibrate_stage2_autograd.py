@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
 """
+⚠️ DEPRECATED 2026-05-23 — superseded by tools/calibrate_resect.py
+
+This file predates the Day 6-8 ReSECT pipeline. It only does 2D (α_min, sharpness)
+single-substep calibration; it has NO τ optimization, NO inner Mode C loop, and
+NO sharpness freeze (the locked decision). Kept for:
+   - Imports by tools/online_residual_synth.py and tools/test_stage_b_calibrator_sanity.py
+   - 1-substep autograd parity sanity (Stage B's original validation role)
+
+For Stage 2.2 phantom calibration going forward, use tools/calibrate_resect.py
+(canonical ReSECT loop, θ = (α_min, τ) 2D, fix-sharp). See memory entry
+project_day9_fix_sharpness_locked_2026_05_23.md for decision context.
+
+------------------ Original docstring follows ------------------
+
 Stage 2 cutting calibration — AUTOGRAD via cycle-scoped buffer SSA.
 
 This is the production autograd counterpart to tools/calibrate_stage2_FD.py.

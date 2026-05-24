@@ -1,4 +1,13 @@
-"""Day 8 Step 5 LONG RUN: 200 epochs to find true sharpness recovery plateau.
+"""HISTORICAL 2026-05-23 — free-sharpness baseline, superseded by tools/calibrate_resect.py.
+
+Day 9 (2026-05-23) locked the decision to FREEZE sharpness=constant in Warp sys-ID.
+This file is kept as the reference free-sharp baseline (Day 8 numbers: α 1.6% /
+sharp 1.16% / τ 0.41% at lr=0.02, 200 ep). For new sys-ID runs use calibrate_resect.py
+(α 0.48% / τ 0.25% at lr=0.05).
+
+------------------ Original docstring follows ------------------
+
+Day 8 Step 5 LONG RUN: 200 epochs to find true sharpness recovery plateau.
 
 Day 8 60-epoch run gave sharp 10.4% err — better than Day 7's broken 22% but
 still room to improve. Question: is 10% the real obs limit, or just slow
