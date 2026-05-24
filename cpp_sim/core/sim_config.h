@@ -9,6 +9,13 @@
 struct SimConfigYAML {
     std::string name = "Unnamed";
 
+    // Cutting mode:
+    //   "debulk"   — current behavior: edges break + clusters split + particles ASPIRATED
+    //                (CUSA-style fragment removal, particles disappear)
+    //   "cut_only" — edges break + clusters split, but NO particle removal
+    //                (true topological cut; two halves stay alive, fall under gravity)
+    std::string cutting_mode = "debulk";
+
     // Mesh or particle grid
     std::string mesh_path;
     bool use_particle_grid = false;
@@ -40,8 +47,51 @@ struct SimConfigYAML {
     int cutting_interval = 1;   // update damage every N physics steps (was 50 — caused knife tunneling at normal speeds)
     float alpha_min = 3.0f;   // P(F) sigmoid steepness (was 10 — too steep, saturated damage on any contact)
     float aspiration_threshold = 0.3f;
+
+    // Per-edge α field (validation experiment for anisotropic/heterogeneous cutting).
+    //   false → use single global alpha_min for all edges (DEFAULT, byte-identical)
+    //   true  → each edge gets its own alpha_min[eid] from a linear gradient
+    //           along alpha_gradient_axis (x/y/z), interpolating
+    //           alpha_min_low (axis min side) → alpha_min_high (axis max side).
+    // Physical meaning: directional/spatial heterogeneity in cutting resistance.
+    bool per_edge_alpha = false;
+    float alpha_min_low  = 1.0f;
+    float alpha_min_high = 10.0f;
+    std::string alpha_gradient_axis = "x";   // "x" | "y" | "z"
+
+    // Damage model semantics (LEGACY toggle, kept for backward compat).
+    // Recommended now: use per_particle_tau (below) for toughness experiments,
+    // since τ IS the physical "yield threshold" / fracture toughness parameter.
+    std::string damage_model = "sharpness";
+
+    // Per-particle τ (aspiration threshold) field — toughness gradient.
+    //   false → use single global aspiration_threshold for all particles (DEFAULT)
+    //   true  → each particle gets its own τ from linear gradient.
+    //           LOW τ = particle breaks easily (fragile tissue, easy to cut)
+    //           HIGH τ = particle resists breaking (tough tissue, hard to cut)
+    //   This is the CORRECT modeling of tissue toughness — τ directly controls
+    //   the yield/fracture threshold per particle.
+    bool per_particle_tau = false;
+    float tau_low  = 0.1f;
+    float tau_high = 0.5f;
+    std::string tau_gradient_axis = "x";    // "x" | "y" | "z"
     std::string tool_mesh_path;     // empty = sphere tool, non-empty = mesh SDF tool
     int tool_sdf_resolution = 64;   // SDF grid resolution for tool
+
+    // Sharp-edge damage (overrides SDF damage when set).
+    // Real-physics cutting: only the sharp edge cuts; blade body just pushes.
+    // Specify the two endpoints of the sharp edge in the tool's LOCAL coordinate
+    // frame (same frame as the OBJ vertices, before tool_pos translation).
+    // When use_sharp_edge_damage=true, damage is computed from point-to-line-segment
+    // distance instead of SDF volumetric distance.
+    bool use_sharp_edge_damage = false;
+    float sharp_edge_a[3] = {0.0f, 0.0f, 0.0f};
+    float sharp_edge_b[3] = {0.0f, 0.0f, 0.0f};
+
+    // Damage growth rate per substep. 1.0 = instant snap to target (old behavior).
+    // 0.02 = ~25 substeps to break from full pressure → user sees ~50ms deformation
+    // before cut. Lower for cut_only, default 1.0 preserves debulk.
+    float damage_growth_rate = 1.0f;
 
     // Self-collision
     bool self_collision_enabled = true;
@@ -83,6 +133,14 @@ struct SimConfigYAML {
         }
 
         if (config["name"]) name = config["name"].as<std::string>();
+        if (config["cutting_mode"]) {
+            cutting_mode = config["cutting_mode"].as<std::string>();
+            if (cutting_mode != "debulk" && cutting_mode != "cut_only") {
+                std::cerr << "WARNING: unknown cutting_mode='" << cutting_mode
+                          << "', falling back to 'debulk'" << std::endl;
+                cutting_mode = "debulk";
+            }
+        }
 
         // Mesh or particle grid
         if (config["mesh"]) {
@@ -159,6 +217,48 @@ struct SimConfigYAML {
             if (k["aspiration_threshold"]) aspiration_threshold = k["aspiration_threshold"].as<float>();
             if (k["tool_mesh"]) tool_mesh_path = k["tool_mesh"].as<std::string>();
             if (k["tool_sdf_resolution"]) tool_sdf_resolution = k["tool_sdf_resolution"].as<int>();
+            if (k["sharp_edge_a"]) {
+                auto a = k["sharp_edge_a"];
+                sharp_edge_a[0] = a[0].as<float>();
+                sharp_edge_a[1] = a[1].as<float>();
+                sharp_edge_a[2] = a[2].as<float>();
+                use_sharp_edge_damage = true;
+            }
+            if (k["sharp_edge_b"]) {
+                auto b = k["sharp_edge_b"];
+                sharp_edge_b[0] = b[0].as<float>();
+                sharp_edge_b[1] = b[1].as<float>();
+                sharp_edge_b[2] = b[2].as<float>();
+            }
+            if (k["damage_growth_rate"]) damage_growth_rate = k["damage_growth_rate"].as<float>();
+            if (k["per_edge_alpha"]) per_edge_alpha = k["per_edge_alpha"].as<bool>();
+            if (k["alpha_min_low"])  alpha_min_low  = k["alpha_min_low"].as<float>();
+            if (k["alpha_min_high"]) alpha_min_high = k["alpha_min_high"].as<float>();
+            if (k["alpha_gradient_axis"]) {
+                alpha_gradient_axis = k["alpha_gradient_axis"].as<std::string>();
+                if (alpha_gradient_axis != "x" && alpha_gradient_axis != "y" &&
+                    alpha_gradient_axis != "z") {
+                    std::cerr << "Invalid alpha_gradient_axis: '" << alpha_gradient_axis
+                              << "', falling back to 'x'" << std::endl;
+                    alpha_gradient_axis = "x";
+                }
+            }
+            if (k["damage_model"]) {
+                damage_model = k["damage_model"].as<std::string>();
+                if (damage_model != "sharpness" && damage_model != "toughness") {
+                    std::cerr << "Invalid damage_model: '" << damage_model
+                              << "', falling back to 'sharpness'" << std::endl;
+                    damage_model = "sharpness";
+                }
+            }
+            if (k["per_particle_tau"]) per_particle_tau = k["per_particle_tau"].as<bool>();
+            if (k["tau_low"])  tau_low  = k["tau_low"].as<float>();
+            if (k["tau_high"]) tau_high = k["tau_high"].as<float>();
+            if (k["tau_gradient_axis"]) {
+                tau_gradient_axis = k["tau_gradient_axis"].as<std::string>();
+                if (tau_gradient_axis != "x" && tau_gradient_axis != "y" &&
+                    tau_gradient_axis != "z") tau_gradient_axis = "x";
+            }
         }
 
         // Self-collision
@@ -262,6 +362,10 @@ struct SimConfigYAML {
 
     void print() const {
         std::cout << "=== Config: " << name << " ===" << std::endl;
+        std::cout << "  cutting_mode: " << cutting_mode
+                  << (cutting_mode == "cut_only"
+                      ? " (NO particle removal — true topological cut)"
+                      : " (CUSA-style fragment aspiration)") << std::endl;
         if (!mesh_path.empty())
             std::cout << "  mesh: " << mesh_path << std::endl;
         else

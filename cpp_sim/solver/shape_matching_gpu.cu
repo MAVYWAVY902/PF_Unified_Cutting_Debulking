@@ -2,6 +2,8 @@
 #include "svd3_cuda.h"
 #include <cub/cub.cuh>
 #include <cstdio>
+#include <iostream>
+#include <algorithm>
 
 // ============== CUDA Kernels ==============
 
@@ -78,10 +80,11 @@ __global__ void collision_kernel(
 }
 
 __global__ void cluster_solve_kernel(
-    float3* positions, int* removed,
+    float3* positions, int* removed, float* damage,
     int* cluster_starts, int* cluster_sizes,
     int* particle_ids, float3* rest_offsets,
     float3* deltas, int* delta_counts,
+    float damage_shape_weight,    // α: 0=no weighting (debulk), 1=PF-weighted (cut_only)
     int num_clusters)
 {
     int cid = blockIdx.x;
@@ -92,16 +95,21 @@ __global__ void cluster_solve_kernel(
     int size  = cluster_sizes[cid];
     if (size < 2) return;
 
-    // 1. Warp reduction 求质心（跳过 removed 粒子）
+    // 1. Weighted centroid. w_i = max(0.05, 1 - α·damage_i) — Müller 2005 effective mass.
+    //   debulk α=0: w=1 always (旧行为 byte-identical, removed 仍跳过)
+    //   cut_only α=1: damaged particles contribute proportionally less to cluster shape,
+    //                 但仍在 cluster 里(不被排除) → SVD 不退化,健康粒子 shape-match 正常
     float cx = 0, cy = 0, cz = 0;
     float tw = 0;
     for (int j = tid; j < size; j += 32) {
         int pid = particle_ids[start + j];
         if (removed[pid]) continue;
-        cx += positions[pid].x;
-        cy += positions[pid].y;
-        cz += positions[pid].z;
-        tw += 1.0f;
+        float w = 1.0f - damage_shape_weight * damage[pid];
+        if (w < 0.05f) w = 0.05f;  // floor 防 total_w → 0
+        cx += w * positions[pid].x;
+        cy += w * positions[pid].y;
+        cz += w * positions[pid].z;
+        tw += w;
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
         cx += __shfl_down_sync(0xFFFFFFFF, cx, offset);
@@ -115,14 +123,16 @@ __global__ void cluster_solve_kernel(
     cy = __shfl_sync(0xFFFFFFFF, cy, 0) / total_w;
     cz = __shfl_sync(0xFFFFFFFF, cz, 0) / total_w;
 
-    // 2a. 活跃粒子的 rest offset 均值（移除粒子后不再零均值）
+    // 2a. Weighted rest centroid (same weights as cm — Müller 2005 mass-weighted)
     float qcx = 0, qcy = 0, qcz = 0;
     for (int j = tid; j < size; j += 32) {
         int pid = particle_ids[start + j];
         if (removed[pid]) continue;
-        qcx += rest_offsets[start + j].x;
-        qcy += rest_offsets[start + j].y;
-        qcz += rest_offsets[start + j].z;
+        float w = 1.0f - damage_shape_weight * damage[pid];
+        if (w < 0.05f) w = 0.05f;
+        qcx += w * rest_offsets[start + j].x;
+        qcy += w * rest_offsets[start + j].y;
+        qcz += w * rest_offsets[start + j].z;
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
         qcx += __shfl_down_sync(0xFFFFFFFF, qcx, offset);
@@ -133,20 +143,22 @@ __global__ void cluster_solve_kernel(
     qcy = __shfl_sync(0xFFFFFFFF, qcy, 0) / total_w;
     qcz = __shfl_sync(0xFFFFFFFF, qcz, 0) / total_w;
 
-    // 2b. 协方差矩阵 A_pq (3x3)（用修正后的 rest offsets）
+    // 2b. Weighted covariance A_pq (Müller 2005: A = Σ m_i (p_i - cm)(q_i - qcm)^T)
     float a11=0,a12=0,a13=0,a21=0,a22=0,a23=0,a31=0,a32=0,a33=0;
     for (int j = tid; j < size; j += 32) {
         int pid = particle_ids[start + j];
         if (removed[pid]) continue;
+        float w = 1.0f - damage_shape_weight * damage[pid];
+        if (w < 0.05f) w = 0.05f;
         float px = positions[pid].x - cx;
         float py = positions[pid].y - cy;
         float pz = positions[pid].z - cz;
         float qx = rest_offsets[start + j].x - qcx;
         float qy = rest_offsets[start + j].y - qcy;
         float qz = rest_offsets[start + j].z - qcz;
-        a11 += px*qx; a12 += px*qy; a13 += px*qz;
-        a21 += py*qx; a22 += py*qy; a23 += py*qz;
-        a31 += pz*qx; a32 += pz*qy; a33 += pz*qz;
+        a11 += w*px*qx; a12 += w*px*qy; a13 += w*px*qz;
+        a21 += w*py*qx; a22 += w*py*qy; a23 += w*py*qz;
+        a31 += w*pz*qx; a32 += w*pz*qy; a33 += w*pz*qz;
     }
     // Warp reduction for all 9 elements
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -200,7 +212,9 @@ __global__ void cluster_solve_kernel(
     r32 = __shfl_sync(0xFFFFFFFF, r32, 0);
     r33 = __shfl_sync(0xFFFFFFFF, r33, 0);
 
-    // 4. Goal positions → atomicAdd deltas（跳过 removed 粒子）
+    // 4. Goal scatter — UNWEIGHTED: every non-removed particle gets goal applied.
+    //    apply_kernel does damage-based stiffness gating (1 - 0.95*damage),
+    //    no need to also weight here (would double-count damage gating).
     for (int j = tid; j < size; j += 32) {
         int pid = particle_ids[start + j];
         if (removed[pid]) continue;
@@ -387,16 +401,26 @@ __global__ void self_collision_kernel(
 // ============== Cutting Kernels ==============
 
 // 边 P(F) 计算 + damage 更新（每边一线程）
+// Per-edge α support: if alpha_min_per_edge is non-null, read α from array;
+// otherwise use alpha_min_scalar. Single kernel handles both modes.
+// damage_model: 0 = sharpness (legacy), 1 = toughness (α scales growth rate inverse)
 __global__ void update_edge_damage_kernel(
     float3* pred_pos, int* removed,
     int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
-    float3 knife_pos, float knife_radius, float alpha_min, int num_edges)
+    float3 knife_pos, float knife_radius,
+    float alpha_min_scalar,
+    const float* alpha_min_per_edge,   // nullable: nullptr → use scalar
+    float damage_growth_rate, int num_edges,
+    int damage_model)                   // 0=sharpness, 1=toughness
 {
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
     if (eid >= num_edges || broken[eid]) return;
 
     int a = edge_a[eid], b = edge_b[eid];
     if (removed[a] || removed[b]) return;
+
+    float alpha_min = (alpha_min_per_edge != nullptr) ? alpha_min_per_edge[eid]
+                                                       : alpha_min_scalar;
 
     // 边中点
     float3 mid;
@@ -426,11 +450,21 @@ __global__ void update_edge_damage_kernel(
     float sdist = intruder_dist - radius;
     float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
 
-    // Damage 更新（只增不减）
+    // Damage 更新 — capped growth (rate=1.0 → 原 max-update 行为, byte-identical debulk)
     float rest = pf_rest[eid];
     if (rest > 0.01f) {
         float target = fmaxf(0.0f, 1.0f - pf / rest);
-        damage[eid] = fmaxf(damage[eid], target);
+        float gap = target - damage[eid];
+        if (gap > 0.0f) {
+            // Toughness model (damage_model=1): high α slows damage growth.
+            // Sharpness model (damage_model=0): unchanged (legacy).
+            float effective_rate = damage_growth_rate;
+            if (damage_model == 1) {
+                effective_rate = damage_growth_rate / fmaxf(alpha_min, 0.1f);
+            }
+            float inc = gap < effective_rate ? gap : effective_rate;
+            damage[eid] = damage[eid] + inc;
+        }
     }
 
     // 断裂检查
@@ -494,9 +528,14 @@ __global__ void finalize_particle_damage_kernel(
 }
 
 // CUSA 吸引：刀具内 + 高 damage → 标记 removed
+// Per-particle τ support: if tau_per_particle != nullptr, read per-particle threshold;
+// else use scalar threshold (legacy, byte-identical).
 __global__ void aspirate_kernel(
     float3* pred_pos, float* particle_damage, int* removed,
-    float3 knife_pos, float knife_radius, float threshold, int N)
+    float3 knife_pos, float knife_radius,
+    float threshold_scalar,
+    const float* tau_per_particle,    // nullable: nullptr → use scalar
+    int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i]) return;
@@ -506,6 +545,8 @@ __global__ void aspirate_kernel(
     float dz = pred_pos[i].z - knife_pos.z;
     if (dx*dx + dy*dy + dz*dz > knife_radius * knife_radius) return;
 
+    float threshold = (tau_per_particle != nullptr) ? tau_per_particle[i]
+                                                    : threshold_scalar;
     if (particle_damage[i] > threshold) {
         removed[i] = 1;
     }
@@ -626,6 +667,46 @@ void ShapeMatchingGPUSolver::init_edges(
     CUDA_CHECK(cudaMemset(d_edges.broken, 0, E * sizeof(int)));
 
     printf("[GPU] 边数据初始化: %d 条边\n", E);
+}
+
+// Upload per-particle τ (aspiration threshold) field. Per-particle gradient
+// for toughness experiments. Length must equal d_particles.N.
+void ShapeMatchingGPUSolver::upload_per_particle_tau(const std::vector<float>& tau_per_particle) {
+    int N = d_particles.N;
+    if ((int)tau_per_particle.size() != N) {
+        std::cerr << "[GPU] upload_per_particle_tau size mismatch: "
+                  << tau_per_particle.size() << " vs N=" << N << std::endl;
+        return;
+    }
+    if (d_tau_per_particle == nullptr) {
+        CUDA_CHECK(cudaMalloc(&d_tau_per_particle, N * sizeof(float)));
+    }
+    CUDA_CHECK(cudaMemcpy(d_tau_per_particle, tau_per_particle.data(),
+                           N * sizeof(float), cudaMemcpyHostToDevice));
+    tau_per_particle_cpu = tau_per_particle;
+    printf("[GPU] per-particle τ uploaded: %d particles, range [%.3f, %.3f]\n",
+           N, *std::min_element(tau_per_particle.begin(), tau_per_particle.end()),
+           *std::max_element(tau_per_particle.begin(), tau_per_particle.end()));
+}
+
+// Upload (or re-upload) per-edge α field. Called by viewer after init_edges if
+// config.per_edge_alpha = true. Length must equal d_edges.num_edges.
+void ShapeMatchingGPUSolver::upload_per_edge_alpha(const std::vector<float>& alpha_per_edge) {
+    int E = d_edges.num_edges;
+    if ((int)alpha_per_edge.size() != E) {
+        std::cerr << "[GPU] upload_per_edge_alpha size mismatch: "
+                  << alpha_per_edge.size() << " vs num_edges=" << E << std::endl;
+        return;
+    }
+    if (d_edges.alpha_min_per_edge == nullptr) {
+        CUDA_CHECK(cudaMalloc(&d_edges.alpha_min_per_edge, E * sizeof(float)));
+    }
+    CUDA_CHECK(cudaMemcpy(d_edges.alpha_min_per_edge, alpha_per_edge.data(),
+                           E * sizeof(float), cudaMemcpyHostToDevice));
+    alpha_per_edge_cpu = alpha_per_edge;   // keep CPU copy for viewer
+    printf("[GPU] per-edge α uploaded: %d edges, range [%.3f, %.3f]\n",
+           E, *std::min_element(alpha_per_edge.begin(), alpha_per_edge.end()),
+           *std::max_element(alpha_per_edge.begin(), alpha_per_edge.end()));
 }
 
 // ============== Rigid Body SDF Collision ==============
@@ -824,7 +905,8 @@ __global__ void tool_sdf_damage_kernel(
     int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
     float* sdf, int res_x, int res_y, int res_z,
     float3 sdf_origin, float3 sdf_cell_size,
-    float3 tool_pos, const float* tool_rot, float alpha_min, int num_edges)
+    float3 tool_pos, const float* tool_rot,
+    float alpha_min, float damage_growth_rate, int num_edges)
 {
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
     if (eid >= num_edges || broken[eid]) return;
@@ -874,9 +956,97 @@ __global__ void tool_sdf_damage_kernel(
     float rest = pf_rest[eid];
     if (rest > 0.01f) {
         float target = fmaxf(0.0f, 1.0f - pf / rest);
-        damage[eid] = fmaxf(damage[eid], target);
+        float gap = target - damage[eid];
+        if (gap > 0.0f) {
+            float inc = gap < damage_growth_rate ? gap : damage_growth_rate;
+            damage[eid] = damage[eid] + inc;
+        }
     }
 
+    if (damage[eid] > 0.5f) {
+        broken[eid] = 1;
+    }
+}
+
+// ============== Sharp-edge damage kernel ==============
+// Physical insight: a real scalpel cuts ONLY along its sharp edge line.
+// The blade body just pushes (collision). The previous tool_sdf_damage_kernel
+// incorrectly damaged every mesh edge inside the wedge SDF — so moving the blade
+// sideways (perpendicular to cutting direction) wrongly damaged tissue beside
+// the blade body, not just at the sharp edge.
+//
+// Fix: damage proportional to distance from mesh edge midpoint to the sharp
+// edge LINE SEGMENT in tool local frame. Same sigmoid P(F) formula, but
+// `sdist` is now point-to-line-segment distance, not SDF.
+//
+// Collision (tool_sdf_collision_kernel) is unchanged: full SDF push-out so the
+// blade body still does non-penetration correctly.
+__global__ void sharp_edge_damage_kernel(
+    float3* pred_pos, int* removed,
+    int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
+    float3 tool_pos, const float* tool_rot,
+    float3 sharp_a, float3 sharp_b,    // sharp edge endpoints in tool LOCAL frame
+    float alpha_min, float damage_growth_rate, int num_edges)
+{
+    int eid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (eid >= num_edges || broken[eid]) return;
+
+    int a = edge_a[eid], b = edge_b[eid];
+    if (removed[a] || removed[b]) return;
+
+    // Mesh edge midpoint in world → tool local frame
+    float3 mid_world = make_float3(
+        (pred_pos[a].x + pred_pos[b].x) * 0.5f - tool_pos.x,
+        (pred_pos[a].y + pred_pos[b].y) * 0.5f - tool_pos.y,
+        (pred_pos[a].z + pred_pos[b].z) * 0.5f - tool_pos.z);
+    float3 mid = apply_rot_transpose(tool_rot, mid_world);
+
+    // Closest point on sharp edge segment [sharp_a, sharp_b] to `mid`.
+    // t = clamp(((mid - sharp_a) · (sharp_b - sharp_a)) / |sharp_b - sharp_a|^2, 0, 1)
+    float3 ab = make_float3(sharp_b.x - sharp_a.x, sharp_b.y - sharp_a.y, sharp_b.z - sharp_a.z);
+    float3 am = make_float3(mid.x - sharp_a.x, mid.y - sharp_a.y, mid.z - sharp_a.z);
+    float ab_dot_ab = ab.x*ab.x + ab.y*ab.y + ab.z*ab.z;
+    if (ab_dot_ab < 1e-12f) return;
+    float t = (am.x*ab.x + am.y*ab.y + am.z*ab.z) / ab_dot_ab;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    float3 closest = make_float3(
+        sharp_a.x + t * ab.x,
+        sharp_a.y + t * ab.y,
+        sharp_a.z + t * ab.z);
+
+    float dx = mid.x - closest.x;
+    float dy = mid.y - closest.y;
+    float dz = mid.z - closest.z;
+    float dist_to_sharp = sqrtf(dx*dx + dy*dy + dz*dz + 1e-12f);
+
+    // Mesh edge circumradius (its own half-length)
+    float ex = pred_pos[a].x - pred_pos[b].x;
+    float ey = pred_pos[a].y - pred_pos[b].y;
+    float ez = pred_pos[a].z - pred_pos[b].z;
+    float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
+    if (radius < 1e-10f) return;
+
+    // Early reject if too far from sharp edge (more than 3x edge radius)
+    if (dist_to_sharp > radius * 3.0f) return;
+
+    // P(F) sigmoid on (distance to sharp edge - edge radius).
+    // Mirrors sphere/SDF version semantics: sdist < 0 when sharp edge is INSIDE
+    // the mesh edge's circumsphere → pf low → damage accumulates.
+    float sdist = dist_to_sharp - radius;
+    float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
+
+    float rest = pf_rest[eid];
+    if (rest > 0.01f) {
+        float target = fmaxf(0.0f, 1.0f - pf / rest);
+        // Capped growth (replaces old `damage = max(damage, target)` snap):
+        // gives time for shape-matching deformation to propagate before edges break.
+        float gap = target - damage[eid];
+        if (gap > 0.0f) {
+            float inc = gap < damage_growth_rate ? gap : damage_growth_rate;
+            damage[eid] = damage[eid] + inc;
+        }
+    }
     if (damage[eid] > 0.5f) {
         broken[eid] = 1;
     }
@@ -984,20 +1154,39 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
     int E = d_edges.num_edges;
     int blocks_e = (E + 255) / 256;
 
-    if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
+    // Priority dispatch:
+    //   1. use_sharp_edge_damage=1 → sharp_edge_damage_kernel (physically correct cutting)
+    //   2. mesh SDF tool → tool_sdf_damage_kernel (volumetric damage, legacy)
+    //   3. fallback → update_edge_damage_kernel (sphere knife)
+    if (config.use_sharp_edge_damage) {
+        sharp_edge_damage_kernel<<<blocks_e, 256>>>(
+            d_particles.predicted_pos, d_particles.removed,
+            d_edges.particle_a, d_edges.particle_b,
+            d_edges.pf_rest, d_edges.damage, d_edges.broken,
+            config.knife_pos, d_knife_rot,
+            config.sharp_edge_a, config.sharp_edge_b,
+            alpha_min, config.damage_growth_rate, E);
+    } else if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
         tool_sdf_damage_kernel<<<blocks_e, 256>>>(
             d_particles.predicted_pos, d_particles.removed,
             d_edges.particle_a, d_edges.particle_b,
             d_edges.pf_rest, d_edges.damage, d_edges.broken,
             d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
             d_tool_sdf.origin, d_tool_sdf.cell_size,
-            config.knife_pos, d_knife_rot, alpha_min, E);
+            config.knife_pos, d_knife_rot, alpha_min, config.damage_growth_rate, E);
     } else {
+        // Per-edge α dispatch: if per_edge_alpha enabled AND array allocated,
+        // pass the array pointer; kernel branches inside.
+        const float* alpha_arr = (per_edge_alpha && d_edges.alpha_min_per_edge != nullptr)
+                                  ? d_edges.alpha_min_per_edge : nullptr;
         update_edge_damage_kernel<<<blocks_e, 256>>>(
             d_particles.predicted_pos, d_particles.removed,
             d_edges.particle_a, d_edges.particle_b,
             d_edges.pf_rest, d_edges.damage, d_edges.broken,
-            config.knife_pos, config.knife_radius, alpha_min, E);
+            config.knife_pos, config.knife_radius,
+            alpha_min, alpha_arr,
+            config.damage_growth_rate, E,
+            damage_model_mode);
     }
 }
 
@@ -1038,9 +1227,12 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
             d_tool_sdf.origin, d_tool_sdf.cell_size,
             config.knife_pos, d_knife_rot, aspiration_threshold, N);
     } else {
+        const float* tau_arr = (per_particle_tau && d_tau_per_particle != nullptr)
+                                ? d_tau_per_particle : nullptr;
         aspirate_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_particles.damage, d_particles.removed,
-            config.knife_pos, config.knife_radius, aspiration_threshold, N);
+            config.knife_pos, config.knife_radius,
+            aspiration_threshold, tau_arr, N);
     }
 }
 
@@ -1101,10 +1293,12 @@ void ShapeMatchingGPUSolver::step() {
 
         // Solve all clusters（每簇一个 block，32 线程/warp）
         cluster_solve_kernel<<<C, 32>>>(
-            d_particles.predicted_pos, d_particles.removed,
+            d_particles.predicted_pos, d_particles.removed, d_particles.damage,
             d_clusters.cluster_starts, d_clusters.cluster_sizes,
             d_clusters.particle_ids, d_clusters.rest_offsets,
-            d_deltas, d_delta_counts, C);
+            d_deltas, d_delta_counts,
+            config.damage_shape_weight,
+            C);
 
         // Apply shape-match delta (avg over ~60 cluster memberships)
         apply_kernel<<<blocks_n, 256>>>(
@@ -1174,11 +1368,16 @@ void ShapeMatchingGPUSolver::step() {
     }
 
     // 4. Cutting pipeline（每 cutting_update_interval 步）
+    // cut_only 模式: 仍跑 edge damage 更新 + particle damage 聚合(stiffness 软化用),
+    //               但跳过 gpu_aspirate() — 粒子不被 CUSA 吸走。
+    //               连通性切断通过 CPU 端的 cluster split (cpu_bfs_split Phase 2) 实现。
     if (config.knife_active && d_edges.num_edges > 0 &&
         (step_count % cutting_update_interval == 0)) {
         gpu_update_damage();
         gpu_update_particle_damage();
-        gpu_aspirate();
+        if (config.enable_aspiration) {
+            gpu_aspirate();
+        }
     }
     step_count++;
 

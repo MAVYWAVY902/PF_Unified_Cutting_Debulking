@@ -31,8 +31,10 @@ bool cpu_bfs_split(
     std::vector<float>& edge_pf_rest,
     std::vector<float3>& cpu_positions,
     std::vector<int>& cpu_removed,
+    std::vector<int>& tet_broken,        // OUT: per-tet flag, ≥1 broken edge → 1 (monotonic)
     const TetMesh& tet_mesh,
-    int min_fragment_size = 5)
+    int min_fragment_size = 5,
+    bool enable_fragment_drop = true)    // false in cut_only mode
 {
     int N = cpu_solver.particles.size();
     int E = (int)edge_a.size();
@@ -99,15 +101,53 @@ bool cpu_bfs_split(
     //   size <  min_fragment_size → 标记 removed（clinical = aspirated 小碎末被吸走）
     //   size >= min_fragment_size → 保留，让物理/重力自然处理（掉落、继续和刀交互）
     // 这修正了原版"除最大以外全删"的行为，之前大块分离体会突然消失。
+    // ★ cut_only 模式 (enable_fragment_drop=false): 跳过整个 drop_small 循环,
+    //   小碎片也保留。两半通过 Phase 2 (cluster split) 实现 kinematic 独立。
     int dropped_small = 0, kept_big = 0;
-    for (int i = 0; i < (int)components.size(); i++) {
-        if (i == largest_idx) continue;
-        if ((int)components[i].size() < min_fragment_size) {
-            for (int pid : components[i]) cpu_removed[pid] = 1;
-            dropped_small++;
-            any_change = true;
-        } else {
-            kept_big++;
+    if (enable_fragment_drop) {
+        for (int i = 0; i < (int)components.size(); i++) {
+            if (i == largest_idx) continue;
+            if ((int)components[i].size() < min_fragment_size) {
+                for (int pid : components[i]) cpu_removed[pid] = 1;
+                dropped_small++;
+                any_change = true;
+            } else {
+                kept_big++;
+            }
+        }
+    } else {
+        // cut_only: 数一下非主分量(用于诊断打印),但不删
+        for (int i = 0; i < (int)components.size(); i++) {
+            if (i != largest_idx) kept_big++;
+        }
+    }
+
+    // ★ Scheme B: 计算 tet_broken[T] — 跟踪哪些 tet 含 broken 边,
+    //   让 rebuild_surface_faces 跳过这些 tet → 切口处出现可见开口。
+    //   Monotonic: 一旦 tet 被标记 broken,永远 broken。
+    {
+        int newly_broken = 0;
+        for (int ti = 0; ti < (int)tet_mesh.tets.size(); ti++) {
+            if (tet_broken[ti]) continue;  // 已标记,保持
+            const auto& t = tet_mesh.tets[ti];
+            bool has_broken_edge = false;
+            for (int i = 0; i < 4 && !has_broken_edge; i++) {
+                for (int j = i + 1; j < 4; j++) {
+                    if (broken_edge_set.count(edge_key(t[i], t[j]))) {
+                        has_broken_edge = true;
+                        break;
+                    }
+                }
+            }
+            if (has_broken_edge) {
+                tet_broken[ti] = 1;
+                newly_broken++;
+            }
+        }
+        if (newly_broken > 0) {
+            int total_broken = (int)std::count(tet_broken.begin(), tet_broken.end(), 1);
+            printf("[CUT-TET] newly_broken=%d total_broken=%d / %d tets\n",
+                   newly_broken, total_broken, (int)tet_mesh.tets.size());
         }
     }
 
@@ -154,18 +194,38 @@ bool cpu_bfs_split(
                 // 完全在单一 component 内 → 保持原状（包括原 rest_cm / rest_offsets）
                 new_clusters.push_back(c);
             } else {
-                // 跨 2+ components → 分裂
-                clusters_changed = true;
-                split_count++;
+                // 跨 2+ components.
+                // ★ All-or-nothing 分裂: 仅当**所有**子组件 size >= MIN_NEW_CLUSTER_SIZE
+                //   才分裂(避免退化的 2-3 粒子 cluster SVD 数值不稳定 → spikes)。
+                //   否则保留原 cluster, soft damage 权重 (damage_shape_weight) 自然处理
+                //   边界粒子 — 它们仍在 cluster 里, SVD 不退化, 健康粒子 shape-match 正常,
+                //   damaged 粒子贡献被自动衰减。
+                //   旧版 (min=2): 单粒子 sub-component 被静默丢弃 → 粒子失去 cluster 成员资格
+                //                → 多个 cluster 同时丢失 → 粒子完全失去 shape-match → 飞出。
+                const int MIN_NEW_CLUSTER_SIZE = 4;
+                bool all_big_enough = true;
                 for (auto& [cid, ids] : by_component) {
-                    if ((int)ids.size() < 2) continue;  // cluster_solve 要求 size >= 2
-                    Cluster nc;
-                    nc.particle_ids = ids;
-                    std::sort(nc.particle_ids.begin(), nc.particle_ids.end());
-                    // 用当前位置作 rest —— 碎片"接受"它分离时刻的形状为新平衡态，
-                    // 而不是企图回到原初 tumor 内部的相对位置。
-                    nc.init(cpu_solver.particles);
-                    new_clusters.push_back(std::move(nc));
+                    if ((int)ids.size() < MIN_NEW_CLUSTER_SIZE) {
+                        all_big_enough = false;
+                        break;
+                    }
+                }
+                if (all_big_enough) {
+                    clusters_changed = true;
+                    split_count++;
+                    for (auto& [cid, ids] : by_component) {
+                        Cluster nc;
+                        nc.particle_ids = ids;
+                        std::sort(nc.particle_ids.begin(), nc.particle_ids.end());
+                        // 用当前位置作 rest —— 碎片"接受"它分离时刻的形状为新平衡态。
+                        nc.init(cpu_solver.particles);
+                        new_clusters.push_back(std::move(nc));
+                    }
+                } else {
+                    // 子组件太小 → 不分裂, 保留原 cluster intact.
+                    // 跨切口粒子由 weighted cluster_solve (Müller 2005 with damage as mass)
+                    // 自然处理: damaged 侧贡献 ~5% 权重, intact 侧主导 cluster shape。
+                    new_clusters.push_back(c);
                 }
             }
         }
@@ -425,12 +485,37 @@ int main(int argc, char** argv) {
     gpu_solver.config.friction_s = cfg.friction_s;
     gpu_solver.config.friction_k = cfg.friction_k;
     gpu_solver.config.tool_type = cfg.tool_mesh_path.empty() ? 0 : 1;
+    // cut_only 模式: 关闭 CUSA aspirate (gpu_aspirate 跳过),粒子不被吸走。
+    gpu_solver.config.enable_aspiration = (cfg.cutting_mode == "debulk") ? 1 : 0;
+    // Damage-weighted shape matching: α=1 in cut_only enables Müller 2005 effective-mass
+    //   shape matching with P(F) as mass — damaged particles contribute less to cluster
+    //   shape but stay in cluster (SVD stays stable, healthy particles still pulled).
+    //   α=0 in debulk reproduces original unweighted behavior exactly.
+    gpu_solver.config.damage_shape_weight =
+        (cfg.cutting_mode == "cut_only") ? 1.0f : 0.0f;
+
+    // Sharp-edge damage: limits damage to a line segment (the blade edge) instead of
+    //   the full SDF volume. Fixes "horizontal blade motion deletes faces" — only
+    //   sharp edge cuts, blade body just collides (push-out).
+    gpu_solver.config.use_sharp_edge_damage = cfg.use_sharp_edge_damage ? 1 : 0;
+    gpu_solver.config.sharp_edge_a = make_float3(
+        cfg.sharp_edge_a[0], cfg.sharp_edge_a[1], cfg.sharp_edge_a[2]);
+    gpu_solver.config.sharp_edge_b = make_float3(
+        cfg.sharp_edge_b[0], cfg.sharp_edge_b[1], cfg.sharp_edge_b[2]);
+    gpu_solver.config.damage_growth_rate = cfg.damage_growth_rate;
+    if (cfg.use_sharp_edge_damage) {
+        printf("[CUT] sharp_edge: A=(%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f) growth_rate=%.3f\n",
+               cfg.sharp_edge_a[0], cfg.sharp_edge_a[1], cfg.sharp_edge_a[2],
+               cfg.sharp_edge_b[0], cfg.sharp_edge_b[1], cfg.sharp_edge_b[2],
+               cfg.damage_growth_rate);
+    }
 
     int substeps = cfg.substeps;
 
     gpu_solver.cutting_update_interval = cfg.cutting_interval;
     gpu_solver.alpha_min = cfg.alpha_min;
     gpu_solver.aspiration_threshold = cfg.aspiration_threshold;
+    gpu_solver.damage_model_mode = (cfg.damage_model == "toughness") ? 1 : 0;
 
     cfg.print();
 
@@ -440,6 +525,47 @@ int main(int argc, char** argv) {
 
     if (num_edges > 0) {
         gpu_solver.init_edges(edge_a, edge_b, edge_pf_rest);
+
+        // Per-edge α field (Stage 1 validation): if enabled, allocate and
+        // compute a linear-gradient α field along selected axis.
+        gpu_solver.per_edge_alpha = cfg.per_edge_alpha;
+        if (cfg.per_edge_alpha) {
+            // Determine axis index
+            int axis = 0;
+            if (cfg.alpha_gradient_axis == "y") axis = 1;
+            else if (cfg.alpha_gradient_axis == "z") axis = 2;
+
+            // Compute bbox of positions along that axis
+            float axis_min =  1e30f;
+            float axis_max = -1e30f;
+            for (const auto& p : positions) {
+                float v = (axis == 0) ? p.x : (axis == 1) ? p.y : p.z;
+                if (v < axis_min) axis_min = v;
+                if (v > axis_max) axis_max = v;
+            }
+            float axis_range = axis_max - axis_min;
+            if (axis_range < 1e-6f) axis_range = 1.0f;  // safety
+
+            // Per-edge α: linear interpolation based on midpoint position
+            std::vector<float> alpha_per_edge(num_edges);
+            for (int e = 0; e < num_edges; e++) {
+                int a = edge_a[e], b = edge_b[e];
+                float mid;
+                if (axis == 0)      mid = 0.5f * (positions[a].x + positions[b].x);
+                else if (axis == 1) mid = 0.5f * (positions[a].y + positions[b].y);
+                else                mid = 0.5f * (positions[a].z + positions[b].z);
+                float t = (mid - axis_min) / axis_range;
+                alpha_per_edge[e] = cfg.alpha_min_low
+                                     + t * (cfg.alpha_min_high - cfg.alpha_min_low);
+            }
+            gpu_solver.upload_per_edge_alpha(alpha_per_edge);
+            printf("[CUT] per_edge_alpha ENABLED: axis=%s, α range [%.3f, %.3f]\n",
+                   cfg.alpha_gradient_axis.c_str(),
+                   cfg.alpha_min_low, cfg.alpha_min_high);
+        } else {
+            printf("[CUT] per_edge_alpha DISABLED: global alpha_min=%.3f\n",
+                   cfg.alpha_min);
+        }
     }
 
     // --- Rigid mesh collision ---
@@ -507,12 +633,45 @@ int main(int argc, char** argv) {
     std::vector<float3> cpu_positions(N);
     std::vector<int> cpu_removed(N, 0);
     std::vector<float> cpu_damage(N, 0.0f);
+    // Scheme B: per-tet broken flag (monotonic). Used by rebuild_surface_faces
+    // to skip cut tets → 切口在 viewer 中变成可见的开口。
+    std::vector<int> tet_broken(use_tet ? tet_mesh.num_tets() : 0, 0);
+
+    // --- Per-particle averaged α (visualization for Stage 1 validation) ---
+    // mean of incident edge α values per particle. Static (α field doesn't change
+    // mid-sim), so compute once and pass pointer to viewer.
+    std::vector<float> cpu_particle_alpha;
+    if (cfg.per_edge_alpha && num_edges > 0) {
+        cpu_particle_alpha.assign(N, 0.0f);
+        std::vector<int> count(N, 0);
+        for (int e = 0; e < num_edges; e++) {
+            int a = edge_a[e], b = edge_b[e];
+            float ae = gpu_solver.alpha_per_edge_cpu[e];
+            cpu_particle_alpha[a] += ae; count[a]++;
+            cpu_particle_alpha[b] += ae; count[b]++;
+        }
+        for (int i = 0; i < N; i++) {
+            if (count[i] > 0) cpu_particle_alpha[i] /= count[i];
+            else cpu_particle_alpha[i] = cfg.alpha_min;
+        }
+    }
 
     // --- 设置 Viewer ---
     Viewer viewer;
     viewer.solver = &cpu_solver;
     viewer.particle_damage_array = &cpu_damage;
+    if (cfg.per_edge_alpha && !cpu_particle_alpha.empty()) {
+        viewer.particle_alpha_array = &cpu_particle_alpha;
+        viewer.particle_alpha_min = cfg.alpha_min_low;
+        viewer.particle_alpha_max = cfg.alpha_min_high;
+        printf("[VIEWER] Stage 1 mode: particles colored by α field (jet colormap, "
+               "range [%.2f, %.2f])\n", cfg.alpha_min_low, cfg.alpha_min_high);
+    }
     viewer.num_clusters_display = C;
+    // Scheme B: cut_only 模式让 viewer 知道 tet_broken,触发 surface 重建
+    if (cfg.cutting_mode == "cut_only" && use_tet) {
+        viewer.tet_broken_ptr = &tet_broken;
+    }
 
     // 同步参数到viewer
     viewer.knife_radius = gpu_solver.config.knife_radius;
@@ -588,7 +747,9 @@ int main(int argc, char** argv) {
         //
         // Cascade 限制到 3 iter（原版 20）：严格判据 + MEAN aggregation (之前修好的)
         // 意味着每次 aspirate 规模已经较小、cascade 不会再失控；3 iter 够收敛正常切割。
-        if (use_tet && rem > 0) {
+        // ★ cut_only 模式: 跳过整个 orphan 清理。cut_only 不删粒子,rem 应该一直 = 0,
+        //   理论上这块不会触发,但为了语义干净显式 gate。
+        if (use_tet && rem > 0 && cfg.cutting_mode == "debulk") {
             int total_orphans = 0;
             int iter = 0;
             for (; iter < 3; iter++) {
@@ -632,12 +793,42 @@ int main(int argc, char** argv) {
 
         // BFS 连通分量分析：小碎片 aspirated、大碎片保留（详见 cpu_bfs_split）
         // 频率从每30帧 → 每5帧：小碎片一生成（< 5 粒子）就被吸走，避免"延迟消失"跳变
-        if (use_tet && rem > 0 && timing_frame % 5 == 0) {
+        // ★ cut_only 模式: rem 永远 = 0,所以原本的 rem > 0 gate 永远不触发。
+        //   改成 (rem > 0 || knife_active) — cut_only 下靠 knife_active 触发 BFS,
+        //   发现新的 broken 边 → cluster split → 两半 kinematic 独立 + tet_broken 更新。
+        bool enable_drop = (cfg.cutting_mode == "debulk");
+        if (use_tet && (rem > 0 || viewer.knife_active) && timing_frame % 5 == 0) {
             bool changed = cpu_bfs_split(
                 gpu_solver, cpu_solver,
                 edge_a, edge_b, edge_pf_rest,
                 cpu_positions, cpu_removed,
-                tet_mesh, 5);
+                tet_broken,
+                tet_mesh, 5, enable_drop);
+            // Scheme B: 即使 `changed`=false (无 fragment 删除/cluster split),
+            //   tet_broken 也可能增加。把 count 同步给 viewer 触发 surface 重建。
+            viewer.tet_broken_count = (int)std::count(tet_broken.begin(), tet_broken.end(), 1);
+
+            // DIAG: 每秒打印一次 damage 状态,帮助 debug "no reaction"
+            if (timing_frame % 60 == 0) {
+                std::vector<float> ed;
+                gpu_solver.download_edge_damage(ed);
+                float max_ed = 0; int n_high = 0; int n_broken_dl = 0;
+                for (auto v : ed) {
+                    if (v > max_ed) max_ed = v;
+                    if (v > 0.1f) n_high++;
+                    if (v > 0.5f) n_broken_dl++;
+                }
+                std::vector<float> pd;
+                gpu_solver.download_damage(pd);
+                float max_pd = 0; int n_p_high = 0;
+                for (auto v : pd) {
+                    if (v > max_pd) max_pd = v;
+                    if (v > 0.1f) n_p_high++;
+                }
+                printf("[DIAG frame %d] knife_active=%d mode=%s | edge: max=%.3f n>0.1=%d n_broken=%d | particle: max=%.3f n>0.1=%d\n",
+                       timing_frame, (int)viewer.knife_active, cfg.cutting_mode.c_str(),
+                       max_ed, n_high, n_broken_dl, max_pd, n_p_high);
+            }
             if (changed) {
                 active = 0; rem = 0;
                 for (int i = 0; i < N; i++) {

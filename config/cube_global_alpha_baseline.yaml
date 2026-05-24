@@ -1,0 +1,41 @@
+## Stage 1 control: global α baseline (TUNED for visible deform)
+
+name: "Cube Global Alpha (Deformable Baseline)"
+
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.005
+  gravity: [0, -9.81, 0]
+  num_iterations: 6
+  stiffness: 0.4
+  damping: 0.95
+  substeps: 8
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.05
+
+clusters:
+  rings: 2
+
+knife:
+  radius: 0.025
+  cutting_interval: 4
+  alpha_min: 3.0              # uniform mid value
+  aspiration_threshold: 0.1
+  damage_growth_rate: 0.05
+
+  per_edge_alpha: false
+  damage_model: "toughness"
+
+self_collision:
+  enabled: true
+  radius: 0.012
+  stiffness: 0.8
+
+viewer:
+  draw_surface: false
+  draw_wireframe: true
+  draw_points: true

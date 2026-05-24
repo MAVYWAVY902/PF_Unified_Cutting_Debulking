@@ -47,6 +47,39 @@ struct SimConfigGPU {
     float friction_k;
     // Tool type: 0 = sphere (default), 1 = mesh SDF
     int tool_type;
+    // Cutting mode: 1 = enable aspiration (debulk, current behavior),
+    //               0 = cut_only (edges break + clusters split, NO particle removal)
+    // Default 1 → safe for headless tests (main_gpu.cpp / verify_gpu.cpp) that don't
+    // explicitly set this field; gpu_aspirate is gated on knife_active anyway.
+    int enable_aspiration = 1;
+    // cluster_solve_kernel: damage-weighted shape matching strength α.
+    // Particle i contributes weight w_i = max(0.05, 1 - α · damage_i) to cm/qcm/A_pq.
+    // Müller 2005 effective mass instantiated with P(F): heavily-damaged particles
+    // are 'soft mass', they still participate but don't dominate cluster shape.
+    //   debulk   α=0.0 → w=1 always → behavior identical to original (no weighting)
+    //   cut_only α=1.0 → P(F)-weighted shape matching, intact side dominates cluster
+    // Default 0.0 → byte-identical to original kernel for any binary that doesn't
+    // explicitly opt into cut_only (preserves RL training reproducibility).
+    float damage_shape_weight = 0.0f;
+
+    // Sharp-edge damage mode (replaces SDF damage when enabled).
+    // Real physics: only the sharp edge of a blade cuts; the blade body merely
+    // pushes (collision). SDF damage incorrectly treats the entire wedge volume
+    // as cutter, causing horizontal slides to wrongly damage tissue.
+    // When use_sharp_edge_damage=1, damage is computed from distance to the
+    // sharp_edge_a → sharp_edge_b line segment (in tool LOCAL frame), not SDF.
+    // Collision (tool_sdf_collision_kernel) remains full-SDF for non-penetration.
+    int use_sharp_edge_damage = 0;
+    float3 sharp_edge_a;   // endpoint A in tool local frame (only read if use_sharp_edge_damage=1)
+    float3 sharp_edge_b;   // endpoint B
+
+    // Max damage growth per substep — controls "deform first, then cut" timing.
+    // Damage update formula: damage += min(target - damage, damage_growth_rate)
+    //   1.0 → instant snap to target (original max-update behavior, byte-identical debulk)
+    //   0.02 → ~25 substeps (≈50ms sim) to reach break threshold from full pressure
+    //          → user sees 0.5s of elastic deformation before tissue yields
+    // Lower = more elastic feel. Physical analogy: tissue tensile strength integral.
+    float damage_growth_rate = 1.0f;
 };
 
 // SDF data (used for both rigid body collision and tool collision)
@@ -66,6 +99,9 @@ struct EdgesGPU {
     float* damage;        // [num_edges]
     int* broken;          // [num_edges]
     int num_edges;
+    // Per-edge α field (optional, used when config.per_edge_alpha=true).
+    // nullptr → fall back to scalar alpha_min in legacy kernel signature.
+    float* alpha_min_per_edge = nullptr;  // [num_edges]
 };
 
 // GPU solver 接口（在 .cu 中实现）
@@ -83,6 +119,24 @@ public:
     int cutting_update_interval = 200;
     float alpha_min = 3.0f;   // P(F) sigmoid steepness (was 10 — saturated damage on any contact)
     float aspiration_threshold = 0.3f;
+
+    // Per-edge α toggle (mirrors SimConfigYAML.per_edge_alpha).
+    // When true AND d_edges.alpha_min_per_edge != nullptr → dispatch uses per-edge α.
+    // When false → legacy single-float alpha_min path (byte-identical).
+    bool per_edge_alpha = false;
+
+    // Damage model: 0 = "sharpness" (legacy, byte-identical), 1 = "toughness"
+    // Toughness: damage_growth_rate scaled by 1/α per edge → low α = fast cut.
+    int damage_model_mode = 0;
+
+    // Per-particle τ (aspiration threshold) field.
+    // When per_particle_tau=true AND d_tau_per_particle allocated, aspirate
+    // uses per-particle threshold; else global aspiration_threshold.
+    bool per_particle_tau = false;
+    float* d_tau_per_particle = nullptr;   // [N] on GPU
+    std::vector<float> tau_per_particle_cpu;  // CPU mirror for viewer
+
+    void upload_per_particle_tau(const std::vector<float>& tau_per_particle);
 
     // 初始化：分配 GPU 内存，上传数据
     void init(const std::vector<float3>& positions,
@@ -130,6 +184,14 @@ public:
         const std::vector<float>& pf_rest,
         const std::vector<float>& damage,
         const std::vector<int>& broken);
+
+    // Upload per-edge α field (must be called BEFORE step() if config.per_edge_alpha=true).
+    // Length must equal d_edges.num_edges. Frees+reallocates if size changed.
+    void upload_per_edge_alpha(const std::vector<float>& alpha_per_edge);
+
+    // CPU copy of per-edge α (for viewer to look up per-particle averaged α).
+    // Populated by upload_per_edge_alpha.
+    std::vector<float> alpha_per_edge_cpu;
 
     // 初始化 SDF (通用: bone or tool)
     void init_sdf(SDFData& sdf, const std::vector<float>& sdf_data,

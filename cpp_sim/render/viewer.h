@@ -56,6 +56,13 @@ public:
     // GPU 模式：外部 damage 数组（替代 cutting_mgr->get_particle_damage）
     std::vector<float>* particle_damage_array = nullptr;
 
+    // Per-particle averaged α (mean of incident edge α). When non-null + size>0,
+    // visualization overrides damage-based color with jet colormap on α value.
+    // Used by Stage 1 validation experiment: per_edge_alpha=true → show α field.
+    std::vector<float>* particle_alpha_array = nullptr;
+    float particle_alpha_min = 1.0f;   // colormap range low
+    float particle_alpha_max = 10.0f;  // colormap range high
+
     // Rigid mesh for rendering (optional)
     RigidMesh* rigid_mesh_render = nullptr;
 
@@ -66,6 +73,13 @@ public:
     int num_active_particles = 0;
     int num_removed_particles = 0;
     int num_clusters_display = 0;  // 用于标题栏显示
+
+    // Scheme B (cut_only mode): 外部 tet_broken 数组指针
+    //   on_step 回调每 5 frame 更新 tet_broken_count。当 count 增加时,
+    //   viewer 重建 surface_faces 暴露切口。
+    //   nullptr → debulk 模式不启用,完全沿用旧逻辑(基于 removed 粒子重建)。
+    const std::vector<int>* tet_broken_ptr = nullptr;
+    int tet_broken_count = 0;
 
     bool init(int width = 1280, int height = 720, const char* title = "P(F) Shape Matching") {
         m_width = width;
@@ -157,13 +171,17 @@ public:
                     on_step(substeps_per_frame);
 
                     // 粒子被移除后重建表面（暴露内部新表面）
+                    // cut_only 模式: 触发条件改为 tet_broken_count 增加(粒子永远不删)。
                     if (tet_mesh) {
                         int curr_removed = num_removed_particles;
+                        int curr_broken = tet_broken_count;
                         static int prev_removed_gpu = 0;
-                        if (curr_removed > prev_removed_gpu) {
-                            tet_mesh->rebuild_surface_faces(solver->particles);
+                        static int prev_broken_gpu = 0;
+                        if (curr_removed > prev_removed_gpu || curr_broken > prev_broken_gpu) {
+                            tet_mesh->rebuild_surface_faces(solver->particles, tet_broken_ptr);
                         }
                         prev_removed_gpu = curr_removed;
+                        prev_broken_gpu = curr_broken;
                     }
 
                     // debug info
@@ -793,7 +811,19 @@ private:
             positions.push_back((float)p.pos.y());
             positions.push_back((float)p.pos.z());
 
-            if (particle_damage_array && i < (int)particle_damage_array->size()) {
+            // Priority 1: per-particle α (Stage 1 validation — show α field as jet colormap)
+            if (particle_alpha_array && i < (int)particle_alpha_array->size()) {
+                float a = (*particle_alpha_array)[i];
+                float t = (a - particle_alpha_min) / std::max(particle_alpha_max - particle_alpha_min, 1e-6f);
+                t = std::max(0.0f, std::min(1.0f, t));
+                // Jet colormap: blue (low) → cyan → green → yellow → red (high)
+                float r = std::max(0.0f, std::min(1.0f, 1.5f - 4.0f * std::abs(t - 0.75f)));
+                float g = std::max(0.0f, std::min(1.0f, 1.5f - 4.0f * std::abs(t - 0.5f)));
+                float b = std::max(0.0f, std::min(1.0f, 1.5f - 4.0f * std::abs(t - 0.25f)));
+                colors.push_back(r);
+                colors.push_back(g);
+                colors.push_back(b);
+            } else if (particle_damage_array && i < (int)particle_damage_array->size()) {
                 float dmg = (*particle_damage_array)[i];
                 colors.push_back(dmg);
                 colors.push_back(0.15f);

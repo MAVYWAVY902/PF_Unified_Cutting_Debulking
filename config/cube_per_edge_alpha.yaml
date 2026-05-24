@@ -1,0 +1,46 @@
+## Stage 1 validation: per-edge α field experiment (TUNED for visible deform)
+## Cube with linear-gradient α from left (weak, easy to cut) to right (strong, hard to cut)
+
+name: "Cube Per-Edge Alpha (Deformable)"
+
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.005
+  gravity: [0, -9.81, 0]
+  num_iterations: 6        # was 16 — looser shape match → more deform visible
+  stiffness: 0.4           # was 1.0 — softer cube
+  damping: 0.95
+  substeps: 8              # was 4 — more sim time per visualization frame → knife crawls
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.05        # was 0.10 — fewer fixed → more deform
+
+clusters:
+  rings: 2
+
+knife:
+  radius: 0.025
+  cutting_interval: 4
+  alpha_min: 1.0
+  aspiration_threshold: 0.1   # lower so even partial particle damage triggers
+  damage_growth_rate: 0.05    # tuned: rate=0.05/α. At α=2→0.025 (fast break). At α=20→0.0025 (barely break)
+
+  # === Per-edge α — toughness mode ===
+  per_edge_alpha: true
+  alpha_min_low: 0.5          # very fragile leftmost
+  alpha_min_high: 20.0        # very tough rightmost
+  alpha_gradient_axis: "x"
+  damage_model: "toughness"
+
+self_collision:
+  enabled: true
+  radius: 0.012
+  stiffness: 0.8
+
+viewer:
+  draw_surface: false
+  draw_wireframe: true
+  draw_points: true

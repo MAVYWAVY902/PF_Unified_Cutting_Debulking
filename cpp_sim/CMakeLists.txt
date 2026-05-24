@@ -117,6 +117,32 @@ if(ENABLE_HAPTICS)
     target_link_libraries(pf_sim_gpu_viewer PRIVATE hv_static nlohmann_json::nlohmann_json)
 endif()
 
+# ===== Headless trajectory recorder (per-edge alpha validation) =====
+add_executable(record_trajectory
+    main_record_trajectory.cpp
+    solver/shape_matching_gpu.cu
+)
+target_include_directories(record_trajectory PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/svd3/svd3_cuda
+)
+target_link_libraries(record_trajectory PRIVATE
+    Eigen3::Eigen
+    CUDA::cudart
+    yaml-cpp
+)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(record_trajectory PRIVATE OpenMP::OpenMP_CXX)
+endif()
+set_target_properties(record_trajectory PROPERTIES
+    CUDA_STANDARD 17
+    CUDA_ARCHITECTURES "70;75;80;86"
+)
+target_compile_options(record_trajectory PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-O3 -march=native>
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+)
+
 # ===== GPU 验证 =====
 add_executable(verify_gpu
     verify_gpu.cpp
