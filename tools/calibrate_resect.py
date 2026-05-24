@@ -42,7 +42,9 @@ from tools.day2_solver_wrapper import (  # noqa: E402
     setup_solver_with_rest, solver_save_state,
 )
 from tools.day6b_full_forward_torch_op import WarpFullForwardOp  # noqa: E402
-from tools.day8_stable_inner_loop import gd_inner_loop_stable  # noqa: E402
+from tools.day8_stable_inner_loop import (  # noqa: E402
+    gd_inner_loop_stable, SHARPNESS_INNER, TAU_INNER,
+)
 from tools.day8_step5_rerun_stable_gd import gen_obs_multistep_param_arr  # noqa: E402
 from tools.day6f_v0_multistep_synth import (  # noqa: E402
     make_knife_trajectory, clamp_theta_inplace,
@@ -98,16 +100,16 @@ def run_resect_loop_fix_sharp(solver, rest_state, knife_traj, knife_radius,
                 theta_torch[1] = SHARPNESS_FIXED
             clamp_theta_inplace(theta_torch)
             L_gaps_epoch.append(float(L_gap.item()))
-            # Mode C inject
+            # Mode C inject — Day 3c: use Liang-style inner constants
+            # (consistent with inner loop's sigmoid; outer θ does NOT enter)
             state = solver_save_state(solver)
             dx_np = delta_x.detach().cpu().numpy()
             ddv_np = delta_dv.detach().cpu().numpy()
             state["pos"] = state["pos"] + dx_np
             state["particle_damage"] = np.maximum(state["particle_damage"] + ddv_np, 0.0)
-            s_val = float(theta_torch[1].item())
-            tau_val = float(theta_torch[2].item())
             new_dv = state["particle_damage"]
-            state["alpha"] = 1.0 / (1.0 + np.exp(np.clip(s_val * (new_dv - tau_val), -50, 50)))
+            state["alpha"] = 1.0 / (1.0 + np.exp(np.clip(
+                SHARPNESS_INNER * (new_dv - TAU_INNER), -50, 50)))
         epoch_end_theta.append(theta_torch.detach().cpu().numpy().copy())
         L_gap_history.append(np.mean(L_gaps_epoch))
     return np.array(epoch_end_theta), np.array(L_gap_history), None

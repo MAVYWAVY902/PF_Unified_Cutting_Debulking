@@ -43,23 +43,54 @@ from tools.day2_solver_wrapper import (  # noqa: E402
 from tools.day6b_full_forward_torch_op import WarpFullForwardOp  # noqa: E402
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Day 3c (2026-05-24) — Liang-style inner constants (analog to k_c' in Eq. 5)
+#
+# Liang 2023 §II-B: "k_c' is an uniform user-defined weight matrix" — i.e.,
+# the inner residual mapping g uses CONSTANT weights, kept separate from the
+# outer-learned k. This preserves two-level optimization invariant:
+#     ∂Δ*/∂(outer θ)  flows ONLY through forward sim x_t(θ), never directly.
+#
+# Before this fix, our inner L_cav used s = θ[1], τ = θ[2] from outer θ —
+# violating Liang's invariant and creating asymmetric Hessian (τ had 350×
+# more curvature than α/stiff due to dual-path gradient — see R4-v3 result).
+#
+# After fix: inner uses SHARPNESS_INNER, TAU_INNER as constants. Outer τ
+# enters L_gap only through forward sim → pos_sim/dv_sim chain (single path,
+# same as α_min and stiffness).
+#
+# Tuning: for synth-to-synth, TAU_INNER = truth (0.5); for phantom calibration,
+# TAU_INNER = init guess (e.g., from Stage 2.0 literature value).
+# ─────────────────────────────────────────────────────────────────────────────
+SHARPNESS_INNER = 20.0   # = SHARPNESS_FIXED (Day 9 lock); inner uses constant
+TAU_INNER       = 0.5    # user-defined; synth=truth, phantom=init-guess
+
+
 def gd_inner_loop_stable(
     pos_pred, dv_pred, pos_target, alpha_target, theta,
     edges_a, edges_b, edges_rest,
     n_iter=30, lr_pos=5e-3, lr_dv_factor=1.0,
     lambda_cav=1.0, lambda_E=0.0,
+    s_inner=None, tau_inner=None,
+    surface_idx=None,
 ):
     """GD inner loop with Hessian-aware adaptive lr_dv (stable across all s).
 
-    lr_dv = lr_dv_factor / s²   (detached from autograd)
+    lr_dv = lr_dv_factor / s²   (s is now CONSTANT, no .detach() needed)
        For stable convergence: lr × Hessian < 2
        Hessian ≈ 2(s·σ_max')² ≤ s²/8, so lr < 16/s².
        lr_dv_factor=1.0 → lr·Hess ≤ 0.25, fast convergence in ~10-20 iter.
+
+    Day 3c: `theta` is kept in signature for backward compat but is no longer
+    used to source s, τ. Override SHARPNESS_INNER / TAU_INNER per-call via
+    s_inner / tau_inner kwargs (e.g., Gate 4 phantom-readiness test).
     """
     N = pos_pred.shape[0]
-    s = theta[1]; tau = theta[2]
-    # Adaptive lr_dv (detached — hyperparameter, not differentiable)
-    lr_dv = lr_dv_factor / (s.detach() ** 2)
+    # Day 3c: inner uses CONSTANTS (Liang-style k_c' analog), not outer θ.
+    s_val = float(SHARPNESS_INNER if s_inner is None else s_inner)
+    tau_val = float(TAU_INNER if tau_inner is None else tau_inner)
+    # lr_dv now uses constant s (no torch tensor / no .detach())
+    lr_dv = lr_dv_factor / (s_val ** 2)
 
     delta_x = torch.zeros((N, 3), dtype=pos_pred.dtype, device=pos_pred.device,
                             requires_grad=True)
@@ -70,10 +101,17 @@ def gd_inner_loop_stable(
     for k in range(n_iter):
         pos_corr = pos_pred + delta_x
         dv_corr = torch.relu(dv_pred + delta_dv)
-        alpha_corr = torch.sigmoid(-s * (dv_corr - tau))
+        # Day 3c: s_val, tau_val are constants — no autograd to outer θ here.
+        alpha_corr = torch.sigmoid(-s_val * (dv_corr - tau_val))
         diff_pos = pos_corr - pos_target
         diff_alpha = alpha_corr - alpha_target
-        L_pos = (diff_pos ** 2).sum()
+        # Test 1 (phantom-readiness): if surface_idx is provided, restrict L_pos
+        # to surface particles only (camera-visible). Interior particles' Δx
+        # then has NO direct signal — relies on L_E (Test 2) to propagate.
+        if surface_idx is None:
+            L_pos = (diff_pos ** 2).sum()
+        else:
+            L_pos = (diff_pos[surface_idx] ** 2).sum()
         L_cav = (diff_alpha ** 2).sum()
         if lambda_E > 0:
             edge_vec = pos_corr[edges_a] - pos_corr[edges_b]
