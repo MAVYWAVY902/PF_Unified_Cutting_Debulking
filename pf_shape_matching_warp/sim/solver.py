@@ -22,7 +22,8 @@ from .kernels import (
     reset_cluster_quat_kernel,       # reset warm-start on env.reset
     apply_kernel,                # legacy — kept for forward-only paths
     apply_kernel_ssa,            # SSA — Stage A (2026-04-22), writes to shape_delta
-    apply_kernel_ssa_param_arr,  # Day 3b (2026-05-23): stiffness as wp.array for sys-ID autograd
+    apply_kernel_ssa_param_arr,    # Day 3b (2026-05-23): stiffness as wp.array(1,) global
+    apply_kernel_ssa_param_arr_pp, # Stage A (2026-05-24): per-particle stiffness wp.array(N,)
     apply_shape_delta_kernel,    # legacy in-place atomic_add (forward-only safe)
     # Layer A SSA (2026-05-05): cycle-scoped buffer pattern for autograd
     # correctness through 6-iter Jacobi loop. See
@@ -276,7 +277,12 @@ class ShapeMatchingSolver:
         self.aspiration_threshold = float(theta_dict["threshold"].numpy()[0])
         self.knife_radius = float(theta_dict["knife_radius"].numpy()[0])
         if "stiffness" in theta_dict:
-            self.stiffness = float(theta_dict["stiffness"].numpy()[0])
+            stiff_arr = theta_dict["stiffness"]
+            if stiff_arr.shape[0] == 1:
+                # Global scalar (Day 3b backward-compat path)
+                self.stiffness = float(stiff_arr.numpy()[0])
+            # else: per-particle (N,) — leave self.stiffness as-is (mirror unused),
+            # solver._substep will detect shape and dispatch to *_pp kernel.
 
     def _current_alpha(self):
         """Returns the wp.array buffer that should be read for alpha at the
@@ -556,19 +562,41 @@ class ShapeMatchingSolver:
             # in split mode shape_delta is cycle-scoped pool[it] (already zero from alloc).
             if not self.use_split_cluster_solve:
                 _shape_delta_it.zero_()
-            # Day 3b (2026-05-23): dispatch to *_param_arr when stiffness in theta_wp
+            # Day 3b / Stage A: dispatch based on stiffness shape in theta_wp
+            #   - no theta_wp        → legacy float path apply_kernel_ssa
+            #   - stiffness shape (1,) → apply_kernel_ssa_param_arr (Day 3b global)
+            #   - stiffness shape (N,) → apply_kernel_ssa_param_arr_pp (Stage A per-particle)
             if self.theta_wp is not None and "stiffness" in self.theta_wp:
-                wp.launch(
-                    apply_kernel_ssa_param_arr,
-                    dim=N,
-                    inputs=[
-                        _deltas_it, _delta_counts_it,
-                        self.p["damage"], self._current_alpha(), self.p["fixed"],
-                        self.theta_wp["stiffness"],
-                        _shape_delta_it,
-                    ],
-                    device=self.device,
-                )
+                stiff_arr = self.theta_wp["stiffness"]
+                if stiff_arr.shape[0] == 1:
+                    wp.launch(
+                        apply_kernel_ssa_param_arr,
+                        dim=N,
+                        inputs=[
+                            _deltas_it, _delta_counts_it,
+                            self.p["damage"], self._current_alpha(), self.p["fixed"],
+                            stiff_arr,
+                            _shape_delta_it,
+                        ],
+                        device=self.device,
+                    )
+                else:
+                    # Stage A: per-particle stiffness
+                    assert stiff_arr.shape[0] == N, (
+                        f"per-particle stiffness must have shape (N,) = ({N},), "
+                        f"got shape ({stiff_arr.shape[0]},)"
+                    )
+                    wp.launch(
+                        apply_kernel_ssa_param_arr_pp,
+                        dim=N,
+                        inputs=[
+                            _deltas_it, _delta_counts_it,
+                            self.p["damage"], self._current_alpha(), self.p["fixed"],
+                            stiff_arr,
+                            _shape_delta_it,
+                        ],
+                        device=self.device,
+                    )
             else:
                 wp.launch(
                     apply_kernel_ssa,

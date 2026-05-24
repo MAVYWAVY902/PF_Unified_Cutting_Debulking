@@ -47,15 +47,18 @@ from tools.day2_solver_wrapper import (  # noqa: E402
 # Helper: set solver theta from torch tensor (wp.arrays the solver retains)
 # ---------------------------------------------------------------------------
 
-def make_theta_wp_arrays(theta_torch, knife_radius):
+def make_theta_wp_arrays(theta_torch, knife_radius, stiff_pp_torch=None):
     """Build the wp.array dict expected by solver.set_theta_wp().
 
     theta_torch: (3,) — (α_min, sharpness, threshold)
               or (4,) — (α_min, sharpness, threshold, stiffness)  [Day 3b 2026-05-23]
-    knife_radius: scalar float (kept fixed in this test; could also be a torch param)
+    knife_radius: scalar float
+    stiff_pp_torch: (N,) torch tensor, optional [Stage A 2026-05-24]
+                  When provided, overrides theta_torch[3] (if any) and dispatches
+                  to per-particle stiffness kernel in solver.
 
-    Returns dict of wp.array(shape=(1,), requires_grad=True) for each θ component.
-    The wp.arrays SHARE MEMORY with the underlying torch tensor so gradients flow.
+    Returns dict of wp.array, where stiffness is shape (1,) or (N,) depending on
+    whether per-particle stiff is provided.
     """
     theta_torch = theta_torch.contiguous()
     n = theta_torch.shape[0]
@@ -70,7 +73,13 @@ def make_theta_wp_arrays(theta_torch, knife_radius):
         knife_radius=wp.array([float(knife_radius)], dtype=wp.float32,
                                device="cuda:0", requires_grad=False),
     )
-    if n == 4:
+    if stiff_pp_torch is not None:
+        # Per-particle stiffness — takes precedence over scalar
+        assert stiff_pp_torch.dim() == 1, (
+            f"stiff_pp_torch must be 1D (N,), got shape {stiff_pp_torch.shape}")
+        d["stiffness"] = wp.from_torch(stiff_pp_torch.contiguous(),
+                                         requires_grad=True)
+    elif n == 4:
         d["stiffness"] = wp.from_torch(theta_torch[3:4].contiguous(),
                                          requires_grad=True)
     return d
@@ -101,11 +110,15 @@ class WarpFullForwardOp(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, theta_torch, solver, state_in_dict, knife_pos_np, knife_radius):
+    def forward(ctx, theta_torch, solver, state_in_dict, knife_pos_np, knife_radius,
+                stiff_pp_torch=None):
         # Build wp.array theta with grad tracking
         # theta_torch shape: (3,) → (α, sharp, τ) or (4,) → (α, sharp, τ, stiffness)
+        # stiff_pp_torch: optional (N,) per-particle stiffness override [Stage A]
         ctx.theta_n = theta_torch.shape[0]
-        theta_wp_dict = make_theta_wp_arrays(theta_torch, knife_radius)
+        ctx.has_stiff_pp = stiff_pp_torch is not None
+        theta_wp_dict = make_theta_wp_arrays(theta_torch, knife_radius,
+                                                stiff_pp_torch=stiff_pp_torch)
         solver.set_theta_wp(theta_wp_dict)
 
         # Load state into solver (numpy/torch → wp.arrays)
@@ -166,34 +179,38 @@ class WarpFullForwardOp(torch.autograd.Function):
         # Run backward through tape — populates theta_wp[*].grad
         ctx.tape.backward(grads=grads_dict)
 
-        # Read back gradients (note: theta_wp arrays share memory with
-        # theta_torch[i:i+1] slices, but .grad is a separate wp.array;
-        # we need to extract the float and pack into one (3,) or (4,) torch grad)
+        # Read back gradients on global theta dims
         ga = float(ctx.theta_wp_dict["alpha_min"].grad.numpy()[0])
         gs = float(ctx.theta_wp_dict["sharpness"].grad.numpy()[0])
         gt = float(ctx.theta_wp_dict["threshold"].grad.numpy()[0])
         grad_list = [ga, gs, gt]
-        if ctx.theta_n == 4:
-            gst = float(ctx.theta_wp_dict["stiffness"].grad.numpy()[0])
-            grad_list.append(gst)
+
+        # Stiffness gradient — depends on stiffness shape
+        grad_stiff_pp = None  # (N,) tensor if per-particle
+        if "stiffness" in ctx.theta_wp_dict:
+            stiff_grad_wp = ctx.theta_wp_dict["stiffness"].grad
+            if ctx.has_stiff_pp:
+                # Per-particle: keep as (N,) tensor for separate return
+                grad_stiff_pp = torch.from_numpy(stiff_grad_wp.numpy().copy()).to(
+                    grad_alpha_torch.device)
+                # Pad theta grad with 0 for index [3] so theta_torch maintains its shape
+                if ctx.theta_n == 4:
+                    grad_list.append(0.0)
+            else:
+                # Global scalar (Day 3b path)
+                gst = float(stiff_grad_wp.numpy()[0])
+                grad_list.append(gst)
 
         # Clear theta_wp from solver (avoid stale references)
         ctx.solver.set_theta_wp(None)
 
-        # Day 3b (2026-05-23): zero gradient buffers on all wp.arrays touched by
-        # this tape. WITHOUT this, persistent solver arrays (pred_pos, alpha
-        # buffers, etc.) accumulate .grad across successive backward calls →
-        # subsequent calls return grad inflated by T_n triangular factor (1, 3, 6, …).
-        # Verified by tools/day3b_stiffness_diagnose.py: with no zero,
-        # C2 grads went 1×, 3×, 6× across 3 runs.
-        # Affects atomic-add path params (α_min, stiffness); sharpness/τ are
-        # direct-write so visually clean, but still polluted via shared tape arrays.
+        # Day 3b: zero gradient buffers on all wp.arrays touched by this tape.
         ctx.tape.zero()
 
         grad_theta = torch.tensor(grad_list, dtype=torch.float32,
                                     device=grad_alpha_torch.device)
-        # No gradient for solver, state_in_dict, knife_pos, knife_radius
-        return grad_theta, None, None, None, None
+        # Return: (grad_theta, None×4 for non-grad inputs, grad_stiff_pp)
+        return grad_theta, None, None, None, None, grad_stiff_pp
 
 
 # ---------------------------------------------------------------------------

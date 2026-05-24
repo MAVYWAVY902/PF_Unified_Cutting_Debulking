@@ -248,6 +248,26 @@ __global__ void apply_kernel(
     pred_pos[i].z += local_stiff * deltas[i].z * inv_count;
 }
 
+// Per-particle stiffness variant (2026-05-24).
+// Same physics as apply_kernel but stiffness sourced from per-particle array.
+// Used when ShapeMatchingGPUSolver.per_particle_stiffness=true AND
+// d_stiffness_per_particle != nullptr.
+__global__ void apply_kernel_per_particle_stiff(
+    float3* pred_pos, float3* deltas, int* delta_counts,
+    float* damage, int* removed, int* fixed,
+    const float* stiffness_per_particle, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i] || delta_counts[i] == 0) return;
+
+    float k_i = stiffness_per_particle[i];
+    float local_stiff = k_i * (1.0f - damage[i] * 0.95f);
+    float inv_count = 1.0f / delta_counts[i];
+    pred_pos[i].x += local_stiff * deltas[i].x * inv_count;
+    pred_pos[i].y += local_stiff * deltas[i].y * inv_count;
+    pred_pos[i].z += local_stiff * deltas[i].z * inv_count;
+}
+
 // Apply self-collision delta (FleX constraint groups, Macklin 2014, Sec 4).
 // Differs from apply_kernel:
 //   - Uses SEPARATE deltas_sc / delta_counts_sc (not shared with shape-match)
@@ -687,6 +707,26 @@ void ShapeMatchingGPUSolver::upload_per_particle_tau(const std::vector<float>& t
     printf("[GPU] per-particle τ uploaded: %d particles, range [%.3f, %.3f]\n",
            N, *std::min_element(tau_per_particle.begin(), tau_per_particle.end()),
            *std::max_element(tau_per_particle.begin(), tau_per_particle.end()));
+}
+
+// Upload per-particle stiffness field (2026-05-24). Per-particle elasticity
+// heterogeneity for forward sensitivity probe. Length must equal d_particles.N.
+void ShapeMatchingGPUSolver::upload_per_particle_stiffness(const std::vector<float>& stiff_per_particle) {
+    int N = d_particles.N;
+    if ((int)stiff_per_particle.size() != N) {
+        std::cerr << "[GPU] upload_per_particle_stiffness size mismatch: "
+                  << stiff_per_particle.size() << " vs N=" << N << std::endl;
+        return;
+    }
+    if (d_stiffness_per_particle == nullptr) {
+        CUDA_CHECK(cudaMalloc(&d_stiffness_per_particle, N * sizeof(float)));
+    }
+    CUDA_CHECK(cudaMemcpy(d_stiffness_per_particle, stiff_per_particle.data(),
+                           N * sizeof(float), cudaMemcpyHostToDevice));
+    stiffness_per_particle_cpu = stiff_per_particle;
+    printf("[GPU] per-particle stiffness uploaded: %d particles, range [%.3f, %.3f]\n",
+           N, *std::min_element(stiff_per_particle.begin(), stiff_per_particle.end()),
+           *std::max_element(stiff_per_particle.begin(), stiff_per_particle.end()));
 }
 
 // Upload (or re-upload) per-edge α field. Called by viewer after init_edges if
@@ -1301,10 +1341,19 @@ void ShapeMatchingGPUSolver::step() {
             C);
 
         // Apply shape-match delta (avg over ~60 cluster memberships)
-        apply_kernel<<<blocks_n, 256>>>(
-            d_particles.predicted_pos, d_deltas, d_delta_counts,
-            d_particles.damage, d_particles.removed, d_particles.fixed,
-            config.stiffness, N);
+        // Day (2026-05-24): dispatch to per-particle stiffness variant when enabled.
+        // Global path (else branch) is BYTE-IDENTICAL to original behavior.
+        if (per_particle_stiffness && d_stiffness_per_particle != nullptr) {
+            apply_kernel_per_particle_stiff<<<blocks_n, 256>>>(
+                d_particles.predicted_pos, d_deltas, d_delta_counts,
+                d_particles.damage, d_particles.removed, d_particles.fixed,
+                d_stiffness_per_particle, N);
+        } else {
+            apply_kernel<<<blocks_n, 256>>>(
+                d_particles.predicted_pos, d_deltas, d_delta_counts,
+                d_particles.damage, d_particles.removed, d_particles.fixed,
+                config.stiffness, N);
+        }
 
         // ---- Group 2: self-collision (separate delta buffer, no shape-match dilution) ----
         if (config.self_collision_enabled && d_cell_hash) {

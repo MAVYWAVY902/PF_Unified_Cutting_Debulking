@@ -194,6 +194,72 @@ int main(int argc, char** argv) {
                cfg.tau_gradient_axis.c_str(), cfg.tau_low, cfg.tau_high);
     }
 
+    // ---- Per-particle stiffness field ----
+    std::vector<float> per_particle_stiff_field(N, cfg.stiffness);
+    gpu_solver.per_particle_stiffness = cfg.per_particle_stiffness;
+    if (cfg.per_particle_stiffness) {
+        // Compute bbox for both pattern types
+        float bbox_min[3] = {1e30f, 1e30f, 1e30f};
+        float bbox_max[3] = {-1e30f, -1e30f, -1e30f};
+        for (const auto& p : positions) {
+            bbox_min[0] = std::min(bbox_min[0], p.x);
+            bbox_min[1] = std::min(bbox_min[1], p.y);
+            bbox_min[2] = std::min(bbox_min[2], p.z);
+            bbox_max[0] = std::max(bbox_max[0], p.x);
+            bbox_max[1] = std::max(bbox_max[1], p.y);
+            bbox_max[2] = std::max(bbox_max[2], p.z);
+        }
+        float center[3] = {0.5f*(bbox_min[0]+bbox_max[0]),
+                            0.5f*(bbox_min[1]+bbox_max[1]),
+                            0.5f*(bbox_min[2]+bbox_max[2])};
+
+        if (cfg.stiff_pattern == "inclusion") {
+            // Center sphere of stiff_high, outside stiff_low.
+            float half_extent = 0.5f * std::max({bbox_max[0]-bbox_min[0],
+                                                   bbox_max[1]-bbox_min[1],
+                                                   bbox_max[2]-bbox_min[2]});
+            float incl_r = cfg.stiff_inclusion_radius_frac * half_extent;
+            int n_inside = 0;
+            for (int i = 0; i < N; i++) {
+                float dx = positions[i].x - center[0];
+                float dy = positions[i].y - center[1];
+                float dz = positions[i].z - center[2];
+                float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                if (dist < incl_r) {
+                    per_particle_stiff_field[i] = cfg.stiff_high;
+                    n_inside++;
+                } else {
+                    per_particle_stiff_field[i] = cfg.stiff_low;
+                }
+            }
+            gpu_solver.upload_per_particle_stiffness(per_particle_stiff_field);
+            printf("[CUT] per_particle_stiffness ENABLED (inclusion): "
+                   "r_frac=%.2f, center=(%.3f,%.3f,%.3f), inside=%d/%d, range [%.3f, %.3f]\n",
+                   cfg.stiff_inclusion_radius_frac, center[0], center[1], center[2],
+                   n_inside, N, cfg.stiff_low, cfg.stiff_high);
+        } else {
+            // Default: linear gradient along axis
+            int axis = 0;
+            if (cfg.stiff_gradient_axis == "y") axis = 1;
+            else if (cfg.stiff_gradient_axis == "z") axis = 2;
+            float axis_min = bbox_min[axis], axis_max = bbox_max[axis];
+            float axis_range = axis_max - axis_min;
+            if (axis_range < 1e-6f) axis_range = 1.0f;
+            for (int i = 0; i < N; i++) {
+                float v = (axis == 0) ? positions[i].x
+                        : (axis == 1) ? positions[i].y
+                        : positions[i].z;
+                float t = (v - axis_min) / axis_range;
+                per_particle_stiff_field[i] = cfg.stiff_low + t * (cfg.stiff_high - cfg.stiff_low);
+            }
+            gpu_solver.upload_per_particle_stiffness(per_particle_stiff_field);
+            printf("[CUT] per_particle_stiffness ENABLED (gradient): axis=%s, range [%.3f, %.3f]\n",
+                   cfg.stiff_gradient_axis.c_str(), cfg.stiff_low, cfg.stiff_high);
+        }
+    } else {
+        printf("[CUT] per_particle_stiffness DISABLED, global stiffness=%.3f\n", cfg.stiffness);
+    }
+
     // ---- Per-edge α field ----
     std::vector<float> per_particle_alpha(N, cfg.alpha_min);
     gpu_solver.per_edge_alpha = cfg.per_edge_alpha;

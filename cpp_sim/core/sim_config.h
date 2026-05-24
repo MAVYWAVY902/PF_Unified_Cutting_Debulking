@@ -75,6 +75,22 @@ struct SimConfigYAML {
     float tau_low  = 0.1f;
     float tau_high = 0.5f;
     std::string tau_gradient_axis = "x";    // "x" | "y" | "z"
+
+    // Per-particle stiffness field — elasticity heterogeneity.
+    //   false → use single global stiffness for all particles (DEFAULT, current behavior)
+    //   true  → each particle gets its own stiffness from linear gradient.
+    //           LOW stiffness = particle deforms easily (soft tissue)
+    //           HIGH stiffness = particle resists deformation (firm tissue, tumor)
+    //   Models spatial heterogeneity in Young's modulus.
+    bool per_particle_stiffness = false;
+    float stiff_low  = 0.5f;
+    float stiff_high = 1.5f;
+    std::string stiff_gradient_axis = "x";  // "x" | "y" | "z"
+    // Spatial pattern of per-particle stiffness:
+    //   "gradient"  : linear along stiff_gradient_axis (stiff_low → stiff_high)
+    //   "inclusion" : center sphere of stiff_high, outside stiff_low
+    std::string stiff_pattern = "gradient";
+    float stiff_inclusion_radius_frac = 0.25f;  // fraction of bbox half-extent
     std::string tool_mesh_path;     // empty = sphere tool, non-empty = mesh SDF tool
     int tool_sdf_resolution = 64;   // SDF grid resolution for tool
 
@@ -259,6 +275,24 @@ struct SimConfigYAML {
                 if (tau_gradient_axis != "x" && tau_gradient_axis != "y" &&
                     tau_gradient_axis != "z") tau_gradient_axis = "x";
             }
+            if (k["per_particle_stiffness"]) per_particle_stiffness = k["per_particle_stiffness"].as<bool>();
+            if (k["stiff_low"])  stiff_low  = k["stiff_low"].as<float>();
+            if (k["stiff_high"]) stiff_high = k["stiff_high"].as<float>();
+            if (k["stiff_gradient_axis"]) {
+                stiff_gradient_axis = k["stiff_gradient_axis"].as<std::string>();
+                if (stiff_gradient_axis != "x" && stiff_gradient_axis != "y" &&
+                    stiff_gradient_axis != "z") stiff_gradient_axis = "x";
+            }
+            if (k["stiff_pattern"]) {
+                stiff_pattern = k["stiff_pattern"].as<std::string>();
+                if (stiff_pattern != "gradient" && stiff_pattern != "inclusion") {
+                    std::cerr << "Invalid stiff_pattern: '" << stiff_pattern
+                              << "', falling back to 'gradient'" << std::endl;
+                    stiff_pattern = "gradient";
+                }
+            }
+            if (k["stiff_inclusion_radius_frac"])
+                stiff_inclusion_radius_frac = k["stiff_inclusion_radius_frac"].as<float>();
         }
 
         // Self-collision

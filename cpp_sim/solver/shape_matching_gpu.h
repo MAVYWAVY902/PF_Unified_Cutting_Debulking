@@ -138,6 +138,15 @@ public:
 
     void upload_per_particle_tau(const std::vector<float>& tau_per_particle);
 
+    // Per-particle stiffness field — elasticity heterogeneity.
+    // When per_particle_stiffness=true AND d_stiffness_per_particle allocated,
+    // apply_kernel uses per-particle stiffness; else global config.stiffness.
+    bool per_particle_stiffness = false;
+    float* d_stiffness_per_particle = nullptr;   // [N] on GPU
+    std::vector<float> stiffness_per_particle_cpu;  // CPU mirror for viewer
+
+    void upload_per_particle_stiffness(const std::vector<float>& stiff_per_particle);
+
     // 初始化：分配 GPU 内存，上传数据
     void init(const std::vector<float3>& positions,
               const std::vector<float3>& velocities,

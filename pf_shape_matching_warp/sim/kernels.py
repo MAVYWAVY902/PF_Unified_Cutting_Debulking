@@ -928,6 +928,33 @@ def apply_kernel_ssa_param_arr(
     wp.atomic_add(shape_delta, i, correction)
 
 
+# Stage A (2026-05-24): per-particle stiffness variant.
+# Same physics as apply_kernel_ssa_param_arr but stiffness sourced from
+# wp.array(shape=(N,)) — each particle has its own learnable stiffness.
+# Used when caller passes stiffness wp.array with shape (N,) instead of (1,).
+@wp.kernel
+def apply_kernel_ssa_param_arr_pp(
+    deltas: wp.array(dtype=wp.vec3),
+    delta_counts: wp.array(dtype=wp.int32),
+    damage: wp.array(dtype=wp.float32),
+    alpha: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    stiffness_per_particle: wp.array(dtype=wp.float32),
+    shape_delta: wp.array(dtype=wp.vec3),
+):
+    i = wp.tid()
+    if alpha[i] < 0.01 or fixed[i] == 1 or delta_counts[i] == 0:
+        return
+
+    stiffness = stiffness_per_particle[i]   # ← per-particle (vs [0])
+    dmg = damage[i]
+    local_stiff = stiffness * (1.0 - dmg * 0.95)
+    inv_count = 1.0 / wp.float32(delta_counts[i])
+    correction = local_stiff * inv_count * deltas[i]
+
+    wp.atomic_add(shape_delta, i, correction)
+
+
 @wp.kernel
 def apply_shape_delta_kernel(
     pred_pos: wp.array(dtype=wp.vec3),

@@ -1,0 +1,52 @@
+## Per-particle stiffness gradient experiment (2026-05-24)
+## LEFT: low stiffness = soft material (deforms easily under knife push)
+## RIGHT: high stiffness = firm material (resists deformation; e.g., tumor inclusion)
+## Forward sensitivity probe: do we see visible cavity shape difference
+## between uniform and heterogeneous stiffness fields?
+
+name: "Cube Per-Particle Stiffness (Elasticity Gradient)"
+
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.005
+  gravity: [0, -9.81, 0]
+  num_iterations: 6
+  stiffness: 0.85              # legacy default (only used if per_particle_stiffness=false)
+  damping: 0.95
+  substeps: 8
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.05
+
+clusters:
+  rings: 2
+
+knife:
+  radius: 0.025
+  cutting_interval: 4
+  alpha_min: 7.0
+  aspiration_threshold: 0.45
+  damage_growth_rate: 0.15
+
+  per_edge_alpha: false
+  damage_model: "sharpness"
+  per_particle_tau: false
+
+  # === Per-particle stiffness — elasticity gradient ===
+  per_particle_stiffness: true
+  stiff_low: 0.30              # LEFT: soft (large deformation under knife)
+  stiff_high: 1.50             # RIGHT: stiff (small deformation, "tumor-like")
+  stiff_gradient_axis: "x"
+
+self_collision:
+  enabled: true
+  radius: 0.012
+  stiffness: 0.8
+
+viewer:
+  draw_surface: false
+  draw_wireframe: true
+  draw_points: true
