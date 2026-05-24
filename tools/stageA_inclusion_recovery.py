@@ -41,14 +41,23 @@ from tools.day8_stable_inner_loop import (  # noqa: E402
 from tools.day6f_v0_multistep_synth import make_knife_trajectory  # noqa: E402
 
 
-def build_inclusion_truth(positions_np, stiff_in, stiff_out, radius_frac=0.25):
-    """Center sphere of stiff_in, outside of stiff_out."""
+def build_inclusion_truth(positions_np, stiff_in, stiff_out, radius_frac=None,
+                            center_override=None, radius_override=None):
+    """Sphere inclusion. Default center = bbox center (legacy);
+    optional override for knife-overlapping placement (Option 1 sanity test).
+    """
     pos = positions_np
     bbox_min = pos.min(axis=0)
     bbox_max = pos.max(axis=0)
-    center = 0.5 * (bbox_min + bbox_max)
-    half_extent = 0.5 * (bbox_max - bbox_min).max()
-    incl_radius = radius_frac * half_extent
+    if center_override is not None:
+        center = np.array(center_override, dtype=np.float32)
+    else:
+        center = 0.5 * (bbox_min + bbox_max)
+    if radius_override is not None:
+        incl_radius = float(radius_override)
+    else:
+        half_extent = 0.5 * (bbox_max - bbox_min).max()
+        incl_radius = (radius_frac or 0.25) * half_extent
     dist = np.linalg.norm(pos - center, axis=1)
     mask = dist < incl_radius
     stiff_field = np.where(mask, stiff_in, stiff_out).astype(np.float32)
@@ -82,8 +91,12 @@ def run_recovery(solver, rest_state, knife_traj, knife_radius,
                    theta_3d_np, stiff_init_np, stiff_truth_np, inclusion_mask,
                    device,
                    N_epochs=100, lr=0.05, n_inner=30, log_every=5,
-                   live_print=True):
-    """Adam on stiff_pp only. θ_global frozen."""
+                   live_print=True, lambda_smooth=0.0):
+    """Adam on stiff_pp only. θ_global frozen.
+
+    L_total = L_gap + lambda_smooth · L_smooth
+    L_smooth = Σ_{(i,j) ∈ edges} |stiff_pp[i] - stiff_pp[j]|   (Liang Eq. 9)
+    """
     T = len(knife_traj)
     theta_torch = torch.tensor(theta_3d_np, dtype=torch.float32, device=device,
                                  requires_grad=False)
@@ -107,8 +120,15 @@ def run_recovery(solver, rest_state, knife_traj, knife_radius,
                 lambda_cav=1.0, lambda_E=0.0,
             )
             L_gap = (delta_x ** 2).sum() + (delta_dv ** 2).sum()
+            # L_smooth (Liang Eq. 9): spatial smoothness on per-particle stiff
+            if lambda_smooth > 0:
+                neighbor_diff = stiff_pp_torch[edges_a_t] - stiff_pp_torch[edges_b_t]
+                L_smooth = neighbor_diff.abs().sum()   # L1 (Liang's choice)
+                L_total = L_gap + lambda_smooth * L_smooth
+            else:
+                L_total = L_gap
             opt.zero_grad()
-            L_gap.backward()
+            L_total.backward()
             if torch.isnan(stiff_pp_torch.grad).any():
                 print(f"  ✗ NaN at epoch {epoch}, t={t}")
                 return None
@@ -180,10 +200,15 @@ def main():
     knife_traj = make_knife_trajectory(T)
     theta_3D = np.array([3.0, 20.0, 0.5], dtype=np.float32)
 
-    # Build inclusion ground truth
+    # Build inclusion ground truth — Option 1 (2026-05-24):
+    # Inclusion placed 3cm below knife trajectory (y=0.30 - 0.03 = 0.27)
+    # with radius matching knife radius (0.04). Ensures knife directly
+    # contacts inclusion → strong sys-ID signal for sanity test.
     pos_rest = mesh_info["vertices"]
     stiff_truth, inclusion_mask, center, incl_r = build_inclusion_truth(
-        pos_rest, stiff_in=1.5, stiff_out=0.3, radius_frac=0.25)
+        pos_rest, stiff_in=1.5, stiff_out=0.3,
+        center_override=(0.15, 0.27, 0.15),  # 3cm below knife at y=0.30
+        radius_override=0.04)                  # match knife_radius
     n_incl = int(inclusion_mask.sum())
     print(f"\n[Ground truth] Inclusion: center={center}, radius={incl_r:.4f}")
     print(f"  Inclusion particles: {n_incl}/{N} ({n_incl/N*100:.2f}%)")
@@ -215,37 +240,72 @@ def main():
           f"L1_inside={init_metrics['L1_inside']:.4f}  "
           f"L1_outside={init_metrics['L1_outside']:.4f}  IoU=N/A (uniform)")
 
-    # Run recovery
-    print(f"\n[Run] Outer Adam on stiff_pp ({N} dim), 60 epochs × T=3 = 180 Adam steps")
-    print(f"      θ_global = {theta_3D.tolist()} FROZEN")
-    print(f"      lr=0.01 (reduced from 0.05 due to per-particle 21745-dim sensitivity)")
-    t0 = time.time()
-    result = run_recovery(
-        solver, rest_state, knife_traj, knife_radius,
-        obs_pos_t, obs_alpha_t, edges_a_t, edges_b_t, edges_rest_t,
-        theta_3D, stiff_init, stiff_truth, inclusion_mask, device,
-        N_epochs=60, lr=0.01, n_inner=30, log_every=5)
-    elapsed = time.time() - t0
+    # Sweep λ_smooth: test 4 values to find the right regularization strength
+    lambda_sweep = [0.0, 1e-6, 1e-4, 1e-2]
+    print(f"\n[Run] L_smooth λ sweep: {lambda_sweep}")
+    print(f"      Outer Adam on stiff_pp ({N} dim), 60 epochs × T=3 = 180 Adam steps")
+    print(f"      θ_global = {theta_3D.tolist()} FROZEN, lr_outer=0.01")
+
+    sweep_results = {}
+    for lam in lambda_sweep:
+        print(f"\n{'='*72}")
+        print(f"λ_smooth = {lam}")
+        print(f"{'='*72}")
+        t0 = time.time()
+        result = run_recovery(
+            solver, rest_state, knife_traj, knife_radius,
+            obs_pos_t, obs_alpha_t, edges_a_t, edges_b_t, edges_rest_t,
+            theta_3D, stiff_init, stiff_truth, inclusion_mask, device,
+            N_epochs=60, lr=0.01, n_inner=30, log_every=10,
+            lambda_smooth=lam)
+        elapsed = time.time() - t0
+        if result is None:
+            print(f"\n  ✗ NaN")
+            sweep_results[lam] = None
+            continue
+        print(f"  elapsed {elapsed:.0f}s")
+        sweep_results[lam] = result
+
+    # ==============================================================
+    # Sweep summary: compare all λ_smooth values
+    # ==============================================================
+    print(f"\n{'='*72}")
+    print(f"L_smooth SWEEP SUMMARY")
+    print(f"{'='*72}")
+    print(f"\n  {'λ_smooth':>10s}  {'L1_total':>10s}  {'L1_in':>10s}  {'L1_out':>10s}  "
+          f"{'IoU':>6s}  {'stiff_in_mean':>14s}  {'stiff_out_mean':>14s}")
+    print(f"  {'(truth)':>10s}  {'0':>10s}  {'0':>10s}  {'0':>10s}  "
+          f"{'1.0':>6s}  {'1.500':>14s}  {'0.300':>14s}")
+    for lam in lambda_sweep:
+        r = sweep_results.get(lam)
+        if r is None:
+            print(f"  {lam:>10.0e}  {'(NaN)':>10s}")
+            continue
+        s = r["stiff_final"]
+        m = compute_metrics(s, stiff_truth, inclusion_mask)
+        si = s[inclusion_mask].mean()
+        so = s[~inclusion_mask].mean()
+        print(f"  {lam:>10.0e}  {m['L1_total']:10.4f}  {m['L1_inside']:10.4f}  "
+              f"{m['L1_outside']:10.4f}  {m['iou']:6.3f}  {si:14.3f}  {so:14.3f}")
+
+    # Pick best λ by IoU
+    best_lam = max(sweep_results.keys(),
+                     key=lambda l: (sweep_results[l]["stiff_final"].sum() if sweep_results[l] is not None else -float('inf'),
+                                     compute_metrics(sweep_results[l]["stiff_final"], stiff_truth, inclusion_mask)['iou'] if sweep_results[l] is not None else -float('inf'))[1] if sweep_results[l] is not None else -float('inf'))
+    best_r = sweep_results.get(best_lam)
+    if best_r is not None:
+        best_m = compute_metrics(best_r["stiff_final"], stiff_truth, inclusion_mask)
+        print(f"\n  Best λ (by IoU): {best_lam:.0e}  →  IoU={best_m['iou']:.3f}")
+
+    # Use best λ result as "main" for detailed report
+    result = best_r if best_r is not None else sweep_results[0.0]
     if result is None:
-        print(f"\n✗ Recovery FAILED (NaN)")
+        print(f"\n✗ All λ values failed")
         return
-    print(f"  elapsed {elapsed:.0f}s")
-
-    # Per-epoch metrics
-    print(f"\n[Per-epoch trajectory]")
-    print(f"  {'ep':>4s}  {'L_gap mean':>12s}  {'L1_total':>10s}  {'L1_inside':>10s}  "
-          f"{'L1_outside':>10s}  {'IoU':>6s}")
-    for log in result["epoch_logs"]:
-        m = compute_metrics(log["stiff_snapshot"], stiff_truth, inclusion_mask)
-        print(f"  {log['epoch']:>4d}  {log['mean_L_gap']:12.4e}  "
-              f"{m['L1_total']:10.4f}  {m['L1_inside']:10.4f}  "
-              f"{m['L1_outside']:10.4f}  {m['iou']:6.3f}")
-
-    # Final metrics
     stiff_recovered = result["stiff_final"]
     final = compute_metrics(stiff_recovered, stiff_truth, inclusion_mask)
     print(f"\n{'='*72}")
-    print(f"FINAL METRICS")
+    print(f"DETAILED REPORT (best λ={best_lam:.0e})")
     print(f"{'='*72}")
     print(f"  Per-particle L1 (total):         {final['L1_total']:.4f}")
     print(f"  Per-particle L1 (inclusion):     {final['L1_inside']:.4f}")
