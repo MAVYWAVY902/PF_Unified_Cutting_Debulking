@@ -192,23 +192,30 @@ def main():
     mesh_path = str(REPO / "resources" / "cube" / "cube_tet.msh")
     solver, rest_state, mesh_info = setup_solver_with_rest(mesh_path)
     N = solver.N
+
+    # Step 1 (2026-05-24): physics tuning for stronger deformation.
+    # Original setup has aggressive damping + small knife → most particles
+    # barely move → sys-ID signal too weak outside cutting zone.
+    # Increase obs information density by relaxing physics:
+    solver.damping = 0.99                  # was 0.98, now per-substep retains 99%
+    solver.num_iterations = 2              # Step 2 (2026-05-24): 6 → 2 to escape near-rigid regime
     print(f"\nSolver: N={N}  E={int(solver.e['num_edges'])}")
+    print(f"  [Step 1 tuning] damping: 0.98 → 0.99 (less velocity decay)")
+    print(f"  [Step 2 tuning] num_iterations: 6 → 2 (residual per substep 1e-5 → 0.25, less rigid)")
 
     device = "cuda:0"
-    knife_radius = 0.04
-    T = 3
+    knife_radius = 0.08                    # was 0.04 → 2× larger, more particles in cut zone
+    print(f"  [Step 1 tuning] knife_radius: 0.04 → 0.08 (2× larger sphere)")
+    T = 10  # Step 2b (2026-05-24): longer trajectory — compliant PBD's larger deformation only visible at T>3
     knife_traj = make_knife_trajectory(T)
     theta_3D = np.array([3.0, 20.0, 0.5], dtype=np.float32)
 
-    # Build inclusion ground truth — Option 1 (2026-05-24):
-    # Inclusion placed 3cm below knife trajectory (y=0.30 - 0.03 = 0.27)
-    # with radius matching knife radius (0.04). Ensures knife directly
-    # contacts inclusion → strong sys-ID signal for sanity test.
+    # Build inclusion ground truth — Step 1: larger inclusion to match larger knife
     pos_rest = mesh_info["vertices"]
     stiff_truth, inclusion_mask, center, incl_r = build_inclusion_truth(
-        pos_rest, stiff_in=1.5, stiff_out=0.3,
-        center_override=(0.15, 0.27, 0.15),  # 3cm below knife at y=0.30
-        radius_override=0.04)                  # match knife_radius
+        pos_rest, stiff_in=0.8, stiff_out=0.3,    # Step 2: truth_in 1.5 → 0.8 (avoid stiff>1 over-correct at iters=2)
+        center_override=(0.15, 0.25, 0.15),
+        radius_override=0.06)
     n_incl = int(inclusion_mask.sum())
     print(f"\n[Ground truth] Inclusion: center={center}, radius={incl_r:.4f}")
     print(f"  Inclusion particles: {n_incl}/{N} ({n_incl/N*100:.2f}%)")
@@ -232,8 +239,8 @@ def main():
         pos_rest[edges_a_np] - pos_rest[edges_b_np], axis=1)
     edges_rest_t = torch.tensor(edge_rest_len, dtype=torch.float32, device=device)
 
-    # Init uniform
-    stiff_init = np.full(N, 0.85, dtype=np.float32)
+    # Init uniform (Step 2: 0.85 → 0.5, midway between truth 0.3 outside / 0.8 inside)
+    stiff_init = np.full(N, 0.5, dtype=np.float32)
     print(f"\n[Init] stiff_init: uniform {stiff_init[0]:.2f}")
     init_metrics = compute_metrics(stiff_init, stiff_truth, inclusion_mask)
     print(f"  Init metrics: L1_total={init_metrics['L1_total']:.4f}  "
