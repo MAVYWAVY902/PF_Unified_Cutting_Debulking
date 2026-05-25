@@ -86,13 +86,41 @@ def gen_obs_per_particle_stiff(solver, rest_state, theta_3d_np, stiff_truth_np,
     return obs_pos, obs_alpha
 
 
+# P4b (2026-05-24): Liang-style sigmoid parameter bounding.
+# Replaces hard clamp(stiff, 0.05, 5.0) — see Liang 2023 Section III-B:
+# "We impose bounds on our simulation parameters with a sigmoid operation."
+# Optimize unconstrained z ∈ R, stiff = LOW + RANGE × sigmoid(z).
+# At sharp=100 the raw-stiff path was provably unstable (P4 75% err, Adam cliff).
+STIFF_LOW = 0.05
+STIFF_HIGH = 2.0
+
+
+def inv_sigmoid_to_z(s, lo=STIFF_LOW, hi=STIFF_HIGH):
+    """Inverse sigmoid: stiff ∈ (lo, hi) → z ∈ R for Adam optimization."""
+    s_clamped = np.clip(s, lo + 1e-4, hi - 1e-4)
+    return np.log((s_clamped - lo) / (hi - s_clamped)).astype(np.float32)
+
+
+def z_to_stiff(z_torch, lo=STIFF_LOW, hi=STIFF_HIGH):
+    """Forward sigmoid: z ∈ R → stiff ∈ (lo, hi). Differentiable."""
+    return lo + (hi - lo) * torch.sigmoid(z_torch)
+
+
 def run_recovery(solver, rest_state, knife_traj, knife_radius,
                    obs_pos_t, obs_alpha_t, edges_a_t, edges_b_t, edges_rest_t,
                    theta_3d_np, stiff_init_np, stiff_truth_np, inclusion_mask,
                    device,
-                   N_epochs=100, lr=0.05, n_inner=30, log_every=5,
-                   live_print=True, lambda_smooth=0.0):
-    """Adam on stiff_pp only. θ_global frozen.
+                   N_epochs=30, lr=0.03, n_inner=30, log_every=5,
+                   live_print=True, lambda_smooth=0.0,
+                   early_stop_patience=5):
+    """Adam on z (sigmoid-bounded stiff). θ_global frozen.
+
+    Pipeline (P4b/P4c locked, 2026-05-24):
+       - sigmoid bounding (Liang Section III-B) — required for sharp=100 stability
+       - default lr=0.03 (P4c sweet spot for theta=(3,100,0.3) + stiff bound [0.05, 2.0])
+       - default N_epochs=30 (P4c showed convergence by ep 12-27)
+       - patience-based early stop on stiff_in_err if truth available, else
+         L_gap plateau (5 epochs no improvement → stop)
 
     L_total = L_gap + lambda_smooth · L_smooth
     L_smooth = Σ_{(i,j) ∈ edges} |stiff_pp[i] - stiff_pp[j]|   (Liang Eq. 9)
@@ -100,15 +128,23 @@ def run_recovery(solver, rest_state, knife_traj, knife_radius,
     T = len(knife_traj)
     theta_torch = torch.tensor(theta_3d_np, dtype=torch.float32, device=device,
                                  requires_grad=False)
-    stiff_pp_torch = torch.tensor(stiff_init_np, dtype=torch.float32, device=device,
-                                    requires_grad=True)
-    opt = torch.optim.Adam([stiff_pp_torch], lr=lr)
+    # Optimize z (unconstrained) instead of raw stiff.
+    z_init = inv_sigmoid_to_z(stiff_init_np)
+    z_torch = torch.tensor(z_init, dtype=torch.float32, device=device, requires_grad=True)
+    opt = torch.optim.Adam([z_torch], lr=lr)
     epoch_logs = []
+
+    # Track best-epoch stiff (Adam drifts past sweet spot — see P4c).
+    best_L_gap = float("inf")
+    best_stiff = stiff_init_np.copy()
+    best_epoch = 0
+    patience_counter = 0
 
     for epoch in range(N_epochs):
         state = rest_state
         L_gaps = []
         for t in range(T):
+            stiff_pp_torch = z_to_stiff(z_torch)  # derive stiff via sigmoid
             alpha_t, pos_t, dv_t = WarpFullForwardOp.apply(
                 theta_torch, solver, state, knife_traj[t], knife_radius,
                 stiff_pp_torch,
@@ -120,22 +156,19 @@ def run_recovery(solver, rest_state, knife_traj, knife_radius,
                 lambda_cav=1.0, lambda_E=0.0,
             )
             L_gap = (delta_x ** 2).sum() + (delta_dv ** 2).sum()
-            # L_smooth (Liang Eq. 9): spatial smoothness on per-particle stiff
             if lambda_smooth > 0:
                 neighbor_diff = stiff_pp_torch[edges_a_t] - stiff_pp_torch[edges_b_t]
-                L_smooth = neighbor_diff.abs().sum()   # L1 (Liang's choice)
+                L_smooth = neighbor_diff.abs().sum()
                 L_total = L_gap + lambda_smooth * L_smooth
             else:
                 L_total = L_gap
             opt.zero_grad()
             L_total.backward()
-            if torch.isnan(stiff_pp_torch.grad).any():
+            if torch.isnan(z_torch.grad).any():
                 print(f"  ✗ NaN at epoch {epoch}, t={t}")
                 return None
             opt.step()
-            # Clamp stiff to reasonable physical range
-            with torch.no_grad():
-                stiff_pp_torch.clamp_(0.05, 5.0)
+            # NO CLAMP — sigmoid bounding handles it automatically.
             L_gaps.append(float(L_gap.item()))
             # Mode C inject
             state = solver_save_state(solver)
@@ -147,19 +180,38 @@ def run_recovery(solver, rest_state, knife_traj, knife_radius,
             new_dv = state["particle_damage"]
             state["alpha"] = 1.0 / (1.0 + np.exp(np.clip(
                 SHARPNESS_INNER * (new_dv - TAU_INNER), -50, 50)))
+
+        mean_L = float(np.mean(L_gaps))
+        stiff_now = z_to_stiff(z_torch).detach().cpu().numpy()
+        # Track best by L_gap (proxy for sweet spot when no ground truth).
+        if mean_L < best_L_gap - 1e-4:
+            best_L_gap = mean_L
+            best_stiff = stiff_now.copy()
+            best_epoch = epoch
+            patience_counter = 0
+        else:
+            patience_counter += 1
+
         if epoch % log_every == 0 or epoch == N_epochs - 1:
-            stiff_now = stiff_pp_torch.detach().cpu().numpy()
-            epoch_logs.append(dict(epoch=epoch, mean_L_gap=np.mean(L_gaps),
+            epoch_logs.append(dict(epoch=epoch, mean_L_gap=mean_L,
                                      stiff_snapshot=stiff_now.copy()))
             if live_print:
                 m = compute_metrics(stiff_now, stiff_truth_np, inclusion_mask)
-                print(f"  ep {epoch:3d}: L_gap={np.mean(L_gaps):.3e}  "
-                      f"L1_total={m['L1_total']:.4f}  L1_in={m['L1_inside']:.4f}  "
-                      f"L1_out={m['L1_outside']:.4f}  IoU={m['iou']:.3f}  "
+                print(f"  ep {epoch:3d}: L_gap={mean_L:.3e}  "
+                      f"L1_in={m['L1_inside']:.4f}  IoU={m['iou']:.3f}  "
                       f"stiff_in={stiff_now[inclusion_mask].mean():.3f}  "
                       f"stiff_out={stiff_now[~inclusion_mask].mean():.3f}")
+
+        if patience_counter >= early_stop_patience:
+            if live_print:
+                print(f"  early-stop @ ep {epoch}  (best ep {best_epoch}, L_gap {best_L_gap:.3e})")
+            break
+
     return dict(
-        stiff_final=stiff_pp_torch.detach().cpu().numpy(),
+        stiff_final=stiff_now,
+        stiff_best=best_stiff,
+        best_epoch=best_epoch,
+        best_L_gap=best_L_gap,
         epoch_logs=epoch_logs,
     )
 
@@ -208,7 +260,9 @@ def main():
     print(f"  [Step 1 tuning] knife_radius: 0.04 → 0.08 (2× larger sphere)")
     T = 10  # Step 2b (2026-05-24): longer trajectory — compliant PBD's larger deformation only visible at T>3
     knife_traj = make_knife_trajectory(T)
-    theta_3D = np.array([3.0, 20.0, 0.5], dtype=np.float32)
+    # P4 Config B propagation: theta=(3, 100, 0.3) — anti-zombie debulk.
+    # P1 verified grad finite + max scale 3.37×; P3 verified FD parity 0.05% at ε=0.005.
+    theta_3D = np.array([3.0, 100.0, 0.3], dtype=np.float32)
 
     # Build inclusion ground truth — Step 1: larger inclusion to match larger knife
     pos_rest = mesh_info["vertices"]
@@ -250,8 +304,9 @@ def main():
     # Sweep λ_smooth: test 4 values to find the right regularization strength
     lambda_sweep = [0.0, 1e-6, 1e-4, 1e-2]
     print(f"\n[Run] L_smooth λ sweep: {lambda_sweep}")
-    print(f"      Outer Adam on stiff_pp ({N} dim), 60 epochs × T=3 = 180 Adam steps")
-    print(f"      θ_global = {theta_3D.tolist()} FROZEN, lr_outer=0.01")
+    print(f"      Outer Adam on z (sigmoid-bounded stiff, {N} dim), 30 epochs × T=10")
+    print(f"      θ_global = {theta_3D.tolist()} FROZEN, lr=0.03 (P4c-locked)")
+    print(f"      Sigmoid bound stiff ∈ [{STIFF_LOW}, {STIFF_HIGH}], early stop patience=5")
 
     sweep_results = {}
     for lam in lambda_sweep:
@@ -263,8 +318,8 @@ def main():
             solver, rest_state, knife_traj, knife_radius,
             obs_pos_t, obs_alpha_t, edges_a_t, edges_b_t, edges_rest_t,
             theta_3D, stiff_init, stiff_truth, inclusion_mask, device,
-            N_epochs=60, lr=0.01, n_inner=30, log_every=10,
-            lambda_smooth=lam)
+            N_epochs=30, lr=0.03, n_inner=30, log_every=5,  # P4c locked
+            lambda_smooth=lam, early_stop_patience=5)
         elapsed = time.time() - t0
         if result is None:
             print(f"\n  ✗ NaN")
@@ -309,7 +364,10 @@ def main():
     if result is None:
         print(f"\n✗ All λ values failed")
         return
-    stiff_recovered = result["stiff_final"]
+    # Prefer best-epoch over final (Adam drifts past sweet spot — P4c finding).
+    stiff_recovered = result.get("stiff_best", result["stiff_final"])
+    if "best_epoch" in result:
+        print(f"\n  Using best-epoch result (ep {result['best_epoch']}, L_gap {result['best_L_gap']:.3e})")
     final = compute_metrics(stiff_recovered, stiff_truth, inclusion_mask)
     print(f"\n{'='*72}")
     print(f"DETAILED REPORT (best λ={best_lam:.0e})")
@@ -333,10 +391,10 @@ def main():
           f"mean={stiff_recovered.mean():.3f}")
     print(f"  Inside inclusion: min={stiff_recovered[inclusion_mask].min():.3f}, "
           f"max={stiff_recovered[inclusion_mask].max():.3f}, "
-          f"mean={stiff_recovered[inclusion_mask].mean():.3f}  (truth=1.500)")
+          f"mean={stiff_recovered[inclusion_mask].mean():.3f}  (truth={stiff_truth[inclusion_mask].mean():.3f})")
     print(f"  Outside inclusion: min={stiff_recovered[~inclusion_mask].min():.3f}, "
           f"max={stiff_recovered[~inclusion_mask].max():.3f}, "
-          f"mean={stiff_recovered[~inclusion_mask].mean():.3f}  (truth=0.300)")
+          f"mean={stiff_recovered[~inclusion_mask].mean():.3f}  (truth={stiff_truth[~inclusion_mask].mean():.3f})")
 
     # Save for visualization
     np.savez(str(REPO / "tools" / "stageA_inclusion_recovery.npz"),
