@@ -445,6 +445,63 @@ def update_soft_removal_kernel_ssa_param_arr(
     alpha_next[i] = 1.0 / (1.0 + wp.exp(exp_arg))
 
 
+# CUSA (cpp_sim parity, 2026-05-25):
+# Replicates cpp_sim/core/cutting_manager.h:process_fragments() —
+# binary-style removal with persistence. The inside-knife geometric gate
+# approach was REJECTED (2026-05-25 smoke test): collision_kernel pushes
+# particles to knife surface BEFORE alpha update runs, so geometric gate
+# fails post-collision. cpp_sim avoids this by running process_fragments
+# on CPU separate from GPU step; harder to replicate exactly in differentiable
+# Warp pipeline.
+#
+# Practical CUSA-style mitigation (what this kernel does):
+#   1. Same damage-driven sigmoid as original kernel
+#   2. Persistence: alpha can only decrease (wp.min with alpha_prev)
+#      — once removed, stay removed (matches cpp_sim semantic)
+#   3. Coupled with alpha-weighted vel damping in predict_kernel (separate
+#      kernel) which kills zombie momentum proportional to (1 - alpha)
+@wp.kernel
+def update_soft_removal_kernel_ssa_param_arr_cusa(
+    damage: wp.array(dtype=wp.float32),
+    alpha_prev: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    pos: wp.array(dtype=wp.vec3),
+    knife_pos: wp.array(dtype=wp.vec3),
+    knife_radius_arr: wp.array(dtype=wp.float32),
+    threshold_arr: wp.array(dtype=wp.float32),
+    sharpness_arr: wp.array(dtype=wp.float32),
+    alpha_next: wp.array(dtype=wp.float32),
+):
+    """cpp_sim-parity CUSA: damage-driven sigmoid + persistence.
+
+    Geometric inside-knife gate REMOVED (caused alpha to never reach 0 because
+    collision pushes particles to knife surface BEFORE alpha update). Persistence
+    via wp.min(proposed, alpha_prev) preserves cpp_sim's "once removed, stays
+    removed" semantic while keeping monotonicity through forward sim.
+
+    Args pos/knife_pos/knife_radius are kept in signature for API stability
+    (caller passes them) but unused by current logic. Future inside-knife
+    extension could use pre-collision pos.
+    """
+    i = wp.tid()
+    if fixed[i] == 1:
+        alpha_next[i] = alpha_prev[i]
+        return
+    threshold = threshold_arr[0]
+    sharpness = sharpness_arr[0]
+
+    # Damage-driven alpha (same as non-CUSA path)
+    d = damage[i]
+    exp_arg = wp.clamp(sharpness * (d - threshold), -50.0, 50.0)
+    alpha_proposed = 1.0 / (1.0 + wp.exp(exp_arg))
+
+    # Persistence: alpha never goes UP (matches cpp_sim "particles[pid].removed"
+    # boolean flag which only flips false→true, never reverses).
+    # Note: damage is already monotonic (softplus), so wp.min is usually no-op
+    # but guarantees the property explicitly + handles edge cases.
+    alpha_next[i] = wp.min(alpha_proposed, alpha_prev[i])
+
+
 # ============== Batched Edge Damage (per-env knife_pos) ==============
 
 @wp.kernel

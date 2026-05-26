@@ -146,6 +146,16 @@ def predict_kernel_ssa(
     dt: float,
     damping: float,
 ):
+    """Predict step with alpha-weighted velocity damping (2026-05-25 CUSA fix).
+
+    Original: dead particles (alpha < 0.01) skipped; semi-dead (0.01 < α < 0.5)
+    treated as alive → kept accumulating momentum → flew off cube (zombie bug).
+
+    Fix: damp vel by `damping × alpha`. Alive (α=1) → 0.99× damping unchanged.
+    Semi-dead (α=0.3) → 0.297× damping (3× stronger → vel quickly bleeds off).
+    Fully dead (α<0.01) → still hard-skip (vel stays frozen at zero).
+    Preserves gradient flow through α for sys-ID (no hard branch on transition).
+    """
     i = wp.tid()
 
     # Unconditional (both legacy branches wrote the same value)
@@ -156,9 +166,11 @@ def predict_kernel_ssa(
         pred_pos[i] = pos[i]
         return
 
-    # Single-assignment chain — each local assigned exactly once
-    v_integrated = vel[i] + gravity * dt      # was `v = vel[i] + gravity * dt`
-    v_damped = v_integrated * damping         # was `v = v * damping` ← fresh name
+    # Single-assignment chain — each local assigned exactly once.
+    # CUSA fix: alpha multiplied into damping kills zombie momentum.
+    a = alpha[i]
+    v_integrated = vel[i] + gravity * dt
+    v_damped = v_integrated * (damping * a)   # ← α-weighted damping (was just `damping`)
     vel[i] = v_damped
     pred_pos[i] = pos[i] + v_damped * dt
 

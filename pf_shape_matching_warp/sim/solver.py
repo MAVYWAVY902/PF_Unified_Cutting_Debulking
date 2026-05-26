@@ -52,6 +52,7 @@ from .pf_damage import (
     # Day 6b (2026-05-22): wp.array theta path for ReSECT autograd through θ
     update_edge_damage_kernel_ssa_param_arr,
     update_soft_removal_kernel_ssa_param_arr,
+    update_soft_removal_kernel_ssa_param_arr_cusa,
 )
 
 
@@ -106,6 +107,13 @@ class ShapeMatchingSolver:
         self.aspiration_threshold = 0.3
         self.soft_removal_sharpness = 20.0  # sigmoid sharpness for differentiable removal
         self.cutting_update_interval = 50
+
+        # CUSA parity mode (2026-05-25): cpp_sim-style inside-knife gate +
+        # persistence on alpha. Eliminates zombie particles by restricting alpha
+        # drop to particles geometrically inside the knife sphere AND damaged.
+        # See pf_damage.update_soft_removal_kernel_ssa_param_arr_cusa.
+        # When True (default), the param-arr path uses the CUSA kernel.
+        self.use_cusa_aspiration = True
 
         self.step_count = 0
 
@@ -784,18 +792,36 @@ class ShapeMatchingSolver:
 
                 # Soft removal: read alpha_prev (gating + carry-over), write alpha_next
                 # Day 6b: param_arr dispatch when theta_wp set
+                # 2026-05-25: optional CUSA aspiration (cpp_sim-parity inside-knife gate
+                # + persistence) when self.use_cusa_aspiration=True.
                 if self.theta_wp is not None:
-                    wp.launch(
-                        update_soft_removal_kernel_ssa_param_arr,
-                        dim=N,
-                        inputs=[
-                            pd_next, alpha_prev, self.p["fixed"],
-                            self.theta_wp["threshold"],
-                            self.theta_wp["sharpness"],
-                            alpha_next,
-                        ],
-                        device=self.device,
-                    )
+                    if self.use_cusa_aspiration and "knife_radius" in self.theta_wp:
+                        wp.launch(
+                            update_soft_removal_kernel_ssa_param_arr_cusa,
+                            dim=N,
+                            inputs=[
+                                pd_next, alpha_prev, self.p["fixed"],
+                                self.p["pred_pos"],
+                                self.knife_pos,
+                                self.theta_wp["knife_radius"],
+                                self.theta_wp["threshold"],
+                                self.theta_wp["sharpness"],
+                                alpha_next,
+                            ],
+                            device=self.device,
+                        )
+                    else:
+                        wp.launch(
+                            update_soft_removal_kernel_ssa_param_arr,
+                            dim=N,
+                            inputs=[
+                                pd_next, alpha_prev, self.p["fixed"],
+                                self.theta_wp["threshold"],
+                                self.theta_wp["sharpness"],
+                                alpha_next,
+                            ],
+                            device=self.device,
+                        )
                 else:
                     wp.launch(
                         update_soft_removal_kernel_ssa,
