@@ -1,0 +1,899 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}  % Comment this line out if you need a4paper
+
+%\documentclass[a4paper, 10pt, conference]{ieeeconf}      % Use this line for a4 paper
+
+% \IEEEoverridecommandlockouts                              % This command is only needed if 
+%                                                           % you want to use the \thanks command
+
+% \overrideIEEEmargins                                      % Needed to meet printer requirements.
+
+% %In case you encounter the following error:
+% %Error 1010 The PDF file may be corrupt (unable to open PDF file) OR
+% %Error 1000 An error occurred while parsing a contents stream. Unable to analyze the PDF file.
+% %This is a known problem with pdfLaTeX conversion filter. The file cannot be opened with acrobat reader
+% %Please use one of the alternatives below to circumvent this error by uncommenting one or the other
+% %\pdfobjcompresslevel=0
+% %\pdfminorversion=4
+
+% % See the \addtolength command later in the file to balance the column lengths
+% % on the last page of the document
+
+% % The following packages can be found on http:\\www.ctan.org
+% \usepackage{graphics} % for pdf, bitmapped graphics files
+% \usepackage{epsfig} % for postscript graphics files
+% \usepackage{mathptmx} % assumes new font selection scheme installed
+% \usepackage{times} % assumes new font selection scheme installed
+% \usepackage{amsmath} % assumes amsmath package installed
+% \usepackage{amssymb}  % assumes amsmath package installed
+% \usepackage{array}
+% \usepackage[caption=false]{subfig}
+% \usepackage{textcomp}
+% \usepackage{stfloats}
+% \usepackage{url}
+% \usepackage{verbatim}
+% \usepackage{graphicx}
+% \usepackage{amsmath} % assumes amsmath package installed
+% \usepackage{amssymb}  % assumes amsmath package installed
+% \usepackage{booktabs}
+% \usepackage{enumitem}
+% \usepackage{adjustbox}
+% \usepackage{tabularx}
+% \usepackage{makecell}
+% \usepackage{color}
+% \usepackage{array} 
+% \usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+% \usepackage{newtxtext}
+% \usepackage{newtxmath}
+
+
+\usepackage{amsmath,amsfonts}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage{xcolor}
+\SetKwInOut{Input}{Input}
+\SetKwInOut{Output}{Output}
+\newcommand{\mycmt}[1]{\tcp*[f]{\textcolor{green!50!black}{\fontsize{7}{8}\selectfont #1}}}
+\SetAlgoSkip{0.4em}
+\SetAlCapSkip{0.3em}
+\SetAlgoInsideSkip{0.4em}
+\DontPrintSemicolon
+\SetKwComment{Comment}{$\triangleright$\ }{}
+
+\usepackage{array}
+\usepackage[caption=false]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{graphics}
+\usepackage{epsfig}
+\usepackage{newtxtext}
+\usepackage{newtxmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{adjustbox}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{color}
+\usepackage{titlesec}
+\usepackage{amsthm}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{mathtools}
+\titlespacing*{\subsection}{0pt}{0.6\baselineskip}{0.3\baselineskip}
+\titlespacing*{\subsubsection}{0pt}{0.5\baselineskip}{0.25\baselineskip}
+\titlespacing*{\section}{0pt}{0.7\baselineskip}{0.35\baselineskip}
+
+\SetAlFnt{\footnotesize}
+\SetAlCapFnt{\footnotesize}
+
+\newtheoremstyle{tight}{2pt}{2pt}{\itshape}{}{\bfseries}{.}{0.5em}{}
+\theoremstyle{tight}
+\newtheorem{assumption}{Assumption}
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
+
+\captionsetup[figure]{
+  font=footnotesize,
+  labelfont=bf,
+  labelsep=colon,
+  justification=justified,
+}
+
+\captionsetup[subfloat]{
+  labelformat=simple,
+  textformat=empty,
+  position=bottom,
+  skip=2pt,
+  justification=centering
+}
+
+\renewcommand{\thesubfigure}{(\alph{subfigure})}
+
+
+\title{\LARGE \bf
+ReSECT: A Real-to-Sim Cohesive Zone Framework for Differentiable Topology-Changing Cutting in Robotic Surgery
+}
+
+% \title{\LARGE \bf
+% ReSECT: A Real-to-Sim Edge-distributed Cohesive Zone Framework for Differentiable Topology-Changing Cutting in Robotic Surgery
+% }
+
+
+% \author{Author Omitted for Review}
+\author{Yunxin Fan, Doug L. James, Monroe Kennedy III, Nikolas Blevins}
+
+
+\begin{document}
+
+
+
+\maketitle
+\thispagestyle{empty}
+\pagestyle{empty}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+
+Deformable object simulation, especially cutting and debulking, remains a challenging task due to its natural property of topology changing. Furthermore, this simulation mostly in forward manner where the backpropagation is not allowed, which is not applicable for leanring based task integration. Surgical scene, tissue or tumor property is always ill-define/evaluate domain, where the mechanics of tissue and tumor is always hard to calibrate. In this paper, we proposed a 
+
+\end{abstract}
+
+
+\section{Related Work}
+
+1. Differentiable continuum simulation
+2. Cutting in PBD / continuum simulation
+% ============================================================
+% Section 3.1 — Differentiable Shape-Matching PBD Substrate
+% Target: ~0.8 page of 2-column IEEE conference format
+% Status: 3rd DRAFT 2026-05-15 (REORDERED — was P(F) definition.
+%         Now PBD substrate precedes P(F): reader sees the w_i
+%         interface BEFORE the α extension fills it, so the
+%         w_i := α bridge in §3.2 lands as the climax rather
+%         than a forward reference. Filename kept; content swapped.)
+% 
+% =====================================================================
+%  Methodology — narrative rewrite, v2 (notation-audited)
+%
+%  Conventions (robotics: T-RO / IJRR / ICRA):
+%    scalars        italic            k, s, tau, kappa, r_e, d
+%    vectors        bold lowercase    \mathbf{p}, \mathbf{g}, \mathbf{t}
+%    matrices       bold uppercase    \mathbf{A}_C, \mathbf{R}_C, \mathbf{I}_3
+%    sets / meshes  calligraphic      \mathcal{V}, \mathcal{E}, \mathcal{M}
+%    groups         roman             \mathrm{SO}(3), \mathrm{O}(3)
+%    definitions    \coloneqq
+%
+%  If matrices are NOT bold elsewhere in the paper, revert
+%  \mathbf{A}_C, \mathbf{R}_C, \mathbf{S}_C, \mathbf{I}_3 to plain capitals.
+%
+%  Regularization constants are disambiguated:
+%    \varepsilon       = 1e-6  (numerical conditioning, Sec. 3.1)
+%    \varepsilon_geo   = 1e-4  (geometric regularization, Sec. 3.2)
+%  Macro for the geometric constant:
+\newcommand{\epsgeo}{\varepsilon_{\mathrm{geo}}}
+% =====================================================================
+ 
+% ---------------------------------------------------------------------
+%  Optional nomenclature table — drop or convert to a \paragraph if
+%  space is tight. Placed before Sec. 3.1.
+% ---------------------------------------------------------------------
+
+\subsection{Differentiable Shape-Matching PBD Approach}
+\label{sec:pbd-substrate}
+For completeness, we briefly review the shape-matching PBD approach used in our
+soft-tissue simulator. We adopt this solver because its per-vertex participation
+weights directly modulate the deformation dynamics, providing the interface
+through which the continuous cutting field in \S\ref{sec:pf-cutting} is applied.
+
+
+% The simulated soft tissue is represented by a tetrahedral mesh
+% $\mathcal{M}=(\mathcal{V},\mathcal{E},\mathcal{F},\mathcal{T})$, with one
+% simulation particle located at each vertex $i\in\mathcal{V}$. The vertices
+% are grouped into overlapping clusters $\{C_1,C_2,\ldots\}$, each consisting
+% of a small set of nearby vertices with a remembered rest shape. For each
+% $i\in C$, cluster $C$ stores a current position
+% $\mathbf{p}_i\in\mathbb{R}^3$, a rest position
+% $\bar{\mathbf{p}}_i\in\mathbb{R}^3$, and a participation weight
+% $w_i\in\mathbb{R}_{\geq0}$.
+
+The simulated soft tissue is represented by a tetrahedral mesh
+$\mathcal{M}=(\mathcal{V},\mathcal{E},\mathcal{F},\mathcal{T})$, with one
+simulation particle located at each vertex $i\in\mathcal{V}$. The vertices
+are grouped into overlapping clusters $\{C_1,C_2,\ldots\}$, each consisting
+of a small set of nearby vertices with a remembered rest shape. For each
+$i\in C$, cluster $C$ stores a current position
+$\mathbf{p}_i\in\mathbb{R}^3$, a rest position
+$\bar{\mathbf{p}}_i\in\mathbb{R}^3$, and a participation weight
+$w_i\in\mathbb{R}_{\geq0}$. $\bar{\mathbf{p}}_i\in\mathbb{R}^3$ is fixed at mesh
+initialization, while $\mathbf{p}_i$ and $w_i$ evolve over time. At each
+substep, the cluster solve recovers the best-fit rigid rotation
+$\mathbf{R}_C\in\mathrm{SO}(3)$ that aligns the deformed cluster with its
+rest shape in a weighted least-squares sense.
+
+\emph{(i)} We first compute the weighted centroids of the current and rest
+configurations,
+$\boldsymbol{\mu}_C,\bar{\boldsymbol{\mu}}_C\in\mathbb{R}^3$,
+\begin{equation}
+  \boldsymbol{\mu}_C =
+    \frac{\sum_{i \in C} w_i \mathbf{p}_i}{\sum_{i \in C} w_i},
+  \qquad
+  \bar{\boldsymbol{\mu}}_C =
+    \frac{\sum_{i \in C} w_i \bar{\mathbf{p}}_i}{\sum_{i \in C} w_i}.
+  \label{eq:centroid}
+\end{equation}
+These centroids remove the translational component of the cluster alignment.
+
+\emph{(ii)} We then form the cross-covariance matrix
+$\mathbf{A}_C\in\mathbb{R}^{3\times3}$,
+\begin{equation}
+  \mathbf{A}_C = \sum_{i \in C} w_i\,
+     (\mathbf{p}_i - \boldsymbol{\mu}_C)
+     (\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}}_C)^\top,
+  \label{eq:covariance}
+\end{equation}
+which relates the current cluster deviations to their corresponding
+rest-shape deviations.
+
+\emph{(iii)} The best-fit rigid rotation is obtained by applying polar
+decomposition to the cross-covariance matrix,
+$\mathbf{A}_C=\mathbf{R}_C\mathbf{S}_C$. The rotation
+$\mathbf{R}_C\in\mathrm{SO}(3)$ is retained, while the symmetric stretch
+$\mathbf{S}_C$ is discarded because shape matching uses only the rigid
+component of the cluster motion. The translation follows from centroid
+alignment,
+$\mathbf{t}_C=\boldsymbol{\mu}_C-\mathbf{R}_C\bar{\boldsymbol{\mu}}_C$.
+
+\emph{(iv)} This rigid alignment defines a goal position and a
+shape-matching correction for each vertex $i\in C$:
+% \begin{equation}
+%   \mathbf{g}_i^{(C)} = \mathbf{R}_C \bar{\mathbf{p}}_i + \mathbf{t}_C,
+%   \qquad
+%   \Delta_i^{(C)} = w_i\,(\mathbf{g}_i^{(C)} - \mathbf{p}_i)
+%             \in \mathbb{R}^3 .
+%   \label{eq:cluster-correction}
+% \end{equation}
+\begin{equation}
+    \mathbf{g}_{i,C}
+    =
+    \mathbf{R}_C \bar{\mathbf{p}}_i + \mathbf{t}_C,
+    \qquad
+    \Delta_{i,C}
+    =
+    w_i(\mathbf{g}_{i,C}-\mathbf{p}_i) \in \mathbb{R}^3.
+  \label{eq:cluster-correction}
+\end{equation}
+
+% Notice that what matters here is not the rotation fit which is standard, but what
+% governs it. Every quantity in
+% (\ref{eq:centroid})--(\ref{eq:cluster-correction}) passes through the
+% participation weight $w_i$: it sets each vertex's pull on the centroids,
+% its influence on $\mathbf{R}_C$ through the covariance, and the strength
+% of its own correction. The weight is therefore the \emph{single
+% interface} through which a vertex's participation in its clusters can
+% be modulated, and the map from $\{w_i\}$ to the cluster correction is
+% differentiable. Away from degenerate clusters---collinear particles,
+% repeated singular values of $\mathbf{A}_C$, or vanishing total
+% weight---the operations form a smooth computation graph: the weighted
+% sums and outer product are bilinear, the quaternion iteration is
+% branch-free, and the goal map is linear. Two safeguards keep the
+% degenerate regime numerically benign: we floor the centroid divisor at
+% $\max(\sum_{i\in C} w_i,\,\varepsilon)$ against vanishing-mass clusters,
+% and add $\varepsilon\,\mathbf{I}_3$ to $\mathbf{A}_C$ before the polar
+% iteration, with $\mathbf{I}_3$ the $3\!\times\!3$ identity. Both
+% perturbations sit well below the simulation scale and, as
+% \S\ref{sec:gradient-verify} verifies, leave gradients unbiased in
+% finite-difference parity tests.
+
+The key property that makes shape matching useful for our formulation is its
+explicit participation weight $w_i$. As shown in
+(\ref{eq:centroid})--(\ref{eq:cluster-correction}), the same scalar weight
+appears throughout the cluster solve: it determines how strongly vertex $i$
+contributes to the current and rest centroids, how much it influences the
+fitted rotation through the covariance matrix $\mathbf{A}_C$, and how strongly
+it is pulled toward the resulting goal position. Thus, changing $w_i$ does not
+only scale a final displacement; it continuously changes the vertex's role in
+the entire shape-matching computation.
+% This gives a natural interface for differentiable cutting. Instead of making a
+% discrete decision that a vertex is present or removed, we can assign it a
+% continuous participation value and let that value modulate the cluster solve
+% itself. A fully intact vertex participates with $w_i\approx 1$, a removed
+% vertex with $w_i\approx 0$, and intermediate values describe partial
+% participation near the cut boundary. The map from the participation weights
+% $\{w_i\}$ to the cluster corrections is differentiable away from standard
+% degeneracies, such as collinear vertices, repeated singular values of
+% $\mathbf{A}_C$, or vanishing total weight.
+% To keep these degenerate cases numerically benign, we apply two small
+% regularizations. The centroid denominator is floored by
+% $\max(\sum_{i\in C} w_i,\varepsilon)$ to avoid division by a nearly zero
+% effective cluster mass, and $\varepsilon\mathbf{I}_3$ is added to
+% $\mathbf{A}_C$ before the polar iteration.
+This gives a natural interface for differentiable cutting: instead of making a
+discrete present-or-removed decision, we assign each vertex a continuous
+participation value and let it modulate the cluster solve itself. Intact
+vertices participate with $w_i\approx1$, removed vertices with $w_i\approx0$,
+and intermediate values represent partial participation near the cut boundary.
+The resulting map from $\{w_i\}$ to the cluster corrections is differentiable
+away from standard degeneracies, such as collinear vertices, repeated singular
+values of $\mathbf{A}_C$, or vanishing total weight. We handle these cases
+with two small regularizations: the centroid denominator is floored by
+$\max(\sum_{i\in C} w_i,\varepsilon)$, and
+$\varepsilon\mathbf{I}_3$ (with $\varepsilon=10^{-6}$) is added to $\mathbf{A}_C$ before the polar
+iteration.
+
+% At each substep, we perform $K$ Jacobi iterations of the cluster solve in
+% parallel on the GPU: every cluster reads a shared state, and the
+% overlapping per-vertex corrections are gathered into a fresh state for
+% the next iteration. Writing $m\in\{0,\dots,M\}$ for the Jacobi
+% iteration index and $\mathbf{p}^{(m)}$ for the corresponding position
+% iterate, the gathered update is applied with the global gain $k$, the
+% bulk stiffness:
+% \begin{equation}
+%   \mathbf{p}^{(m+1)}_i = \mathbf{p}^{(m)}_i +
+%     \frac{k}{|\mathcal{C}(i)|}\!\sum_{C \in \mathcal{C}(i)}
+%     \Delta_i^{(C)},
+%   \label{eq:apply}
+% \end{equation}
+% where $\mathcal{C}(i)$ is the set of clusters containing vertex $i$ and
+% each $\Delta_i^{(C)}$ is the correction (\ref{eq:cluster-correction})
+% evaluated at the current iterate $\mathbf{p}^{(c)}$. This differentiable solver still leaves the main challenge of cutting:
+% a naïve binary update of $w_i$ would destroy the very differentiability that
+% the cluster solve exposes. The next section therefore constructs $w_i$ from a
+% continuous cut field rather than from a discrete severing decision.
+ 
+
+At each substep, we perform $M$ Jacobi iterations of the cluster solve in
+parallel on the GPU: every cluster reads a shared state, and the overlapping
+per-vertex corrections are gathered into a fresh state for the next iteration.
+At Jacobi iteration $m$, let $\mathbf{p}^{m}$ denote the current vertex
+positions. After all cluster corrections are computed, the update for vertex
+$i$ is
+\begin{equation}
+  \mathbf{p}^{m+1}_i = \mathbf{p}^{m}_i +
+    \frac{k}{|\mathcal{C}(i)|}\!\sum_{C \in \mathcal{C}(i)}
+    \Delta_{i, C} ,
+  \label{eq:apply}
+\end{equation}
+where $m=0,\ldots,M-1$, $\mathcal{C}(i)$ is the set of clusters containing
+vertex $i$, and each $\Delta_{i, C}$ is evaluated at the current iterate
+$\mathbf{p}^{m}$.
+
+% \subsection{Continuous Topology Change via Soft Cluster Weights}
+% \label{sec:pf-cutting}
+ 
+% We make the cutting operation differentiable by never deciding that an edge is cut: instead we
+% track, continuously, how close it is to being cut, and let that quantity
+% drive the participation weight $w_i$.
+% \subsection{Continuous Topology Change via Soft Cluster Weights}
+% \label{sec:pf-cutting}
+% The previous section shows that the shape-matching solver can be modulated by
+% a continuous per-vertex participation weight $w_i$. We now define how this
+% weight is generated from the cutting geometry. Rather than treating cutting as
+% a discrete topological event, we assign each edge a continuous survival score
+% that measures how close it is to being cut, and then propagate this score to
+% the vertex weights used by the cluster solve.
+
+% We denote this quantity $P(F)$, a differentiable score for the survival of
+% a topological feature $F$ under the geometry of an intruding body, and
+% we evaluate it on edges since edges are the natural cutting unit and are primitive representation because
+% edge-level scores factorize naturally into face- and tet-level
+% scores when needed. Specifically, a face survives only if all
+% of its bounding edges do, and a tet only if all six of its edges do.
+% Let $F$ denote the event ``the feature is intact'' and assuming the
+% edge events are conditionally independent given the intruder $I$, this
+% composition is the modeling approximation
+% \begin{equation}
+%   P(F \mid f, I) = \prod_{e \in f} P(F \mid e, I),
+%   P(F \mid T, I) = \prod_{e \in T} P(F \mid e, I),
+%   \label{eq:simplicial-product}
+% \end{equation}
+% so faces $f$ and tets $T$ need no cut variables of their own---the edge
+% scores induce them.
+
+
+\subsection{Continuous Topology Change via Soft Cluster Weights}
+\label{sec:pf-cutting}
+
+The previous section shows that the shape-matching solver can be modulated by
+a continuous per-vertex participation weight $w_i$. We now define how this
+weight is generated from the cutting geometry. Rather than treating cutting as
+a discrete topological event, we assign each edge a continuous survival score
+and propagate the resulting damage to the vertex weights used by the cluster
+solve. Let $F$ denote the event that a topological feature remains intact under an
+intruding body $I$. We define the survival score first on edges,
+$P(F\mid e,I)$, because edges are the primitive units from which face- and
+tetrahedron-level survival can be composed. Specifically, a face remains intact
+only if all of its boundary edges remain intact, and a tetrahedron remains
+intact only if all six of its edges remain intact. Assuming these edge events
+are conditionally independent given $I$, we use the modeling approximation
+% \begin{equation}
+%   P(F \mid f, I) = \prod_{e \in f} P(F \mid e, I),
+%   \qquad
+%   P(F \mid T, I) = \prod_{e \in T} P(F \mid e, I),
+%   \label{eq:simplicial-product}
+% \end{equation}
+\begin{equation}
+\begin{aligned}
+  P(F|f,I) &= \prod_{e\in f} P(F|e,I), \\
+  P(F|T,I) &= \prod_{e\in T} P(F|e,I).
+\end{aligned}
+\label{eq:simplicial-product}
+\end{equation}
+so faces $f$ and tetrahedra $T$ do not require separate cut variables; their
+survival scores are induced by the edge scores.
+
+% To make $P(F)$ precise, equip the mesh $\mathcal{M}$ with vertex
+% positions $\mathbf{p}_i$ and introduce an intruder
+% $I=(\mathbf{c}_I,\rho_I)$---a sphere of center $\mathbf{c}_I$ and radius
+% $\rho_I\geq0$, with $B(\mathbf{c},r)$ denoting the closed ball of center
+% $\mathbf{c}$ and radius $r$. The intruder is the cutting tool during a
+% cut ($\rho_I>0$); at initialization it is instead the nearest
+% non-adjacent vertex of each edge ($\rho_I=0$), a point proxy that makes
+% the rest baseline $P(F)_e^{\mathrm{rest}}$ aware of local mesh density.
+% For an edge $e=(a,b)$ with endpoints $a,b\in\mathcal{V}$, midpoint
+% $\mathbf{m}_e=\tfrac{1}{2}(\mathbf{p}_a+\mathbf{p}_b)$, and half-length
+% $r_e=\tfrac{1}{2}\|\mathbf{p}_a-\mathbf{p}_b\|$, we measure penetration
+% through the signed distance between its diametral sphere
+% $B(\mathbf{m}_e,r_e)$ and the intruder $B(\mathbf{c}_I,\rho_I)$,
+% \begin{equation}
+%   d(e, I) = \|\mathbf{m}_e - \mathbf{c}_I\| - \rho_I - r_e
+%   \;\in\; \mathbb{R},
+%   \label{eq:sdist}
+% \end{equation}
+% positive when the spheres are disjoint and negative under penetration.
+% Passing this through the logistic sigmoid
+% $\sigma(x)=1/(1+\exp(-x))$, $\sigma:\mathbb{R}\to(0,1)$, gives the edge
+% survival score
+% \begin{equation}
+%   P(F)_e \coloneqq P(F \mid e, I)
+%   = \sigma\!\left(\kappa\,\frac{d(e, I)}{r_e}\right)
+%   \in (0,1),
+%   \label{eq:pf}
+% \end{equation}
+% where $s>0$ is a sharpness parameter. The ratio $d(e,I)/r_e$
+% is dimensionless, so $\kappa$ is mesh-scale-invariant; $P(F)_e$
+% saturates to $1$ far from the tool, to $0$ under deep penetration, and
+% equals $\tfrac{1}{2}$ at tangency. The construction is $C^\infty$ in all
+% vertex and intruder coordinates wherever $r_e>0$; its two non-smooth
+% points---the norm $\|\mathbf{m}_e-\mathbf{c}_I\|$ at coincidence
+% $\mathbf{m}_e=\mathbf{c}_I$, and $r_e$ at degenerate edges---are
+% softened by the standard substitution
+% $x\mapsto\sqrt{x^2+\epsgeo^{\,2}}$ with $\epsgeo=10^{-4}$, so autograd
+% sees a smooth map throughout. The rest baseline
+% $P(F)_e^{\mathrm{rest}}$ is one evaluation of (\ref{eq:pf}) at
+% initialization under the point-intruder configuration; this per-edge
+% construction mirrors the per-face minimum-ball score of
+% DMesh++~\cite{son2025dmesh2}, here restricted to the $1$-ring at a
+% per-edge cost linear in vertex degree.
+
+
+
+We define the edge survival score from the interaction between an edge and an
+intruder. Let $I=(\mathbf{c}_I,\rho_I)$ denote a spherical intruder with center
+$\mathbf{c}_I$ and radius $\rho_I\geq0$, and let $B(\mathbf{c},r)$ denote the
+closed ball with center $\mathbf{c}$ and radius $r$. During cutting, the
+intruder corresponds to the tool geometry. For an edge $e=(a,b)$ with endpoints
+$a,b\in\mathcal{V}$, we define its midpoint and half-length as
+\[
+  \mathbf{p}_e=\frac{1}{2}(\mathbf{p}_a+\mathbf{p}_b),
+  \qquad
+  r_e=\frac{1}{2}\|\mathbf{p}_a-\mathbf{p}_b\|.
+\]
+We approximate the edge by its diametral sphere $B(\mathbf{m}_e,r_e)$ and
+measure its signed separation from the intruder by
+\begin{equation}
+  d(e,I)=\|\mathbf{p}_e-\mathbf{c}_I\|-\rho_I-r_e ,
+  \label{eq:sdist}
+\end{equation}
+which is positive when the two spheres are disjoint and negative when they
+overlap.
+
+The edge survival score is then defined as
+\begin{equation}
+  P_e := P(F\mid e,I)
+  =
+  \sigma\!\left(\kappa\,\frac{d(e,I)}{r_e}\right),
+  \qquad
+  P_e\in(0,1),
+  \label{eq:pf}
+\end{equation}
+where $\sigma(x)=1/(1+\exp(-x))$ and $\kappa>0$ controls the sharpness of the
+transition. The normalized distance $d(e,I)/r_e$ makes the score invariant to
+uniform mesh scaling. Thus, $P_e$ approaches $1$ far from the tool, approaches
+$0$ under deep penetration, and equals $\frac{1}{2}$ at tangency.
+
+For numerical smoothness, we replace the nonsmooth norm and edge length near
+zero by the smoothed form $x\mapsto\sqrt{x^2+\epsgeo^{\,2}}$, with
+$\epsgeo=10^{-4}$. We also compute a rest baseline
+$P_e^{\mathrm{rest}}$ by evaluating (\ref{eq:pf}) once at initialization using
+the nearest non-adjacent vertex as a point intruder. This baseline normalizes
+the subsequent damage update by the local mesh spacing. The construction is
+similar in spirit to the minimum-ball score used in DMesh++~\cite{son2025dmesh2},
+but is applied at the edge level within the local $1$-ring.
+
+
+A cut is then the cumulative effect of $P(F)$ on participation,
+propagated through a three-link chain
+$P(F)_e\!\to\!\delta_e\!\to\!\delta_i\!\to\!\alpha_i$. First, the score
+drives a per-edge damage $\delta_e\geq0$ that can only grow, encoding
+the irreversibility of cutting:
+\begin{equation}
+  \delta_e^{\mathrm{next}} = \delta_e^{\mathrm{prev}} +
+    \sigma_{+}\!\left(\hat{\delta}_e - \delta_e^{\mathrm{prev}}\right),
+  \hat{\delta}_e \coloneqq
+    \sigma_{+}\!\left(1 - \frac{P(F)_e}{P(F)_e^{\mathrm{rest}}}\right),
+  \label{eq:edge-damage}
+\end{equation}
+where the superscripts $\mathrm{prev}/\mathrm{next}$ index successive
+substeps, $\hat{\delta}_e\geq0$ is the instantaneous damage target, and
+the softplus $\sigma_{+}(x)=\tfrac{1}{k_s}\log(1+\exp(k_s x))$,
+$\sigma_{+}:\mathbb{R}\to\mathbb{R}_{>0}$, smoothly approximates
+$\max(x,0)$ with sharpness $k_s>0$. The outer softplus is a
+differentiable stand-in for the positive part
+$[\,\hat{\delta}_e-\delta_e^{\mathrm{prev}}]_+$, with
+$[x]_+\coloneqq\max(x,0)$, so $\delta_e$ tracks the running maximum of
+its target $\hat{\delta}_e$ while staying differentiable. Smoothness
+carries a price: the softplus has a small positive tail
+$\sigma_{+}(0)=\log2/k_s$, so $\delta_e$ drifts upward even where
+$\hat{\delta}_e<\delta_e^{\mathrm{prev}}$, at a rate bounded by
+$\log2/k_s$ per substep---negligible over our cutting horizons
+(\S\ref{sec:gradient-verify}). Second, edge damage averages onto
+vertices under the same smooth clamp,
+\begin{equation}
+  \delta_i^{\mathrm{next}} = \delta_i^{\mathrm{prev}} +
+    \sigma_{+}\!\left(\bar{\delta}_i - \delta_i^{\mathrm{prev}}\right),
+  \bar{\delta}_i \coloneqq \frac{1}{|E(i)|}
+      \sum_{e \in E(i)} \delta_e^{\mathrm{next}},
+  \label{eq:vertex-damage}
+\end{equation}
+where $E(i)=\{e\in\mathcal{E}:i\in e\}$ is the set of edges incident to
+vertex $i$ and $\bar{\delta}_i$ their mean damage; averaging (rather
+than summing) keeps the threshold $\tau$ below comparable for interior
+and boundary vertices. Third, the vertex damage becomes the
+participation mask through a sigmoid,
+\begin{equation}
+  \alpha_i = \sigma\!\left(-s\,(\delta_i - \tau)\right) \in [0, 1],
+  \label{eq:soft-removal}
+\end{equation}
+with sharpness $s>0$ and threshold $\tau$: $\alpha_i=1$ is a fully
+participating vertex, $\alpha_i=0$ a removed one, and intermediate
+values a smooth interpolation between them.
+ 
+The chain above produces a per-vertex mask $\alpha_i$; the solver of
+\S\ref{sec:pbd-substrate} consumes a per-vertex weight $w_i$. We set
+them equal:
+\begin{equation}
+  w_i \;\coloneqq\; \alpha_i.
+  \label{eq:bridge}
+\end{equation}
+This single assignment is the entire coupling between topology and
+dynamics. Because $w_i$ already runs through the centroid, the
+covariance, and the correction, a cut vertex ($\alpha_i=0$) leaves all
+of its clusters at once, a partially cut vertex stays partially
+present, and an intact one ($\alpha_i=1$) recovers the standard
+shape-matching solve---with no branch, no auxiliary threshold, and no
+remeshing. The discrete act of cutting has become one differentiable
+assignment.
+ 
+\paragraph{Scope.} The mesh and cluster graph are fixed for the entire
+simulation; cutting is expressed purely as a loss of dynamic
+participation, never as remeshing or fragment separation. This is a
+deliberate design choice---a fixed computation graph is what makes
+reverse-mode differentiation possible, and a participation field is
+sufficient for the quasi-static cavity geometry our system
+identification targets. One consequence is worth stating plainly: within
+a single cluster straddling the cut, two still-intact subregions remain
+bound by the same $\mathbf{R}_C$ and $\boldsymbol{\mu}_C$ and cannot
+separate kinematically. We therefore use compact clusters (BFS-$2$
+neighborhoods, ${\sim}30$ vertices, ${\sim}1.5$\,mm mean edge length),
+so the low-participation band a tool leaves behind is thin relative to
+typical cut depths ($\geq5$\,mm): coupling is attenuated within each
+straddled cluster and effectively severed between clusters, with
+empirical cavity-formation behaviour reported in
+\S\ref{sec:sysid-synth}. Genuine fragment detachment---independent
+rigid-body motion for severed pieces---lies outside this formulation
+and outside the quasi-static regime it is built for.
+ 
+Algorithm~\ref{alg:ssa-jacobi} gives one full substep of the integrated
+solver---advancing the state
+$(\mathbf{p},\mathbf{v},\alpha,\delta_e,\delta_i)$ from substep
+$\mathrm{prev}$ to $\mathrm{next}$ over a step $dt$, with $\mathbf{v}_i$
+the per-vertex velocity; Figure~\ref{fig:cluster-jacobi} illustrates it.
+ 
+% --- Algorithm 1 ---
+\begin{algorithm}[!htbp]
+\small
+\caption{Differentiable PBD substep with $P(F)$ cutting and cycle-scoped buffers.}
+\label{alg:ssa-jacobi}
+\Input{$\mathbf{p}^{\mathrm{prev}}, \mathbf{v}^{\mathrm{prev}},
+       \alpha^{\mathrm{prev}},
+       \delta^{\mathrm{e,prev}}, \delta^{\mathrm{v,prev}},
+       (\mathbf{c}_I, \rho_I),\, dt,\, M;$\;
+       parameters $\theta=(\kappa, s, \tau, k)$; softplus sharpness $k_s$ fixed}
+\Output{$\mathbf{p}^{\mathrm{next}}, \mathbf{v}^{\mathrm{next}},
+        \alpha^{\mathrm{next}},
+        \delta^{\mathrm{e,next}}, \delta^{\mathrm{v,next}}$}
+ 
+$\mathbf{p}^{(0)} \leftarrow \mathbf{p}^{\mathrm{prev}} + dt \cdot \mathbf{v}^{\mathrm{prev}}$
+\mycmt{prediction step}\\
+ 
+\For{$e \in \mathcal{E}$ \KwSty{parallel}}{
+  $P(F)_e \leftarrow \sigma\!\left(\kappa\,d(e, I)/r_e\right)$
+  \mycmt{Eq.~\ref{eq:pf}}\\
+ 
+  $\hat{\delta}_e \leftarrow
+   \sigma_{+}\!\left(1 - P(F)_e/P(F)_e^{\mathrm{rest}}\right)$
+  \mycmt{target damage}\\
+ 
+  $\delta^{\mathrm{e,next}}_e \leftarrow \delta^{\mathrm{e,prev}}_e +
+   \sigma_{+}\!\left(\hat{\delta}_e - \delta^{\mathrm{e,prev}}_e\right)$
+  \mycmt{Eq.~\ref{eq:edge-damage}, fresh buffer}\\
+}
+ 
+\For{$i \in \mathcal{V}$ \KwSty{parallel}}{
+  $\bar{\delta}_i \leftarrow
+   \tfrac{1}{|E(i)|}\sum_{e \in E(i)} \delta^{\mathrm{e,next}}_e$
+  \\
+ 
+  $\delta^{\mathrm{v,next}}_i \leftarrow \delta^{\mathrm{v,prev}}_i +
+   \sigma_{+}\!\left(\bar{\delta}_i - \delta^{\mathrm{v,prev}}_i\right)$
+  \mycmt{Eq.~\ref{eq:vertex-damage}}\\
+ 
+  $\alpha^{\mathrm{next}}_i \leftarrow
+   \sigma\!\left(-s\,(\delta^{\mathrm{v,next}}_i - \tau)\right)$
+  \mycmt{Eq.~\ref{eq:soft-removal}}\\
+}
+ 
+\For{$c \leftarrow 0$ \KwTo $K{-}1$}{
+  \For{cluster $C$ \KwSty{parallel}}{
+    $w_i \leftarrow \alpha^{\mathrm{next}}_i$
+    \mycmt{bridge, Eq.~\ref{eq:bridge}}\\
+ 
+    $\boldsymbol{\mu}_C \leftarrow
+     \big(\textstyle\sum_{i \in C} w_i\big)^{-1}
+     \sum_{i \in C} w_i\,\mathbf{p}^{(c)}_i$\\
+ 
+    $\mathbf{A}_C \leftarrow \sum_{i \in C} w_i\,
+       (\mathbf{p}^{(c)}_i - \boldsymbol{\mu}_C)
+       (\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}}_C)^{\!\top}
+       + \varepsilon\,\mathbf{I}_3$\\
+ 
+    $\mathbf{R}_C \leftarrow \mathrm{polar}(\mathbf{A}_C)$\\
+ 
+    $\Delta_i^{(C)} \leftarrow
+     w_i\!\left(\mathbf{R}_C(\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}}_C)
+     + \boldsymbol{\mu}_C - \mathbf{p}^{(c)}_i\right)$
+    \mycmt{Eq.~\ref{eq:cluster-correction}}\\
+  }
+  $\mathbf{p}^{(c+1)}_i \leftarrow \mathbf{p}^{(c)}_i +
+   \dfrac{k}{|\mathcal{C}(i)|}\!\sum_{C \in \mathcal{C}(i)} \Delta_i^{(C)}$
+  \mycmt{Eq.~\ref{eq:apply}; fresh buffer}\\
+}
+ 
+$\mathbf{p}^{\mathrm{next}} \leftarrow \mathbf{p}^{(K)},\quad
+ \mathbf{v}^{\mathrm{next}} \leftarrow
+ (\mathbf{p}^{\mathrm{next}} - \mathbf{p}^{\mathrm{prev}})/dt$\\
+ 
+\Return $\mathbf{p}^{\mathrm{next}}, \mathbf{v}^{\mathrm{next}},
+        \alpha^{\mathrm{next}},
+        \delta^{\mathrm{e,next}}, \delta^{\mathrm{v,next}}$
+\vspace{6pt}
+\end{algorithm}
+ 
+One implementation detail makes Algorithm~\ref{alg:ssa-jacobi}
+differentiable: every state buffer is written to a fresh allocation
+rather than modified in place. With $K$ Jacobi iterations this means
+$K{+}1$ position buffers---iteration $c$ reads $\mathbf{p}^{(c)}$ and
+writes $\mathbf{p}^{(c+1)}$---and the same pattern for $\alpha$,
+$\delta_e$, $\delta_i$, and the per-iteration cluster rotations.
+In-place writes to tensors whose pre-update values the backward pass
+still needs would either raise tape errors or silently zero out
+gradients~\cite{difftaichi}; with correct buffering the gradient
+$\partial\mathcal{L}/\partial\theta$ is automatic, and
+\S\ref{sec:gradient-verify} confirms it matches finite differences to
+machine precision.
+ 
+ 
+% ============================================================
+% Section 3.3 — Joint Per-Particle Parameter Calibration
+% REWRITTEN 2026-05-26 (was: "System Identification Framework"
+% with 4D scalar θ=(k,κ,s,τ); now: Stage A + Stage E per-particle
+% fields with paradigm correction — calibration, not material sys-ID).
+%
+% Key changes:
+%   - θ split into per-particle fields (k_pp, τ_pp) ∈ ℝ^N × ℝ^N
+%     + frozen global hyperparameters (α_min, sharpness, τ_global fallback)
+%   - Sigmoid bounding (Liang Section III-B) for stable optimization
+%   - Detach pattern (.item()) for inner-outer parameter sharing
+%   - Mode C inject (Liang Alg. 1 line 16) for online updating
+%   - Paradigm: calibration (sim-to-real fidelity), NOT material sys-ID
+%   - Validation: rank order + IoU + generalization, NOT numerical k match
+%   - References forward to Section 3.4 (α-coupling) and 3.5 (trade-offs)
+% ============================================================
+
+\subsection{Joint Per-Particle Parameter Calibration}
+\label{sec:sysid-framework}
+
+The solver of Algorithm~\ref{alg:ssa-jacobi} is a differentiable forward
+map from parameters to observed deformation. We \emph{calibrate} these
+parameters from observation rather than identifying physical material
+constants: the learned values represent per-particle settings that,
+together with our forward simulator, reproduce the observed trajectory.
+This framing is consistent with Liang~\cite{liang2023}, whose constraint
+weights $k$ are similarly PBD parameters rather than material moduli.
+
+\paragraph{Parameter partition.}
+We partition parameters into per-particle calibration variables and
+frozen global hyperparameters:
+\begin{equation}
+  \underbrace{(\mathbf{k}_{pp},\boldsymbol{\tau}_{pp})}_{\text{calibrated}} \in \mathbb{R}^N \times \mathbb{R}^N,
+  \qquad
+  \underbrace{(\alpha_{\min},\,s,\,\tau_{\mathrm{global}})}_{\text{frozen}} \in \mathbb{R}^3.
+  \label{eq:param-partition}
+\end{equation}
+Here $\mathbf{k}_{pp}$ is the per-particle shape-matching weight (a PBD
+relaxation rate; see~\S\ref{sec:design_tradeoff} for physical interpretation)
+and $\boldsymbol{\tau}_{pp}$ is the per-particle aspiration threshold of
+the soft-removal sigmoid~(\ref{eq:soft-removal}). The geometric P(F)
+sharpness $\alpha_{\min}$ and the alive-sigmoid sharpness $s$ are
+calibrated once globally and held fixed during per-particle recovery, as
+their joint identifiability with the spatial fields is weak under our
+cube-and-knife setup. The global threshold $\tau_{\mathrm{global}}$
+serves only as a numeric fallback when the per-particle path is disabled.
+
+\paragraph{Sigmoid-bounded parameterization.}
+Direct optimization of $\mathbf{k}_{pp}, \boldsymbol{\tau}_{pp}$ as
+unconstrained tensors empirically diverges at the steeper sigmoid
+operating points required for crisp removal ($s \approx 100$). Following
+Liang~\cite{liang2023}, we reparameterize via sigmoid wrap. For each
+field $\mathbf{x}_{pp} \in \{\mathbf{k}_{pp},\boldsymbol{\tau}_{pp}\}$
+with prescribed bounds $[l_x, u_x]$, we optimize an auxiliary
+unconstrained variable $\mathbf{z}_x \in \mathbb{R}^N$ and recover
+$\mathbf{x}_{pp}$ at every forward call:
+\begin{equation}
+  \mathbf{x}_{pp,i} = l_x + (u_x - l_x)\,\sigma(z_{x,i}).
+  \label{eq:sigmoid-bound}
+\end{equation}
+This bounds $\mathbf{x}_{pp}$ smoothly without clipping, providing
+saturation-induced soft gradient clipping near the bounds, and admits
+significantly larger Adam step sizes than the raw-tensor parameterization.
+
+\paragraph{Outer optimization loop.}
+Given an observed sequence $\{\mathbf{z}_t\}_{t=1}^{T}$ (per-particle
+positions and alive scalars from a synthetic ground-truth simulation, or
+in future work, point-cloud and force observations from a phantom), we
+minimize
+\begin{equation}
+  \mathcal{L}_{\mathrm{total}} \;=\; \mathcal{L}_{\mathrm{gap}}
+  + \lambda_{\mathrm{smooth}}\,\mathcal{L}_{\mathrm{smooth}},
+  \label{eq:outer-loss}
+\end{equation}
+where $\mathcal{L}_{\mathrm{gap}} = \|\Delta_{\mathbf{x}}^{*}\|^2 +
+\|\Delta_{\mathbf{d}}^{*}\|^2$ is the inner residual mapping
+norm~(\ref{eq:residual-mapping-ours}; see paragraph below) and
+$\mathcal{L}_{\mathrm{smooth}} = \sum_{(i,j)\in\mathcal{E}}|x_i - x_j|$
+is the edge-graph spatial smoothness regularizer of
+Liang~\cite{liang2023}~Eq.~9. Adam updates the two auxiliary fields
+$(\mathbf{z}_k, \mathbf{z}_\tau)$ with independent learning rates,
+reflecting the different gradient scales of the stiffness and threshold
+paths through the forward sim.
+
+\paragraph{Inner residual mapping (Liang-aligned).}
+At each frame $t$ we solve a small geometric residual mapping
+inspired by Liang~\cite{liang2023}~Eq.~6:
+\begin{equation}
+  (\Delta_{\mathbf{x}}^{*},\Delta_{\mathbf{d}}^{*})
+    \;=\; \mathop{\mathrm{arg\,min}}_{\Delta_{\mathbf{x}},\Delta_{\mathbf{d}}}
+      \;\mathcal{L}_{\mathrm{pos}} + \lambda_{\mathrm{cav}}\mathcal{L}_{\mathrm{cav}}
+      + \lambda_E \mathcal{L}_E,
+  \label{eq:residual-mapping-ours}
+\end{equation}
+where $\mathcal{L}_{\mathrm{pos}}$ aligns corrected positions to
+observation, $\mathcal{L}_{\mathrm{cav}}$ matches the alive-scalar field
+via the soft-removal sigmoid, and $\mathcal{L}_E$ is the constraint
+energy. The cavity term contains the sigmoid in the alive-scalar
+expression, which structurally exposes a potential ``fake gradient''
+path: the inner sigmoid uses $(s,\tau)$, and if those parameters were
+shared autograd nodes with the outer $\boldsymbol{\tau}_{pp}$ field, the
+outer optimization could see a self-consistency signal that does not
+correspond to true physical sys-ID (\emph{cf.}~Liang's $k_c'$ separation
+argument, \S\ref{sec:design_tradeoff}).
+
+We sever this path with a \texttt{.item()} detach pattern: the inner
+loop reads $s$ and $\tau$ as scalar Python floats by calling
+\texttt{.item()} on the outer tensors, preserving the numerical value
+(so the inner residual mapping is consistent with the outer obs
+generator) but breaking the autograd link. The outer
+$\boldsymbol{\tau}_{pp}$ field consequently receives gradient only
+through the forward simulation, not through the inner formula. This
+detach pattern is universally safe regardless of which subset of $\theta$
+is in the outer optimizer, replacing the alternative (using fixed
+inner constants $s', \tau'$ disjoint from outer values, which introduces
+a model mismatch at the inner-outer boundary).
+
+\paragraph{Mode C state injection across frames.}
+Following Liang~\cite{liang2023}~Algorithm~1~line~16, the per-frame
+residuals are injected into the simulation state before the next
+forward call:
+\begin{align}
+  \mathbf{p}_i &\leftarrow \mathbf{p}_i + (\Delta_{\mathbf{x}}^{*})_i, \notag\\
+  d_i          &\leftarrow \max(d_i + (\Delta_{\mathbf{d}}^{*})_i,\,0), \\
+  \alpha_i     &\leftarrow \sigma\!\big(-s\cdot(d_i - \tau_{pp,i})\big). \notag
+  \label{eq:mode-c-inject}
+\end{align}
+This online state update bakes each residual into the evolving
+trajectory, distinguishing our calibration regime from offline trajectory
+optimization that would discard the corrections. The injected $\alpha$
+uses the current per-particle $\boldsymbol{\tau}_{pp}$ (detached to a
+numpy array), maintaining consistency with the forward solver's own
+alive-scalar computation.
+
+\paragraph{Validation paradigm.}
+Because the calibrated $\mathbf{k}_{pp}$ is a PBD relaxation rate rather
+than a material modulus (\S\ref{sec:design_tradeoff}), we validate via
+three complementary, paradigm-appropriate criteria rather than numerical
+material-constant comparison:
+
+\begin{enumerate}[label=(\alph*),leftmargin=*,noitemsep,topsep=0.2em]
+\item \emph{Spatial rank ordering.} For phantoms with a known-location
+  embedded inclusion (3D-printed reference), we verify that the
+  recovered field is correctly ordered:
+  $\overline{k}_{pp}^{\,\mathrm{incl}} > \overline{k}_{pp}^{\,\mathrm{bg}}$,
+  consistent with the inclusion being mechanically stiffer than the
+  background phantom material.
+\item \emph{Spatial IoU.} The top-$|S|$ particles by recovered $k_{pp}$
+  overlap with the geometric ground-truth inclusion mask $S$:
+  $\mathrm{IoU}(\mathrm{top}_{|S|}(\mathbf{k}_{pp}), S) > \tau_{\mathrm{IoU}}$.
+\item \emph{Cross-trajectory generalization.} Calibrating on one knife
+  trajectory and predicting deformation on a held-out trajectory; sim
+  prediction accuracy on the held-out trajectory is the calibration's
+  test of having captured spatial material structure rather than
+  trajectory-specific overfit.
+\end{enumerate}
+
+A numerical mapping between $\mathbf{k}_{pp}$ and a real Young's modulus
+in physical units would require a separate forward identifiability study
+across calibrated specimens; we deem this out of scope and discuss it
+as future work in~\S\ref{sec:discussion}.
+
+\paragraph{Friction and damping.}
+Friction $\mu$ and damping $\beta$ fall outside the calibration scope,
+because their identifiability requires nonzero particle velocity that
+neither a quasi-static loading nor a single-pass cut provides reliably.
+We adopt literature values from
+Misra~\textit{et~al.}~\cite{misra2010} and
+Mackle~\textit{et~al.}~\cite{mackle2020}, following the same protocol as
+DiSECt~\cite{heiden2021disect} and Kolawole's cardiac inverse
+FEM~\cite{kolawole2023}. Joint calibration of $\mu, \beta$ together with
+$(\mathbf{k}_{pp},\boldsymbol{\tau}_{pp})$ from time-series force signals
+is reserved for future work once F/T sensor data is available
+(see~\S\ref{sec:phantom-experiments}).
+
+The remaining ingredients of the calibration pipeline---the
+$\alpha$-coupling principle that eliminates transition-zone artifacts
+and the design trade-offs against constraint-based residual mapping
+frameworks---are detailed in~\S\ref{sec:alpha_coupling}
+and~\S\ref{sec:design_tradeoff} respectively. Empirical recovery
+behavior of $\mathbf{k}_{pp}$ and $\boldsymbol{\tau}_{pp}$ in synthetic
+inclusion experiments, and the corresponding spatial-rank IoU metrics,
+are reported in~\S\ref{sec:sysid-synth}.
+
+
+\addtolength{\textheight}{-12cm}   % This command serves to balance the column lengths
+                                  % on the last page of the document manually. It shortens
+                                  % the textheight of the last page by a suitable amount.
+                                  % This command does not take effect until the next page
+                                  % so it should come on the page before the last. Make
+                                  % sure that you do not shorten the textheight too much.
+
+
+
+
+
+\end{document}
