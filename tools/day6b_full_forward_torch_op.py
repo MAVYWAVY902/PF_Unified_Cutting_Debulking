@@ -47,7 +47,8 @@ from tools.day2_solver_wrapper import (  # noqa: E402
 # Helper: set solver theta from torch tensor (wp.arrays the solver retains)
 # ---------------------------------------------------------------------------
 
-def make_theta_wp_arrays(theta_torch, knife_radius, stiff_pp_torch=None):
+def make_theta_wp_arrays(theta_torch, knife_radius, stiff_pp_torch=None,
+                            tau_pp_torch=None):
     """Build the wp.array dict expected by solver.set_theta_wp().
 
     theta_torch: (3,) — (α_min, sharpness, threshold)
@@ -56,9 +57,12 @@ def make_theta_wp_arrays(theta_torch, knife_radius, stiff_pp_torch=None):
     stiff_pp_torch: (N,) torch tensor, optional [Stage A 2026-05-24]
                   When provided, overrides theta_torch[3] (if any) and dispatches
                   to per-particle stiffness kernel in solver.
+    tau_pp_torch:  (N,) torch tensor, optional [Stage E 2026-05-25]
+                  When provided, overrides theta_torch[2] and dispatches to
+                  per-particle τ kernel in solver.
 
-    Returns dict of wp.array, where stiffness is shape (1,) or (N,) depending on
-    whether per-particle stiff is provided.
+    Returns dict of wp.array, where stiffness/threshold shape is (1,) or (N,)
+    depending on per-particle vs global.
     """
     theta_torch = theta_torch.contiguous()
     n = theta_torch.shape[0]
@@ -68,13 +72,20 @@ def make_theta_wp_arrays(theta_torch, knife_radius, stiff_pp_torch=None):
                                   requires_grad=True),
         sharpness=wp.from_torch(theta_torch[1:2].contiguous(),
                                   requires_grad=True),
-        threshold=wp.from_torch(theta_torch[2:3].contiguous(),
-                                  requires_grad=True),
         knife_radius=wp.array([float(knife_radius)], dtype=wp.float32,
                                device="cuda:0", requires_grad=False),
     )
+    # threshold: scalar (1,) by default; (N,) if per-particle tau provided
+    if tau_pp_torch is not None:
+        assert tau_pp_torch.dim() == 1, (
+            f"tau_pp_torch must be 1D (N,), got shape {tau_pp_torch.shape}")
+        d["threshold"] = wp.from_torch(tau_pp_torch.contiguous(),
+                                         requires_grad=True)
+    else:
+        d["threshold"] = wp.from_torch(theta_torch[2:3].contiguous(),
+                                         requires_grad=True)
+    # stiffness: same dispatch pattern as before
     if stiff_pp_torch is not None:
-        # Per-particle stiffness — takes precedence over scalar
         assert stiff_pp_torch.dim() == 1, (
             f"stiff_pp_torch must be 1D (N,), got shape {stiff_pp_torch.shape}")
         d["stiffness"] = wp.from_torch(stiff_pp_torch.contiguous(),
@@ -111,14 +122,17 @@ class WarpFullForwardOp(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, theta_torch, solver, state_in_dict, knife_pos_np, knife_radius,
-                stiff_pp_torch=None):
+                stiff_pp_torch=None, tau_pp_torch=None):
         # Build wp.array theta with grad tracking
         # theta_torch shape: (3,) → (α, sharp, τ) or (4,) → (α, sharp, τ, stiffness)
         # stiff_pp_torch: optional (N,) per-particle stiffness override [Stage A]
+        # tau_pp_torch:   optional (N,) per-particle τ override [Stage E 2026-05-25]
         ctx.theta_n = theta_torch.shape[0]
         ctx.has_stiff_pp = stiff_pp_torch is not None
+        ctx.has_tau_pp = tau_pp_torch is not None
         theta_wp_dict = make_theta_wp_arrays(theta_torch, knife_radius,
-                                                stiff_pp_torch=stiff_pp_torch)
+                                                stiff_pp_torch=stiff_pp_torch,
+                                                tau_pp_torch=tau_pp_torch)
         solver.set_theta_wp(theta_wp_dict)
 
         # Load state into solver (numpy/torch → wp.arrays)
@@ -182,7 +196,18 @@ class WarpFullForwardOp(torch.autograd.Function):
         # Read back gradients on global theta dims
         ga = float(ctx.theta_wp_dict["alpha_min"].grad.numpy()[0])
         gs = float(ctx.theta_wp_dict["sharpness"].grad.numpy()[0])
-        gt = float(ctx.theta_wp_dict["threshold"].grad.numpy()[0])
+
+        # Threshold gradient — depends on threshold shape
+        # Stage E: if per-particle τ, threshold grad is (N,) → return as grad_tau_pp;
+        #          pad theta[2] grad with 0
+        grad_tau_pp = None
+        if ctx.has_tau_pp:
+            tau_grad_wp = ctx.theta_wp_dict["threshold"].grad
+            grad_tau_pp = torch.from_numpy(tau_grad_wp.numpy().copy()).to(
+                grad_alpha_torch.device)
+            gt = 0.0  # theta[2] not directly used; gradient went to tau_pp
+        else:
+            gt = float(ctx.theta_wp_dict["threshold"].grad.numpy()[0])
         grad_list = [ga, gs, gt]
 
         # Stiffness gradient — depends on stiffness shape
@@ -209,8 +234,8 @@ class WarpFullForwardOp(torch.autograd.Function):
 
         grad_theta = torch.tensor(grad_list, dtype=torch.float32,
                                     device=grad_alpha_torch.device)
-        # Return: (grad_theta, None×4 for non-grad inputs, grad_stiff_pp)
-        return grad_theta, None, None, None, None, grad_stiff_pp
+        # Return: (grad_theta, None×4 for non-grad inputs, grad_stiff_pp, grad_tau_pp)
+        return grad_theta, None, None, None, None, grad_stiff_pp, grad_tau_pp
 
 
 # ---------------------------------------------------------------------------

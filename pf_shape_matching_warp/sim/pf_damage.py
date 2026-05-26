@@ -502,6 +502,48 @@ def update_soft_removal_kernel_ssa_param_arr_cusa(
     alpha_next[i] = wp.min(alpha_proposed, alpha_prev[i])
 
 
+# Stage E (2026-05-25): per-particle τ variant of CUSA kernel.
+# threshold_arr is now wp.array(N,) — each particle has its own fracture toughness.
+# Mirrors Stage A's per-particle stiffness pattern (apply_kernel_ssa_param_arr_pp).
+# sharpness still global (kept as wp.array(1,)).
+@wp.kernel
+def update_soft_removal_kernel_ssa_param_arr_pp_tau_cusa(
+    damage: wp.array(dtype=wp.float32),
+    alpha_prev: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    pos: wp.array(dtype=wp.vec3),
+    knife_pos: wp.array(dtype=wp.vec3),
+    knife_radius_arr: wp.array(dtype=wp.float32),
+    threshold_per_particle: wp.array(dtype=wp.float32),  # shape (N,) — per-particle τ
+    sharpness_arr: wp.array(dtype=wp.float32),           # shape (1,) — global
+    alpha_next: wp.array(dtype=wp.float32),
+):
+    """Per-particle τ CUSA kernel.
+
+    α_i = σ(-s · (damage_i - τ_i))
+    Each particle i has its own threshold τ_i = threshold_per_particle[i].
+    Same persistence (wp.min) as global-τ CUSA kernel.
+
+    Use cases:
+       - sys-ID per-particle toughness field (heterogeneous tissue)
+       - tumor (low τ, brittle) vs background (high τ, tough)
+    """
+    i = wp.tid()
+    if fixed[i] == 1:
+        alpha_next[i] = alpha_prev[i]
+        return
+
+    threshold = threshold_per_particle[i]   # per-particle τ
+    sharpness = sharpness_arr[0]             # global
+
+    d = damage[i]
+    exp_arg = wp.clamp(sharpness * (d - threshold), -50.0, 50.0)
+    alpha_proposed = 1.0 / (1.0 + wp.exp(exp_arg))
+
+    # Persistence (same as global-τ kernel).
+    alpha_next[i] = wp.min(alpha_proposed, alpha_prev[i])
+
+
 # ============== Batched Edge Damage (per-env knife_pos) ==============
 
 @wp.kernel

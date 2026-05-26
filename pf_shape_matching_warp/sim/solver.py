@@ -53,6 +53,7 @@ from .pf_damage import (
     update_edge_damage_kernel_ssa_param_arr,
     update_soft_removal_kernel_ssa_param_arr,
     update_soft_removal_kernel_ssa_param_arr_cusa,
+    update_soft_removal_kernel_ssa_param_arr_pp_tau_cusa,
 )
 
 
@@ -796,20 +797,42 @@ class ShapeMatchingSolver:
                 # + persistence) when self.use_cusa_aspiration=True.
                 if self.theta_wp is not None:
                     if self.use_cusa_aspiration and "knife_radius" in self.theta_wp:
-                        wp.launch(
-                            update_soft_removal_kernel_ssa_param_arr_cusa,
-                            dim=N,
-                            inputs=[
-                                pd_next, alpha_prev, self.p["fixed"],
-                                self.p["pred_pos"],
-                                self.knife_pos,
-                                self.theta_wp["knife_radius"],
-                                self.theta_wp["threshold"],
-                                self.theta_wp["sharpness"],
-                                alpha_next,
-                            ],
-                            device=self.device,
-                        )
+                        # Stage E (2026-05-25): dispatch based on threshold shape.
+                        # shape (1,)  → global τ (original CUSA kernel)
+                        # shape (N,)  → per-particle τ (new pp_tau kernel)
+                        thr_shape = self.theta_wp["threshold"].shape[0]
+                        if thr_shape == N:
+                            # Per-particle τ path
+                            wp.launch(
+                                update_soft_removal_kernel_ssa_param_arr_pp_tau_cusa,
+                                dim=N,
+                                inputs=[
+                                    pd_next, alpha_prev, self.p["fixed"],
+                                    self.p["pred_pos"],
+                                    self.knife_pos,
+                                    self.theta_wp["knife_radius"],
+                                    self.theta_wp["threshold"],  # (N,)
+                                    self.theta_wp["sharpness"],
+                                    alpha_next,
+                                ],
+                                device=self.device,
+                            )
+                        else:
+                            # Global τ path (original)
+                            wp.launch(
+                                update_soft_removal_kernel_ssa_param_arr_cusa,
+                                dim=N,
+                                inputs=[
+                                    pd_next, alpha_prev, self.p["fixed"],
+                                    self.p["pred_pos"],
+                                    self.knife_pos,
+                                    self.theta_wp["knife_radius"],
+                                    self.theta_wp["threshold"],  # (1,)
+                                    self.theta_wp["sharpness"],
+                                    alpha_next,
+                                ],
+                                device=self.device,
+                            )
                     else:
                         wp.launch(
                             update_soft_removal_kernel_ssa_param_arr,
