@@ -1,13 +1,27 @@
 % ============================================================
 % Section 3.4 — α-Coupling Principle for Consistent P(F) Physics
-% Target: ~0.6 page of 2-column IEEE conference format
-% Status: 1st DRAFT 2026-05-25 (after CUSA fix + smoke test verification:
-%         inside-mean recovery 2.0% → 0.75%, flyers 305 → 0).
+% + Section 3.5 — Design trade-offs vs Liang's constraint-based PBD
+%
+% Target: ~1.0 page of 2-column IEEE conference format (was 0.6, expanded)
+% Status: 2nd DRAFT 2026-05-25 (3.5 added after technical review identified
+%         4 framing issues in pipeline comparison)
 % Key contribution: extends Liang/DiSECt soft-removal by coupling α into
-%         predict-step velocity damping, not just cluster shape-matching.
-% TODO before submit: (1) run ablation matrix (4 configs); (2) attach
-%         Fig.~\ref{fig:zombie} still frames from config_a_vs_b_animation.gif;
-%         (3) re-verify FD parity with α-coupled predict.
+%         predict-step velocity damping. Plus per-particle τ field (Stage E)
+%         and honest trade-off documentation vs constraint-based PBD.
+%
+% Edits 2026-05-25 (post technical review):
+%   - Added Sec 3.5 with 4 paragraphs: no per-constraint layer, k physical
+%     interpretation as relaxation rate, inner-loop trade-off (λ_E=0 means
+%     no Liang E equivalent), per-particle τ extension.
+%   - Acknowledges shape-matching paradigm is TRADE-OFF, not strict improvement.
+%   - Frames stiff_pp as "PBD relaxation rate" rather than material stiffness.
+%   - Documents phantom-readiness limitation (sub-surface inference under occlusion).
+%
+% TODO before submit:
+%   (1) Ablation matrix (4 configs)
+%   (2) Fig.~\ref{fig:zombie} still frames from config_a_vs_b_animation.gif
+%   (3) Re-verify FD parity with α-coupled predict
+%   (4) Forward-only identifiability study to calibrate k_i to material modulus
 % ============================================================
 
 \subsection{Consistent \texorpdfstring{$\alpha$}{α}-Coupling Across the PBD Pipeline}
@@ -95,6 +109,96 @@ algorithms to the continuous P(F) regime while preserving end-to-end
 gradient flow for system identification. Section~\ref{sec:ablation}
 quantifies the importance of each component (predict-coupling, persistence)
 via ablation.
+
+% ============================================================
+% Section 3.5 — Design trade-offs vs Liang's constraint-based PBD
+% Added 2026-05-25 after technical review pointed out 4 framing issues
+% in the prior pipeline comparison. Acknowledges that our Müller
+% shape-matching design is a TRADE-OFF, not a strict improvement.
+% ============================================================
+
+\subsection{Design Trade-offs vs Constraint-Based Residual Mapping}
+\label{sec:design_tradeoff}
+
+Our pipeline departs from Liang~\cite{liang2023} in PBD substrate choice:
+Liang uses XPBD with distance/volume constraints~\cite{macklin2016}, while
+we use M\"uller shape-matching~\cite{muller2005}. This choice has three
+structural consequences that we acknowledge honestly to avoid overclaiming.
+
+\paragraph{No per-constraint stiffness layer.}
+In constraint-based PBD, per-particle stiffness $k$ is aggregated to
+per-constraint stiffness via averaging,
+$k_{c,i} = (1/|Q_i|)\sum_{q \in Q_i} k^q$, which is then consumed by the
+projection step. Our shape-matching substrate skips this layer: per-particle
+$k_i$ is applied directly in the apply step,
+$\text{correction}_i = k_i \cdot (1 - 0.95 \cdot d_i) \cdot \delta_i$,
+where $\delta_i$ is the cluster-averaged shape-matching delta.
+This shortens the gradient chain by one Jacobian but means our $k_i$
+does not have the per-constraint physical interpretation that $k_c$
+has in Liang's formulation.
+
+\paragraph{Physical interpretation of $k_i$.}
+The cluster shape-matching goal positions
+$g_i = R(q_i - \bar{q}) + \bar{c}$ depend on the alive-weighted centroid
+$\bar{c}$ and the polar-decomposed rotation $R$ from $A_{pq}$. Neither
+$R$ nor $\bar{c}$ depend on $k_i$: only the alive scalar $\alpha$
+weights the centroid and covariance computations. Consequently $k_i$
+functions as a per-particle \emph{relaxation rate} (controlling how much
+of the cluster-suggested correction each particle accepts), rather than
+as material Young's modulus. Recovered $k_i$ values must be interpreted
+as ``per-particle PBD relaxation rates that, when used in our forward
+simulator, reproduce the observed deformation trajectory'' rather than
+as direct estimates of tissue mechanical stiffness. Calibration of $k_i$
+scale to real material parameters requires a separate forward-only
+identifiability study against known specimens (out of scope here).
+
+\paragraph{Inner loop without geometric energy.}
+Liang's inner residual mapping uses both Chamfer distance $D$ and a
+constraint energy $E(x_t + \Delta_t) = \tfrac{1}{2} C^\top \mathrm{diag}(k'_c) C$
+(their Eq.~5), where $k'_c$ is a uniform user-defined constant. The
+energy term provides geometric prior for sub-surface particles that
+have no direct observation (under occluded RGB-D capture). Crucially,
+$k'_c$ must be decoupled from the outer-loop variable $k$ to avoid
+a degenerate feedback where shrinking $k$ also shrinks $k'_c$, weakening
+the inner constraint and producing a self-confirming low residual.
+
+Our inner loop omits the geometric energy term ($\lambda_E = 0$ in
+production), retaining only the observation-alignment terms
+$L_\text{pos} + L_\text{cav}$. This avoids Liang's degenerate feedback
+structurally (since $k_i$ appears in neither inner loss term through a
+path that creates fake gradient), but at the cost of geometric prior
+for sub-surface inference. Sub-surface particle behavior in our pipeline
+is constrained implicitly by cluster shape-matching's SVD-based rotation
+$R$, which provides structural rigidity coupling even without an explicit
+energy term.
+
+This design is appropriate for dense-observation synthetic setups
+(Section~\ref{sec:results}) but is a known limitation for high-occlusion
+phantom data. Future work re-enables $L_E$ with a $k'_c$-analog constant
+(detached from outer $k$ via the \texttt{.item()} pattern used elsewhere
+in our pipeline) when sub-surface occlusion exceeds the threshold at
+which cluster-based rigidity alone provides sufficient internal constraint.
+
+\paragraph{Per-particle $\tau$ field (Stage E).}
+Our M\"uller-based substrate enables an extension Liang does not have:
+the threshold parameter $\tau$ (fracture toughness) becomes per-particle
+in the soft removal kernel, optimized jointly with per-particle stiffness.
+This yields two co-recovered material fields $(k, \tau) \in
+\mathbb{R}^N \times \mathbb{R}^N$ rather than just one, modelling
+heterogeneous tissue where tumor regions differ from background in both
+stiffness and brittleness. The cost is a doubled outer optimization
+dimension, partially mitigated by independent sigmoid bounding on each
+field.
+
+\paragraph{Summary of trade-offs.}
+Our design is appropriate when (a) observations are dense (per-particle
+position rather than surface-only point cloud), (b) recovery of
+spatial heterogeneity in both stiffness and toughness is desired, and
+(c) the computational benefit of skipping per-constraint aggregation
+is meaningful. Liang's constraint-based design is more appropriate when
+sub-surface inference under occlusion is critical and only one
+material field needs recovery. We do not claim a strict improvement;
+the two designs target overlapping but distinct application regimes.
 
 % ----------------------------------------------------------------------
 % Ablation table (place in Section 4.3 / sec:ablation):
