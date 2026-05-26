@@ -67,7 +67,7 @@ TAU_INNER       = 0.5    # user-defined; synth=truth, phantom=init-guess
 
 
 def gd_inner_loop_stable(
-    pos_pred, dv_pred, pos_target, alpha_target, theta,
+    pos_pred, dv_pred, pos_target, alpha_target, theta,  # noqa: ARG001 (theta DEPRECATED)
     edges_a, edges_b, edges_rest,
     n_iter=30, lr_pos=5e-3, lr_dv_factor=1.0,
     lambda_cav=1.0, lambda_E=0.0,
@@ -76,15 +76,34 @@ def gd_inner_loop_stable(
 ):
     """GD inner loop with Hessian-aware adaptive lr_dv (stable across all s).
 
-    lr_dv = lr_dv_factor / s²   (s is now CONSTANT, no .detach() needed)
-       For stable convergence: lr × Hessian < 2
+    Args:
+        pos_pred, dv_pred       : Current sim state (autograd).
+        pos_target, alpha_target: Observation targets (no grad).
+        theta                   : DEPRECATED since Day 3c (2026-05-24). Function
+                                  IGNORES this argument. Kept in 5th positional
+                                  slot for backward compat with 17+ legacy callers.
+                                  Use s_inner / tau_inner kwargs instead.
+                                  Can pass None or any tensor — value discarded.
+        edges_a, edges_b, edges_rest: Edge topology + rest lengths (for L_E).
+        n_iter, lr_pos, lr_dv_factor : GD hyperparams.
+        lambda_cav, lambda_E         : Loss weights.
+        s_inner, tau_inner           : Inner sigmoid sharpness + threshold.
+                                       Pass as Python float (via .item() detach
+                                       from outer θ) to sever autograd path.
+                                       Defaults to SHARPNESS_INNER, TAU_INNER
+                                       module constants if None.
+        surface_idx             : Optional surface-particle mask (Test 1/2).
+
+    lr_dv = lr_dv_factor / s²   (s is now CONSTANT, no .detach() needed).
+       For stable convergence: lr × Hessian < 2.
        Hessian ≈ 2(s·σ_max')² ≤ s²/8, so lr < 16/s².
        lr_dv_factor=1.0 → lr·Hess ≤ 0.25, fast convergence in ~10-20 iter.
-
-    Day 3c: `theta` is kept in signature for backward compat but is no longer
-    used to source s, τ. Override SHARPNESS_INNER / TAU_INNER per-call via
-    s_inner / tau_inner kwargs (e.g., Gate 4 phantom-readiness test).
     """
+    # theta arg: DEPRECATED (Day 3c lock). Explicitly discard so reader knows
+    # it's ignored. New callers should pass None; legacy callers still pass
+    # theta_torch positionally — function ignores either way.
+    del theta  # noqa: F841
+
     N = pos_pred.shape[0]
     # Day 3c: inner uses CONSTANTS (Liang-style k_c' analog), not outer θ.
     s_val = float(SHARPNESS_INNER if s_inner is None else s_inner)
