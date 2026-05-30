@@ -12,94 +12,127 @@
 \label{sec:pf-cutting}
 
 % --- Block 1: high-level definition + edge-level instantiation justifications ---
-We define $P(F)$ as the differentiable probability that a topological
-feature $F$ remains intact under intruder geometry. Although the symbol
-$F$ may suggest a $2$-simplex (face) reading, we instantiate $F$ at the
-edge level ($1$-simplex) for two reasons. First, edges are the natural
-cutting unit for tetrahedral meshes: a knife body $I$ carries a
-$3$-dimensional volume that intersects each edge's local circumsphere
-with positive $3$-measure, yielding a continuous and well-defined
-gradient signal, whereas a face-level formulation would integrate over
-a $2$-dimensional surface with intersection regions one dimension lower
-and a correspondingly weaker signal. Second, edges are sufficient in the simplicial sense: face and tet
-existence reduce to products of edge probabilities. Let $F$ denote the
-event ``the feature is intact'', let $e$, $f$, and $T$ denote a single
-edge ($1$-simplex), face ($2$-simplex), and tet ($3$-simplex)
-respectively, and let $e \in f$ (resp. $e \in T$) range over the three
-(resp. six) edges bounding $f$ (resp. $T$). Treating the existence of
-a face or tet as the joint event ``all of its constituent edges are
-intact'', and assuming the conditional independence of those edge
-events given the intruder $I$, we obtain
+We define $P(F)$ as a differentiable score for the survival of a
+topological feature $F$ under intruder geometry. Although the symbol
+$F$ may suggest a $2$-simplex (face) reading, we adopt the edge level
+($1$-simplex) as the primitive representation because edge-level
+scores factorize naturally into face- and tet-level scores when
+needed, without separately tracking those higher-order variables. Let
+$F$ denote the event ``the feature is intact'', let $e$, $f$, and $T$
+denote a single edge, face, and tet respectively, and let $e \in f$
+(resp. $e \in T$) range over the bounding edges of $f$ (resp. $T$).
+Treating the survival of a face or tet as the joint event ``all of
+its constituent edges are intact'', and assuming the conditional
+independence of those edge events given the intruder $I$, we obtain
+the modeling approximation
 \begin{equation}
   P(F \mid f, I) \!=\! \prod_{e \in f}\!P(F \mid e, I),
   \quad
   P(F \mid T, I) \!=\! \prod_{e \in T}\!P(F \mid e, I).
   \label{eq:simplicial-product}
 \end{equation}
-Hence the edge-level $P(F)$ strictly subsumes its face- and tet-level
-counterparts, while the converse does not hold.
+The edge representation is therefore sufficient to induce face- and
+tet-level survival scores via this boundary-edge factorization,
+without explicitly maintaining separate higher-simplex cut variables.
 
 % --- Block 2: P(F) precise definition + properties ---
 We now make $P(F)$ precise. Consider a tetrahedral mesh
-$\mathcal{M} = (\mathcal{V}, \mathcal{E}, \mathcal{F}, \mathcal{T})$ with
-current vertex positions $\mathbf{p}: \mathcal{V} \to \mathbb{R}^3$, and
-an intruder $I = (\mathbf{c}_I, R_I)$---a rigid spherical body
-instantiated either as the knife during cutting or, at rest, as the
-nearest non-adjacent vertex of each edge (a proxy for natural mesh
-density). For an edge $e = (v_a, v_b)$ with midpoint
+$\mathcal{M} = (\mathcal{V}, \mathcal{E}, \mathcal{F}, \mathcal{T})$
+with current vertex positions $\mathbf{p}: \mathcal{V} \to \mathbb{R}^3$
+and an intruder $I = (\mathbf{c}_I, \rho_I)$ defined by its center
+$\mathbf{c}_I$ and radius $\rho_I \!\geq\! 0$. The intruder is
+instantiated either as the cutting tool (a sphere of physical radius
+$\rho_I \!>\! 0$) or, at mesh initialization, as the nearest
+non-adjacent vertex of each edge ($\rho_I \!=\! 0$, a point proxy
+that yields a mesh-density-aware baseline $P(F)_e^{\text{rest}}$).
+For an edge $e = (v_a, v_b)$ with midpoint
 $\mathbf{m}_e = \tfrac{1}{2}(\mathbf{p}_a + \mathbf{p}_b)$ and
 half-length $r_e = \tfrac{1}{2}\|\mathbf{p}_a - \mathbf{p}_b\|$, the
 signed distance $d$ between the edge's circumsphere
-$B(\mathbf{m}_e, r_e)$ and the intruder $B(\mathbf{c}_I, R_I)$ is
+$B(\mathbf{m}_e, r_e)$ and the intruder $B(\mathbf{c}_I, \rho_I)$ is
 \begin{equation}
-  d(e, I) \;=\; \|\mathbf{m}_e - \mathbf{c}_I\| - R_I - r_e ,
+  d(e, I) \;=\; \|\mathbf{m}_e - \mathbf{c}_I\| - \rho_I - r_e ,
   \label{eq:sdist}
 \end{equation}
 positive when the spheres are disjoint, zero at tangency, and negative
-under penetration. The differentiable existence probability is then
+under penetration. The Euclidean norm $\|\mathbf{m}_e - \mathbf{c}_I\|$
+is regularized as $\sqrt{\|\mathbf{m}_e - \mathbf{c}_I\|^2 + \varepsilon^2}$
+to remove its singularity at $\mathbf{m}_e \!=\! \mathbf{c}_I$. The differentiable existence probability is then
 \begin{equation}
   P(F \mid e, I)
-  \;=\; \sigma\!\left(k\,\frac{d(e, I)}{r_e}\right) ,
+  \;=\; \sigma\!\left(\kappa\,\frac{d(e, I)}{r_e}\right) ,
   \label{eq:pf}
 \end{equation}
-where $\sigma(x) = \frac{1}{1+e^{-x}}$ and $k > 0$ is a sharpness
-parameter. The dimensionless ratio $|d|/r_e$ is scale-invariant in the
-mesh, so $k$ carries a unit-free meaning. By sigmoid saturation,
-$P(F) \to 1$ when the intruder is far ($d \gg 0$), $P(F) \to 0$ under
-deep penetration ($d \ll 0$), and $P(F) = \tfrac{1}{2}$ at tangency.
-The construction is $C^\infty$ in vertex and intruder positions
-wherever $r_e > 0$; the only singularity at $r_e = 0$ is regularized
-in practice as
+where $\sigma(x) = \frac{1}{1+e^{-x}}$ and $\kappa > 0$ is a sharpness
+parameter (distinct from the bulk stiffness $k$ introduced in
+\S\ref{sec:sysid-framework}). The dimensionless ratio $|d|/r_e$ is
+scale-invariant in the mesh, so $\kappa$ carries a unit-free meaning.
+By sigmoid saturation, $P(F) \to 1$ when the intruder is far
+($d \gg 0$), $P(F) \to 0$ under deep penetration ($d \ll 0$), and
+$P(F) = \tfrac{1}{2}$ at tangency. The construction is $C^\infty$ in
+vertex and intruder positions wherever $r_e > 0$; the only singularity
+at $r_e = 0$ is regularized in practice as
 $r_e \!\leftarrow\! \sqrt{r_e^2 + \varepsilon^2}$ with
 $\varepsilon \!=\! 10^{-4}$, ensuring autograd compatibility throughout.
 
+The baseline $P(F)_e^{\text{rest}}$ used in (\ref{eq:edge-damage})
+below is obtained by evaluating (\ref{eq:pf}) once at mesh
+initialization with the point-intruder configuration, capturing each
+edge's circumsphere occupancy under natural mesh density. This
+1-simplex construction parallels the per-face minimum-ball score of
+DMesh++~\cite{son2025dmesh2}, restricted to local 1-ring neighbors
+for $O(\deg)$ cost per edge.
+
 % --- Block 3: damage chain (P(F) → δ_e → δ_v → α) ---
-$P(F)$ propagates to a per-vertex soft-removal mask $\alpha$ through
-three smooth maps. First, $P(F)$ accumulates into a per-edge damage
-state through a monotonic softplus update that encodes the physical
-irreversibility of cutting,
+$P(F)$ propagates to a per-vertex participation mask $\alpha$ through
+three smooth maps. First, $P(F)$ drives a per-edge damage state via a
+smooth approximation of the positive increment, encoding the physical
+irreversibility of cutting:
 \begin{equation}
   \delta_e^{\text{next}} \!=\! \delta_e^{\text{prev}} +
-    \mathrm{softplus}_{\!+}\!\left(1 \!-\! \frac{P(F)_e}{P(F)_e^{\text{rest}}}\right),
+    \mathrm{softplus}_{\!+}\!\left(T_e - \delta_e^{\text{prev}}\right),
+  \quad
+  T_e := \mathrm{softplus}_{\!+}\!\left(1 - \frac{P(F)_e}{P(F)_e^{\text{rest}}}\right),
   \label{eq:edge-damage}
 \end{equation}
 where $\mathrm{softplus}_{\!+}(x) \!=\! \tfrac{1}{k_s}\log(1 + e^{k_s x})$
-is a smooth approximation of $\max(x, 0)$ (with sharpness $k_s$) and
-$P(F)_e^{\text{rest}}$ is the rest-configuration value of $P(F)$ at
-edge $e$. Second, edge damages aggregate to per-vertex damages by
-summation over incident edges,
+smoothly approximates $\max(x, 0)$ (with sharpness $k_s$).
+The outer softplus is a differentiable proxy for the positive
+increment $[T_e - \delta_e^{\text{prev}}]_+$, so that
+$\delta_e^{\text{next}} \!\approx\! \max(\delta_e^{\text{prev}}, T_e)$
+while preserving monotonic accumulation. Because the smooth
+approximation carries a small positive tail
+($\mathrm{softplus}_{\!+}(0) \!=\! \log 2 / k_s$), $\delta_e$ may
+exhibit a slow upward drift even when $T_e \!<\! \delta_e^{\text{prev}}$;
+the drift rate is bounded by $\log 2 / k_s$ per substep and is
+negligible at the cutting horizons used in our experiments
+(\S\ref{sec:gradient-verify}).
+Second, per-edge damages aggregate to per-vertex damages by averaging
+over incident edges, under the same smooth clamp:
 \begin{equation}
   \delta_v^{\text{next}} \!=\! \delta_v^{\text{prev}} +
-    \sum_{e \ni v} \Delta_e,
+    \mathrm{softplus}_{\!+}\!\left(\bar{\delta}_e^{(v)} -
+       \delta_v^{\text{prev}}\right),
+  \quad
+  \bar{\delta}_e^{(v)} := \frac{1}{|E(v)|}
+      \sum_{e \in E(v)} \delta_e^{\text{next}},
   \label{eq:vertex-damage}
 \end{equation}
-where $\Delta_e$ is the increment in (\ref{eq:edge-damage}). Third,
-the vertex damage drives the sigmoid soft-removal mask
+where $E(v) = \{e \in \mathcal{E} : v \in e\}$ is the set of edges
+incident to $v$. The mean (rather than sum) aggregator ensures the
+threshold $\tau$ below has a structure-invariant meaning: interior
+vertices ($|E(v)| \!\sim\! 6$) and boundary vertices
+($|E(v)| \!\sim\! 2$) reach the cut regime under comparable per-edge
+damage. Third, the vertex damage drives the sigmoid participation
+mask
 \begin{equation}
   \alpha_v \!=\! \sigma\!\left(-s\,(\delta_v - \tau)\right) \in [0, 1],
   \label{eq:soft-removal}
 \end{equation}
-with sharpness $s$ and threshold $\tau$.
+with sharpness $s$ and threshold $\tau$. $\alpha_v \!=\! 1$ denotes
+full participation in the dynamics; $\alpha_v \!=\! 0$ denotes
+dynamic removal; intermediate values interpolate smoothly between the
+two.
 
 % --- Block 4: BRIDGE — w_i := α (the climax of the section) ---
 The two layers of the simulator---continuous topology
@@ -110,28 +143,42 @@ the single assignment
   w_i \;:=\; \alpha_{v_i}.
   \label{eq:bridge}
 \end{equation}
-Inserting (\ref{eq:bridge}) into the cluster solve of
-\S\ref{sec:pbd-substrate} routes the soft-removal mask straight into
-the per-vertex weight that
-(\ref{eq:centroid})--(\ref{eq:cluster-correction}) accept as input. A
-fully cut vertex ($\alpha_{v_i} \!=\! 0$) drops out of every
-overlapping cluster's centroid, covariance, and goal-pull
-simultaneously; an intact vertex ($\alpha_{v_i} \!=\! 1$) participates
-fully; intermediate values interpolate continuously between the two.
-Crucially, the mesh structure $\mathcal{M}$ itself never changes
-during cutting: no edges are removed and no clusters are disassembled,
-so the material remaining after a cut is encoded entirely in the
-continuous values of $\alpha$ rather than in the discrete combinatorics
-of $\mathcal{V}, \mathcal{E}, \mathcal{F}, \mathcal{T}$.
-Equivalently, a vertex with $\alpha_v \!=\! 0$ retains its
-data-structural presence in $\mathcal{M}$---index, position, and
-connectivity references untouched---but becomes dynamically inactive:
-no force acts on it, and it contributes nothing to any cluster
-constraint.
-Equation (\ref{eq:bridge}) is the only place the topology and physics
-layers touch, and the only line through which the discrete operation
-of cutting is transposed into a smooth modulation of an existing
-shape-matching interface. Algorithm~\ref{alg:ssa-jacobi} summarises
+The topology and dynamics layers are coupled only through the
+participation weight (\ref{eq:bridge}). The same $\alpha_{v_i}$
+enters the centroid (\ref{eq:centroid}), the cross-covariance
+(\ref{eq:covariance}), and the per-particle correction
+(\ref{eq:cluster-correction}) with no auxiliary thresholds or discrete
+switches: $\alpha_{v_i} \!=\! 1$ recovers the standard shape-matching
+solve; $\alpha_{v_i} \!=\! 0$ removes that vertex's contribution to
+every overlapping cluster simultaneously; intermediate values provide
+a differentiable relaxation of discrete weight-flipping.
+
+\textbf{Scope of ``continuous topology change.''} Cutting never
+modifies $\mathcal{V}, \mathcal{E}, \mathcal{F}, \mathcal{T}$ or the
+overlapping-cluster construction, both fixed at initialization;
+material loss is encoded entirely in the continuous $\alpha$ field.
+This is an \emph{attenuation-based} approximation of topology change
+rather than a kinematic separation: when a cut traverses a cluster,
+the cut-line vertices have $\alpha \!\to\! 0$ and their reduced
+participation softens the cluster's effective coupling, but two
+$\alpha \!\approx\! 1$ subregions of the same cluster on opposite
+sides of the cut remain bound by a single $R_C, \boldsymbol{\mu}_C$
+and cannot detach kinematically. Our experimental cluster scale
+(BFS-2 neighborhood, mean $\sim\!30$ vertices, mean edge length
+$\sim\!1.5$\,mm) is therefore chosen finer than typical cut depths
+($\geq\!5$\,mm) so that most cuts span multiple clusters, with
+$\alpha$-driven softening dominating within each cluster and effective
+decoupling occurring at cluster boundaries; we report empirical
+cavity-formation behaviour in \S\ref{sec:sysid-synth}. Genuine
+fragment-detachment with independent rigid-body dynamics for severed
+chunks is outside the scope of this formulation, which targets
+sys-ID against quasi-static cavity geometry rather than transient
+fragment trajectories.
+
+This design preserves the fixed computation graph required by
+reverse-mode autodiff while providing a continuously parameterized
+participation mask that supports gradient-based identification of the
+parameters governing $\alpha$. Algorithm~\ref{alg:ssa-jacobi} summarises
 one substep of the integrated solver; Figure~\ref{fig:cluster-jacobi}
 illustrates it visually.
 
@@ -143,7 +190,8 @@ illustrates it visually.
 \Input{$\mathbf{p}^{\text{prev}}, \mathbf{v}^{\text{prev}},
        \alpha^{\text{prev}},
        \delta^{\text{e,prev}}, \delta^{\text{v,prev}},
-       \mathbf{c}_I,\, dt,\, K$}
+       (\mathbf{c}_I, \rho_I),\, dt,\, K;$\;
+       parameters $\kappa, s, \tau, k$ (softplus sharpness $k_s$ fixed)}
 \Output{$\mathbf{p}^{\text{next}}, \mathbf{v}^{\text{next}},
         \alpha^{\text{next}},
         \delta^{\text{e,next}}, \delta^{\text{v,next}}$}
@@ -152,19 +200,26 @@ $\mathbf{p}^{(0)} \leftarrow \mathbf{p}^{\text{prev}} + dt \cdot \mathbf{v}^{\te
 \mycmt{predictor step}\\
 
 \For{$e \in \mathcal{E}$ \KwSty{parallel}}{
-  $P(F)_e \leftarrow \sigma\!\left(k\,\frac{d(e, \mathbf{c}_I)}{r_e}\right)$
+  $P(F)_e \leftarrow \sigma\!\left(\kappa\,\frac{d(e, \mathbf{c}_I)}{r_e}\right)$
   \mycmt{Eq.~\ref{eq:pf}}\\
 
-  $\Delta^{\text{e}}_e \leftarrow
-   \mathrm{softplus}_{+}\!\left(1 - \frac{P(F)_e}{P(F)_e^{\text{rest}}}\right)$\\
+  $T_e \leftarrow
+   \mathrm{softplus}_{+}\!\left(1 - \tfrac{P(F)_e}{P(F)_e^{\text{rest}}}\right)$
+  \mycmt{smooth target damage}\\
+
+  $\delta^{\text{e,next}}_e \leftarrow \delta^{\text{e,prev}}_e +
+   \mathrm{softplus}_{+}\!\left(T_e - \delta^{\text{e,prev}}_e\right)$
+  \mycmt{Eq.~\ref{eq:edge-damage}, fresh buffer}\\
 }
 
-$\delta^{\text{e,next}} \leftarrow \delta^{\text{e,prev}} + \Delta^{\text{e}}$
-\mycmt{write to fresh buffer}\\
-
 \For{$v \in \mathcal{V}$ \KwSty{parallel}}{
-  $\delta^{\text{v,next}}_v \leftarrow
-   \delta^{\text{v,prev}}_v + \sum_{e \ni v} \Delta^{\text{e}}_e$\\
+  $\bar{\delta}^{(v)}_e \leftarrow
+   \tfrac{1}{|E(v)|}\sum_{e \in E(v)} \delta^{\text{e,next}}_e$
+  \mycmt{mean over incident edges}\\
+
+  $\delta^{\text{v,next}}_v \leftarrow \delta^{\text{v,prev}}_v +
+   \mathrm{softplus}_{+}\!\left(\bar{\delta}^{(v)}_e - \delta^{\text{v,prev}}_v\right)$
+  \mycmt{Eq.~\ref{eq:vertex-damage}}\\
 
   $\alpha^{\text{next}}_v \leftarrow
    \sigma\!\left(-s\,(\delta^{\text{v,next}}_v - \tau)\right)$\\
@@ -178,16 +233,19 @@ $\delta^{\text{e,next}} \leftarrow \delta^{\text{e,prev}} + \Delta^{\text{e}}$
     $\mu \leftarrow \frac{1}{\sum_{i \in C} w_i}\sum_{i \in C} w_i\,\mathbf{p}^{(c)}_i$\\
 
     $A \leftarrow \sum_{i \in C} w_i\,(\mathbf{p}^{(c)}_i - \mu)
-                  (\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}})^{\!\top}$\\
+                  (\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}})^{\!\top}
+                  + \varepsilon I$
+    \mycmt{$\varepsilon \!=\! 10^{-6}$ Tikhonov}\\
 
     $R \leftarrow \mathrm{polar}(A)$\\
 
-    $\Delta_i \leftarrow
+    $\Delta_i^{(C)} \leftarrow
      w_i\!\left(R\,(\bar{\mathbf{p}}_i - \bar{\boldsymbol{\mu}})
      + \mu - \mathbf{p}^{(c)}_i\right)$\\
   }
-  $\mathbf{p}^{(c+1)} \leftarrow \mathbf{p}^{(c)} + \mathrm{aggregate}(\Delta)$
-  \mycmt{Jacobi-style; fresh buffer}\\
+  $\mathbf{p}^{(c+1)}_i \leftarrow \mathbf{p}^{(c)}_i +
+   \dfrac{k}{|\mathcal{C}(i)|}\!\sum_{C \in \mathcal{C}(i)} \Delta_i^{(C)}$
+  \mycmt{apply with bulk stiffness $k$; mean over clusters containing $i$; fresh buffer}\\
 }
 
 $\mathbf{p}^{\text{next}} \leftarrow \mathbf{p}^{(K)},\;\;

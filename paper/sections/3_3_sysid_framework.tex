@@ -9,30 +9,64 @@
 \subsection{System Identification Framework}
 \label{sec:sysid-framework}
 
-% --- Paragraph 1: Loss design for sys-ID ---
+% --- Paragraph 1: Loss design per signal type ---
 System identification treats Algorithm~\ref{alg:ssa-jacobi} as a
 differentiable forward map
 $\theta \mapsto \mathbf{y}_{\text{sim}}(\theta)$ and uses Adam to fit
-measured signals $\mathbf{y}_{\text{real}}$. To avoid the long-horizon
-gradient bias that accumulates across many PBD
-substeps~\cite{antonova2022, suh2022}, each Adam step runs a single
-fresh forward substep from the rest configuration, and
-cutting-parameter losses compare only the final cavity geometry. The
-per-step loss is force-displacement MSE for elastic stiffness (in the
-spirit of Kolawole's volume-MSE inverse FEM~\cite{kolawole2023}, with
-displacement as the boundary input and force as the target), and a
-soft-IoU plus signed-distance match on the continuous $\alpha$ field
-(\ref{eq:soft-removal}) for cutting parameters.
+measured signals $\mathbf{y}_{\text{real}}$. We calibrate parameters
+sequentially in two stages with parameter-specific loss design.
+
+\textbf{Stage 1 (elastic, one-step).} For the bulk stiffness $k$,
+each Adam step uses a one-step loading experiment from the rest
+state: a blunt indenter is pushed into the mesh and the loss is the
+MSE between simulated and measured knife reaction force versus
+displacement, in the spirit of Kolawole's volume-MSE inverse
+FEM~\cite{kolawole2023} with displacement as the boundary input and
+force as the target. We emphasize that the recovered $k$ is the
+\emph{effective stiffness at our chosen $(K, dt)$}: shape-matching
+PBD's effective compliance depends on iteration count and substep
+size~\cite{macklin2016xpbd}, so $k$ should not be transferred to
+solver configurations with different $(K, dt)$ without
+re-calibration.
+
+\textbf{Stage 2 (cutting, trajectory replay).} For the cutting
+parameters---the $P(F)$ sharpness $\kappa$ (\ref{eq:pf}), the
+participation-mask sharpness $s$, and the damage threshold $\tau$
+(\ref{eq:soft-removal})---we hold $k$ fixed at the Stage-1 value and
+replay a prescribed knife trajectory from the rest configuration.
+The loss is the per-vertex consistency term
+$\mathcal{L} \!=\! \tfrac{1}{|\mathcal{V}|}\sum_v\big(\alpha_v -
+(1 - \phi_{\text{phantom}}(\mathbf{p}_v))\big)^2$,
+where $\phi_{\text{phantom}}: \mathbb{R}^3 \to [0,1]$ is a smooth
+cavity mask derived from the phantom's reconstructed signed-distance
+field. Endpoint-only supervision (loss evaluated only on the final
+cavity) avoids per-step accumulation but, unlike the Stage-1
+protocol, gradients still backpropagate through the full multi-substep
+trajectory. We accept this long-horizon backprop as an inherent cost
+of cutting calibration; in our experiments the horizon is short
+enough ($\leq\!10$ substeps per Adam step) that the
+bias-variance tradeoff identified by Suh~\textit{et~al.}~\cite{suh2022}
+remains acceptable.
+Two descent channels contribute: a direct
+$\partial\mathcal{L}/\partial\alpha_v$ path and an indirect
+$\partial\mathcal{L}/\partial\mathbf{p}_v$ path that propagates
+through the cluster solve via (\ref{eq:bridge}), exploiting the
+position dependence to constrain cutting parameters beyond pure mask
+matching. Because $\kappa$ and $s$ both control cavity-boundary
+sharpness through different sigmoids, their joint identifiability is
+not obvious from the loss alone; we report the empirical
+identifiability landscape (Hessian conditioning and pairwise
+parameter correlation) in \S\ref{sec:sysid-synth}.
 
 % --- Paragraph 2: 3-vs-2 decision matrix ---
-Three of our five physical parameters fall in this single-substep
-regime: bulk stiffness $k$, damage threshold $\alpha_{\min}$, and
-sharpness $s$. We verify in \S\ref{sec:sysid-synth} that Adam recovers
-all three to within a few percent on synthetic ground truth in under a
-minute. Friction and damping, by contrast, require non-zero particle
-velocity to develop signal and are therefore not single-substep
-identifiable; we adopt literature values ($\mu$ from
-Misra~\textit{et~al.}~\cite{misra2010}, $\beta$ from
-Mackle~\textit{et~al.}~\cite{mackle2020}), consistent with the
+Friction $\mu$ and damping $\beta$, by contrast, are not identifiable
+under either Stage-1 or Stage-2 protocols because their signal
+requires nonzero particle velocity. They instead require a dedicated
+stress-relaxation or free-vibration experiment with a time-series
+force loss; when such hardware is unavailable, we adopt literature
+values ($\mu$ from Misra~\textit{et~al.}~\cite{misra2010}, $\beta$
+from Mackle~\textit{et~al.}~\cite{mackle2020}), consistent with the
 convention in DiSECt~\cite{heiden2021disect} and the cardiac inverse
-FEM work of Kolawole~\cite{kolawole2023}.
+FEM work of Kolawole~\cite{kolawole2023}. Recovery accuracy and
+convergence behaviour for $k$, $\kappa$, $s$, and $\tau$ under the
+above protocols are evaluated in \S\ref{sec:sysid-synth}.
