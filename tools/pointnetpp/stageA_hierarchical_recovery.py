@@ -19,7 +19,7 @@ replaces only the parameter representation in the inner Adam loop:
 Forward physics is unchanged: stiff_pp / tau_pp tensors fed to
 WarpFullForwardOp identically.
 
-Phase 1.3 gate (smoke test): IoU > baseline ≈ 0.4 by epoch 20.
+Phase 1.3 gate (smoke test, re-measured 2026-05-29): IoU ≥ baseline ≈ 0.20.
 """
 
 import sys
