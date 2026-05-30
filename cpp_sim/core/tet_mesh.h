@@ -113,7 +113,11 @@ struct TetMesh {
 
     // 根据 removed 粒子重建表面（debulk 后调用）
     // 原理：跳过含 removed 顶点的四面体，重新算哪些面是表面
-    void rebuild_surface_faces(const Particles& particles) {
+    // ★ Scheme B (cut_only): 也跳过 tet_broken[ti]==1 的 tet → 切口处内部面
+    //   变成新 surface,viewer 中切口可见。tet_broken 是 monotonic,从外部传入。
+    //   nullptr 表示不启用(原 debulk 行为完全保持)。
+    void rebuild_surface_faces(const Particles& particles,
+                                const std::vector<int>* tet_broken = nullptr) {
         surface_faces.clear();
 
         auto encode_face = [](int a, int b, int c) -> int64_t {
@@ -132,12 +136,15 @@ struct TetMesh {
         std::unordered_map<int64_t, FaceInfo> face_map;
         face_map.reserve(tets.size() * 2);
 
-        for (const auto& tet : tets) {
+        for (int ti = 0; ti < (int)tets.size(); ti++) {
+            const auto& tet = tets[ti];
             bool has_removed = false;
             for (int j = 0; j < 4; j++) {
                 if (particles[tet[j]].removed) { has_removed = true; break; }
             }
             if (has_removed) continue;
+            // Scheme B: tet 含 broken 边 → 视为"已切开",跳过 → 内部面变 surface
+            if (tet_broken && (*tet_broken)[ti]) continue;
 
             int v[4] = {tet[0], tet[1], tet[2], tet[3]};
             // 4 个面，每个面的第四个顶点是不在面上的那个
