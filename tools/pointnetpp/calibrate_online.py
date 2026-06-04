@@ -47,6 +47,8 @@ def calibrate_online(
                                              #   W>1 lets cavity free-evolve within window so the
                                              #   long-horizon signal accumulates (recovers landscape
                                              #   gradient that per-frame teacher forcing kills).
+    return_best: bool = False,               # ★ snapshot params per pass; return the lowest
+                                             #   pass-mean-loss snapshot (anti-overshoot).
     log_every: int = 30,
     verbose: bool = True,
 ):
@@ -77,12 +79,46 @@ def calibrate_online(
     far_knife = (pos_rest.max(0) + 10.0).astype(np.float32)
 
     # Parameterization
+    #   "Group..." -> surface-projection column grouping (observability-aligned).
+    #       ctx["group_col_id"]: (N,) int per-particle group id (precomputed via
+    #       surface_projection.column_grid_assignment / coarse_surface_bfs_assignment).
+    #       Optimizes K patch tau scalars (+ K stiff); interior inherits surface
+    #       group value via gather. Fixes per-particle under-determination.
+    #   "Hier..."  -> z_L0 + z_L1 + z_L2 (legacy; under-determined on surface obs).
+    #   else       -> per-particle z_L0 direct (legacy baseline).
+    use_group = "Group" in condition
     use_hier = "Hier" in condition
+    if use_group:
+        col_id = ctx["group_col_id"]
+        col_id_t = torch.tensor(col_id, dtype=torch.long, device=device)
+        K = int(col_id.max()) + 1
+        # init patch params from per-group mean of tau_init (here uniform -> scalar)
+        tau_init_patch = np.array([tau_init_np[col_id == k].mean() for k in range(K)],
+                                    dtype=np.float32)
+        stiff_init_patch = np.array([stiff_init_np[col_id == k].mean() for k in range(K)],
+                                      dtype=np.float32)
+        z_patch_tau = torch.tensor(inv_sigmoid_to_z(tau_init_patch, lo=tau_bound[0], hi=tau_bound[1]),
+                                     dtype=torch.float32, device=device, requires_grad=True)
+        z_patch_stiff = torch.tensor(inv_sigmoid_to_z(stiff_init_patch),
+                                       dtype=torch.float32, device=device, requires_grad=True)
+        z_L0_stiff = z_L0_tau = None
+        z_L1_stiff = z_L2_stiff = z_L1_tau = z_L2_tau = None
+        params = [
+            {"params": [z_patch_stiff], "lr": lr},
+            {"params": [z_patch_tau], "lr": lr_tau},
+        ]
+        opt = torch.optim.Adam(params)
+        if verbose:
+            print(f"  [Group] K={K} patches, lr_tau={lr_tau}", flush=True)
+    else:
+        col_id_t = None
     z_L0_stiff = torch.tensor(inv_sigmoid_to_z(stiff_init_np),
-                                dtype=torch.float32, device=device, requires_grad=True)
+                                dtype=torch.float32, device=device, requires_grad=True) if not use_group else None
     z_L0_tau = torch.tensor(inv_sigmoid_to_z(tau_init_np, lo=tau_bound[0], hi=tau_bound[1]),
-                              dtype=torch.float32, device=device, requires_grad=True)
-    if use_hier:
+                              dtype=torch.float32, device=device, requires_grad=True) if not use_group else None
+    if use_group:
+        pass  # opt already built
+    elif use_hier:
         H = ctx["H"]
         M1, M2 = H.M1, H.M2
         sL1 = 1.0 / math.sqrt(N / M1)
@@ -105,10 +141,15 @@ def calibrate_online(
             {"params": [z_L0_stiff], "lr": lr},
             {"params": [z_L0_tau], "lr": lr_tau},
         ]
-    opt = torch.optim.Adam(params)
+    if not use_group:
+        opt = torch.optim.Adam(params)
 
     def reconstruct_fields():
-        """Reconstruct per-particle stiff/tau from z (Hier or direct)."""
+        """Reconstruct per-particle stiff/tau from z (Group / Hier / direct)."""
+        if use_group:
+            stiff_pp = STIFF_LOW + (STIFF_HIGH - STIFF_LOW) * torch.sigmoid(z_patch_stiff[col_id_t])
+            tau_pp = tau_bound[0] + (tau_bound[1] - tau_bound[0]) * torch.sigmoid(z_patch_tau[col_id_t])
+            return stiff_pp, tau_pp
         if use_hier:
             z_flat_stiff = hier_reconstruct(z_L0_stiff, z_L1_stiff, z_L2_stiff, ctx["H"])
             z_flat_tau = hier_reconstruct(z_L0_tau, z_L1_tau, z_L2_tau, ctx["H"])
@@ -131,6 +172,8 @@ def calibrate_online(
     total_steps = 0
     t0 = time.time()
     initial_lrs = [pg["lr"] for pg in opt.param_groups]
+    best_loss = float("inf")
+    best_snapshot = None
 
     for pass_idx in range(N_passes):
         # apply lr decay
@@ -139,6 +182,7 @@ def calibrate_online(
             pg["lr"] = initial_lrs[kk] * decay
         if verbose and pass_idx > 0:
             print(f"  [pass {pass_idx}] lr decay × {decay:.3f}", flush=True)
+        pass_L = []
         for traj_idx, (cur_traj, cur_obs_pos_t, cur_obs_alpha_t) in enumerate(multi_traj_obs):
             # Reset solver to rest at start of each traj
             solver.reset_to_rest(pos_rest)
@@ -258,6 +302,12 @@ def calibrate_online(
                             f"step {total_steps:4d}  L_gap={L_gap_v:.3e}  "
                             f"L_cav={L_cav_v:.3e}  L_hist={L_hist_v:.3e}  "
                             f"({rate:.1f} step/s)", flush=True)
+                # track loss for best-checkpoint (L_gap + L_cav; exclude L_hist
+                # so the snapshot reflects true obs fit, not the regularizer)
+                step_obj = float(L_gap.detach().item())
+                if lambda_outer_cav > 0:
+                    step_obj += float(L_cav.detach().item())
+                pass_L.append(step_obj)
                 history_log.append(dict(
                     step=total_steps, pass_idx=pass_idx, traj_idx=traj_idx, t=t,
                     L_gap=float(L_gap.detach().item()),
@@ -265,7 +315,21 @@ def calibrate_online(
                     L_hist=(float(L_hist.detach().item()) if lambda_hist > 0 else 0.0),
                 ))
 
+        # ===== end of pass: best-checkpoint snapshot =====
+        if return_best:
+            pmean = float(np.mean(pass_L)) if pass_L else float("inf")
+            if pmean < best_loss:
+                best_loss = pmean
+                with torch.no_grad():
+                    sfb, tfb = reconstruct_fields()
+                best_snapshot = (sfb.detach().cpu().numpy().copy(),
+                                   tfb.detach().cpu().numpy().copy())
+            if verbose:
+                print(f"  [pass {pass_idx}] mean_obj={pmean:.4e}  best={best_loss:.4e}", flush=True)
+
     # ===== final reconstruction =====
+    if return_best and best_snapshot is not None:
+        return best_snapshot[0], best_snapshot[1], history_log
     with torch.no_grad():
         stiff_final, tau_final = reconstruct_fields()
     return (stiff_final.detach().cpu().numpy(),
