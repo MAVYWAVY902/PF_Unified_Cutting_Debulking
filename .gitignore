@@ -1,3 +1,7 @@
 cpp_sim/build/
 *.o
 *.d
+__pycache__/
+*.pyc
+*.npz
+tools/pointnetpp/viz_out/
