@@ -49,6 +49,21 @@ def calibrate_online(
                                              #   gradient that per-frame teacher forcing kills).
     return_best: bool = False,               # ★ snapshot params per pass; return the lowest
                                              #   pass-mean-loss snapshot (anti-overshoot).
+    dynamic_surface: bool = False,           # ★ re-detect the observable set EACH FRAME from the
+                                             #   observed alpha: per lateral column, the topmost
+                                             #   still-alive particle band = currently visible
+                                             #   surface. As material is removed top-down the
+                                             #   surface RECEDES, progressively exposing deeper
+                                             #   particles -> their tau gets gradient at the moment
+                                             #   they are exposed+cut. Tests whether progressive
+                                             #   exposure lifts the depth null-space. Needs
+                                             #   ctx["surf_top_axis"]. False -> static surface_idx.
+    dyn_alive_thresh: float = 0.5,           #   observed-alpha above this = alive/visible
+    dyn_band_frac: float = 0.08,             #   surface band thickness as fraction of depth span
+    dyn_grid_n: int = 8,                     #   lateral grid resolution for column-top detection
+    snapshot_every: int = 0,                 # ★ if >0, append (step, tau_pp_np) to snapshot_out
+                                             #   every N steps (+ one at step 0 = init) for viz.
+    snapshot_out: Optional[list] = None,
     log_every: int = 30,
     verbose: bool = True,
 ):
@@ -77,6 +92,34 @@ def calibrate_online(
     theta_torch = torch.tensor(theta_3d_np, dtype=torch.float32, device=device,
                                  requires_grad=False)
     far_knife = (pos_rest.max(0) + 10.0).astype(np.float32)
+
+    # ----- dynamic-surface precompute (lateral grid + rest depth) -----
+    # The observable set is recomputed each frame: per lateral (non-top) grid cell,
+    # the topmost still-alive particle band is what a depth camera sees. We bin on
+    # the REST pose (lateral position is stable) and let the alive-mask drive the
+    # recede. depth_coord = rest top_axis coordinate (higher = closer to camera).
+    if dynamic_surface:
+        d_top_axis = ctx["surf_top_axis"]
+        d_lat = [a for a in range(3) if a != d_top_axis]
+        d_lo = pos_rest.min(0); d_hi = pos_rest.max(0); d_span = d_hi - d_lo + 1e-9
+        _b0 = np.clip(((pos_rest[:, d_lat[0]] - d_lo[d_lat[0]]) / d_span[d_lat[0]] * dyn_grid_n).astype(int), 0, dyn_grid_n - 1)
+        _b1 = np.clip(((pos_rest[:, d_lat[1]] - d_lo[d_lat[1]]) / d_span[d_lat[1]] * dyn_grid_n).astype(int), 0, dyn_grid_n - 1)
+        dyn_lat_id = torch.tensor(_b0 * dyn_grid_n + _b1, dtype=torch.long, device=device)
+        dyn_n_lat = dyn_grid_n * dyn_grid_n
+        dyn_depth = torch.tensor(pos_rest[:, d_top_axis], dtype=torch.float32, device=device)
+        dyn_band = float(dyn_band_frac * d_span[d_top_axis])
+        dyn_NEG = torch.full((dyn_n_lat,), -1e9, dtype=torch.float32, device=device)
+
+    def dynamic_surface_idx(obs_alpha_now):
+        """Indices of currently-visible particles: per lateral column, the alive
+        particles within dyn_band of the topmost alive particle's rest depth."""
+        alive = obs_alpha_now > dyn_alive_thresh
+        d_alive = torch.where(alive, dyn_depth, torch.full_like(dyn_depth, -1e9))
+        col_top = dyn_NEG.clone().scatter_reduce(0, dyn_lat_id, d_alive, reduce="amax",
+                                                  include_self=True)
+        top_per_p = col_top[dyn_lat_id]
+        mask = alive & (dyn_depth >= top_per_p - dyn_band) & (top_per_p > -1e8)
+        return torch.where(mask)[0]
 
     # Parameterization
     #   "Group..." -> surface-projection column grouping (observability-aligned).
@@ -175,6 +218,12 @@ def calibrate_online(
     best_loss = float("inf")
     best_snapshot = None
 
+    # initial (step 0 = init) snapshot for viz
+    if snapshot_every and snapshot_out is not None:
+        with torch.no_grad():
+            _, t0snap = reconstruct_fields()
+        snapshot_out.append((0, t0snap.detach().cpu().numpy().copy()))
+
     for pass_idx in range(N_passes):
         # apply lr decay
         decay = lr_decay_per_pass ** pass_idx
@@ -203,6 +252,14 @@ def calibrate_online(
                 )
                 obs_pos_now = cur_obs_pos_t[t]
 
+                # current observable set (static surface_idx, or per-frame recede)
+                if dynamic_surface:
+                    cur_surf = dynamic_surface_idx(cur_obs_alpha_t[t])
+                    if cur_surf.numel() == 0:
+                        cur_surf = surface_idx
+                else:
+                    cur_surf = surface_idx
+
                 # ===== L_gap =====
                 # Two modes:
                 #   A. use_inner_gd=False — direct surface L_pos (simplified, our previous online)
@@ -222,12 +279,12 @@ def calibrate_online(
                 else:
                     delta_x = None
                     delta_dv = None
-                    L_gap = ((pos_t[surface_idx] - obs_pos_now[surface_idx]) ** 2).sum()
+                    L_gap = ((pos_t[cur_surf] - obs_pos_now[cur_surf]) ** 2).sum()
 
                 # ===== L_cav (only used in simplified mode; inner GD includes cav already) =====
                 L_cav = torch.tensor(0.0, device=device)
                 if lambda_outer_cav > 0 and not use_inner_gd:
-                    L_cav = ((alpha_t[surface_idx] - obs_alpha_now[surface_idx]) ** 2).sum()
+                    L_cav = ((alpha_t[cur_surf] - obs_alpha_now[cur_surf]) ** 2).sum()
 
                 # ===== Replay L_hist (pos + alpha jointly) =====
                 # PBD(state_in_h, knife_h, current_k) ?= obs_out_h
@@ -308,6 +365,10 @@ def calibrate_online(
                 if lambda_outer_cav > 0:
                     step_obj += float(L_cav.detach().item())
                 pass_L.append(step_obj)
+                if snapshot_every and snapshot_out is not None and (total_steps % snapshot_every == 0):
+                    with torch.no_grad():
+                        _, tsnap = reconstruct_fields()
+                    snapshot_out.append((total_steps, tsnap.detach().cpu().numpy().copy()))
                 history_log.append(dict(
                     step=total_steps, pass_idx=pass_idx, traj_idx=traj_idx, t=t,
                     L_gap=float(L_gap.detach().item()),
