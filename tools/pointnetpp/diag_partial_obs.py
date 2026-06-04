@@ -51,10 +51,23 @@ from tools.pointnetpp.multi_mesh_test import (  # noqa: E402
 
 
 def calibrate(condition, ctx, N_epochs=60, lr=0.03, lr_tau=0.01,
-              lambda_smooth=0.0, lambda_E=0.1):
+              lambda_smooth=0.0, lambda_E=0.1, s_inner_override=None,
+              lambda_outer_cav=0.0,
+              lr_schedule=None, return_best=False,
+              multi_traj_obs=None):
     """Calibrate with chosen condition.
 
     condition: 'L_pos_partial', 'L_pos_partial+L_smooth', 'Liang_inner', 'Hier+Liang'
+    s_inner_override: inner GD sigmoid sharpness override (Day 3c trick).
+    lambda_outer_cav: weight for outer cavity loss = sum_surf (α_sim − α_obs)².
+    lr_schedule: optional list of (epoch_threshold, lr_multiplier) tuples for
+        step decay. E.g., [(30, 0.2), (60, 0.2)] = lr×0.2 at epoch 30 + 60.
+    return_best: if True, return tau corresponding to lowest mean_L epoch.
+    multi_traj_obs: optional list of (traj, obs_pos_t, obs_alpha_t) tuples.
+        If provided, calibration loops over ALL trajectories per epoch
+        (over-determined: forces tau to satisfy multiple cut patterns).
+        If None, uses ctx["knife_traj_A"] + obs_pos_A_t + obs_alpha_A_t (legacy).
+        2026-06-01 v8 fix: multi-trajectory regularization to escape T_A local minimum.
     """
     device = ctx["device"]
     N = ctx["N"]
@@ -112,68 +125,101 @@ def calibrate(condition, ctx, N_epochs=60, lr=0.03, lr_tau=0.01,
 
     use_inner_loop = "Liang" in condition
 
-    T = len(knife_traj)
+    # Best-checkpoint tracking (anti-overshoot for high lr_tau regime)
+    best_mean_L = float("inf")
+    best_stiff = None
+    best_tau = None
+
+    # Step LR scheduler (warm-decay)
+    if lr_schedule is not None:
+        # Capture initial lr per group; on threshold reach, multiply
+        initial_lrs = [pg["lr"] for pg in opt.param_groups]
+
+    # Build trajectory list — single (legacy) or multi
+    if multi_traj_obs is None:
+        traj_obs_list = [(knife_traj, obs_pos_t, obs_alpha_t)]
+    else:
+        traj_obs_list = multi_traj_obs
+
     history = []
     for epoch in range(N_epochs):
-        solver.reset_to_rest(ctx["pos_rest"])
-        state = rest_state
+        # Apply lr schedule (multiply by all thresholds passed)
+        if lr_schedule is not None:
+            mult = 1.0
+            for thresh, m in lr_schedule:
+                if epoch >= thresh:
+                    mult *= m
+            for k, pg in enumerate(opt.param_groups):
+                pg["lr"] = initial_lrs[k] * mult
         L_epoch = []
-        for t in range(T):
-            if use_hier:
-                z_flat_stiff = reconstruct(z_L0_stiff, z_L1_stiff, z_L2_stiff, ctx["H"])
-                z_flat_tau = reconstruct(z_L0_tau, z_L1_tau, z_L2_tau, ctx["H"])
-            else:
-                z_flat_stiff = z_L0_stiff
-                z_flat_tau = z_L0_tau
-            stiff_pp_torch = STIFF_LOW + (STIFF_HIGH - STIFF_LOW) * torch.sigmoid(z_flat_stiff)
-            tau_pp_torch = tau_bound[0] + (tau_bound[1] - tau_bound[0]) * torch.sigmoid(z_flat_tau)
+        # Loop over trajectories — each gives independent gradient steps
+        for traj_idx, (cur_traj, cur_obs_pos_t, cur_obs_alpha_t) in enumerate(traj_obs_list):
+            solver.reset_to_rest(ctx["pos_rest"])
+            state = rest_state
+            T = len(cur_traj)
+            for t in range(T):
+                if use_hier:
+                    z_flat_stiff = reconstruct(z_L0_stiff, z_L1_stiff, z_L2_stiff, ctx["H"])
+                    z_flat_tau = reconstruct(z_L0_tau, z_L1_tau, z_L2_tau, ctx["H"])
+                else:
+                    z_flat_stiff = z_L0_stiff
+                    z_flat_tau = z_L0_tau
+                stiff_pp_torch = STIFF_LOW + (STIFF_HIGH - STIFF_LOW) * torch.sigmoid(z_flat_stiff)
+                tau_pp_torch = tau_bound[0] + (tau_bound[1] - tau_bound[0]) * torch.sigmoid(z_flat_tau)
 
-            alpha_t, pos_t, dv_t = WarpFullForwardOp.apply(
-                theta_torch, solver, state, knife_traj[t], knife_radius,
-                stiff_pp_torch, tau_pp_torch,
-            )
-
-            if use_inner_loop:
-                # Liang's inner GD with surface_idx + L_E
-                tau_inner_val = float(tau_pp_torch.mean().item())
-                delta_x, delta_dv, _ = gd_inner_loop_stable(
-                    pos_t, dv_t, obs_pos_t[t], obs_alpha_t[t],
-                    theta_torch, edges_a_t, edges_b_t, edges_rest_t,
-                    n_iter=30, lr_pos=0.5, lr_dv_factor=1.0,
-                    lambda_cav=1.0, lambda_E=lambda_E,    # L_E ON
-                    s_inner=float(theta_torch[1].item()),
-                    tau_inner=tau_inner_val,
-                    surface_idx=surface_idx,              # surface only for L_pos
+                alpha_t, pos_t, dv_t = WarpFullForwardOp.apply(
+                    theta_torch, solver, state, cur_traj[t], knife_radius,
+                    stiff_pp_torch, tau_pp_torch,
                 )
-                L = (delta_x ** 2).sum() + (delta_dv ** 2).sum()
-            else:
-                # Direct L_pos on surface particles only
-                L = ((pos_t[surface_idx] - obs_pos_t[t][surface_idx]) ** 2).sum()
-                if lambda_smooth > 0:
-                    # L_smooth on per-particle stiff
-                    neighbor_diff = stiff_pp_torch[edges_a_t] - stiff_pp_torch[edges_b_t]
-                    L_smooth = (neighbor_diff ** 2).sum()
-                    L = L + lambda_smooth * L_smooth
 
-            opt.zero_grad()
-            L.backward()
-            opt.step()
-            L_epoch.append(float(L.item()))
+                if use_inner_loop:
+                    # Liang's inner GD with surface_idx + L_E
+                    tau_inner_val = float(tau_pp_torch.mean().item())
+                    s_inner_val = (float(theta_torch[1].item())
+                                      if s_inner_override is None
+                                      else float(s_inner_override))
+                    delta_x, delta_dv, _ = gd_inner_loop_stable(
+                        pos_t, dv_t, cur_obs_pos_t[t], cur_obs_alpha_t[t],
+                        theta_torch, edges_a_t, edges_b_t, edges_rest_t,
+                        n_iter=30, lr_pos=0.5, lr_dv_factor=1.0,
+                        lambda_cav=1.0, lambda_E=lambda_E,    # L_E ON
+                        s_inner=s_inner_val,
+                        tau_inner=tau_inner_val,
+                        surface_idx=surface_idx,              # surface only for L_pos
+                    )
+                    L = (delta_x ** 2).sum() + (delta_dv ** 2).sum()
+                else:
+                    # Direct L_pos on surface particles only
+                    L = ((pos_t[surface_idx] - cur_obs_pos_t[t][surface_idx]) ** 2).sum()
+                    if lambda_smooth > 0:
+                        # L_smooth on per-particle stiff
+                        neighbor_diff = stiff_pp_torch[edges_a_t] - stiff_pp_torch[edges_b_t]
+                        L_smooth = (neighbor_diff ** 2).sum()
+                        L = L + lambda_smooth * L_smooth
+                    if lambda_outer_cav > 0:
+                        # Direct outer cavity loss — per-particle alpha mismatch
+                        L_cav_outer = ((alpha_t[surface_idx] - cur_obs_alpha_t[t][surface_idx]) ** 2).sum()
+                        L = L + lambda_outer_cav * L_cav_outer
 
-            # Mode C inject only if Liang inner loop used
-            if use_inner_loop:
-                state = solver_save_state(solver)
-                dx_np = delta_x.detach().cpu().numpy()
-                ddv_np = delta_dv.detach().cpu().numpy()
-                state["pos"] = state["pos"] + dx_np
-                state["particle_damage"] = np.maximum(state["particle_damage"] + ddv_np, 0.0)
-                new_dv = state["particle_damage"]
-                cur_s = float(theta_torch[1].item())
-                cur_tau_arr = tau_pp_torch.detach().cpu().numpy()
-                state["alpha"] = 1.0 / (1.0 + np.exp(np.clip(
-                    cur_s * (new_dv - cur_tau_arr), -50, 50)))
-            else:
-                state = solver_save_state(solver)
+                opt.zero_grad()
+                L.backward()
+                opt.step()
+                L_epoch.append(float(L.item()))
+
+                # Mode C inject only if Liang inner loop used
+                if use_inner_loop:
+                    state = solver_save_state(solver)
+                    dx_np = delta_x.detach().cpu().numpy()
+                    ddv_np = delta_dv.detach().cpu().numpy()
+                    state["pos"] = state["pos"] + dx_np
+                    state["particle_damage"] = np.maximum(state["particle_damage"] + ddv_np, 0.0)
+                    new_dv = state["particle_damage"]
+                    cur_s = float(theta_torch[1].item())
+                    cur_tau_arr = tau_pp_torch.detach().cpu().numpy()
+                    state["alpha"] = 1.0 / (1.0 + np.exp(np.clip(
+                        cur_s * (new_dv - cur_tau_arr), -50, 50)))
+                else:
+                    state = solver_save_state(solver)
 
         mean_L = float(np.mean(L_epoch))
         with torch.no_grad():
@@ -206,6 +252,15 @@ def calibrate(condition, ctx, N_epochs=60, lr=0.03, lr_tau=0.01,
             L1_interior_in=L1_interior_in,
             L1_interior_out=L1_interior_out,
         ))
+
+        # Best-checkpoint tracking (v7 fix #3)
+        if return_best and mean_L < best_mean_L:
+            best_mean_L = mean_L
+            best_stiff = stiff_now.copy()
+            best_tau = tau_now.copy()
+
+    if return_best and best_tau is not None:
+        return best_stiff, best_tau, history
     return stiff_now, tau_now, history
 
 

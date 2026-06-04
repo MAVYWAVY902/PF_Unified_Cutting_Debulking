@@ -558,4 +558,7 @@ CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o : /home/yunxin/p
     /usr/include/c++/11/ctime \
     /usr/include/c++/11/bits/parse_numbers.h \
     /usr/include/c++/11/bits/std_mutex.h \
-    /usr/include/c++/11/bits/unique_lock.h
+    /usr/include/c++/11/bits/unique_lock.h \
+    /usr/include/c++/11/algorithm \
+    /usr/include/c++/11/pstl/glue_algorithm_defs.h \
+    /usr/include/c++/11/pstl/execution_defs.h

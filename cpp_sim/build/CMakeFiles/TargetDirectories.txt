@@ -1,6 +1,7 @@
 /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/pf_sim.dir
 /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/pf_sim_gpu.dir
 /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/pf_sim_gpu_viewer.dir
+/home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/record_trajectory.dir
 /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/verify_gpu.dir
 /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/debug_tumor.dir
 /home/yunxin/pf-shape-matching/cpp_sim/build/CMakeFiles/edit_cache.dir

@@ -124,14 +124,17 @@ def gd_inner_loop_stable(
         alpha_corr = torch.sigmoid(-s_val * (dv_corr - tau_val))
         diff_pos = pos_corr - pos_target
         diff_alpha = alpha_corr - alpha_target
-        # Test 1 (phantom-readiness): if surface_idx is provided, restrict L_pos
-        # to surface particles only (camera-visible). Interior particles' Δx
-        # then has NO direct signal — relies on L_E (Test 2) to propagate.
+        # Phantom-realistic obs: D405 only sees surface particles.
+        # If surface_idx provided, restrict BOTH L_pos AND L_cav to surface.
+        # Interior particles have NO direct signal — rely on L_E to propagate.
+        # (2026-05-30 fix: previously L_cav was full mesh, that was synth-cheat
+        # since real phantom can't measure interior alpha.)
         if surface_idx is None:
             L_pos = (diff_pos ** 2).sum()
+            L_cav = (diff_alpha ** 2).sum()
         else:
             L_pos = (diff_pos[surface_idx] ** 2).sum()
-        L_cav = (diff_alpha ** 2).sum()
+            L_cav = (diff_alpha[surface_idx] ** 2).sum()  # phantom-realistic
         if lambda_E > 0:
             edge_vec = pos_corr[edges_a] - pos_corr[edges_b]
             edge_len = edge_vec.norm(dim=1).clamp(min=1e-12)

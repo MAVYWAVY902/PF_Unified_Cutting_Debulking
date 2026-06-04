@@ -201,6 +201,19 @@ pf_sim_gpu_viewer/fast:
 .PHONY : pf_sim_gpu_viewer/fast
 
 #=============================================================================
+# Target rules for targets named record_trajectory
+
+# Build rule for target.
+record_trajectory: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 record_trajectory
+.PHONY : record_trajectory
+
+# fast build rule for target.
+record_trajectory/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/record_trajectory.dir/build.make CMakeFiles/record_trajectory.dir/build
+.PHONY : record_trajectory/fast
+
+#=============================================================================
 # Target rules for targets named verify_gpu
 
 # Build rule for target.
@@ -348,6 +361,30 @@ main_gpu_viewer.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/main_gpu_viewer.cpp.s
 .PHONY : main_gpu_viewer.cpp.s
 
+main_record_trajectory.o: main_record_trajectory.cpp.o
+.PHONY : main_record_trajectory.o
+
+# target to build an object file
+main_record_trajectory.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/record_trajectory.dir/build.make CMakeFiles/record_trajectory.dir/main_record_trajectory.cpp.o
+.PHONY : main_record_trajectory.cpp.o
+
+main_record_trajectory.i: main_record_trajectory.cpp.i
+.PHONY : main_record_trajectory.i
+
+# target to preprocess a source file
+main_record_trajectory.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/record_trajectory.dir/build.make CMakeFiles/record_trajectory.dir/main_record_trajectory.cpp.i
+.PHONY : main_record_trajectory.cpp.i
+
+main_record_trajectory.s: main_record_trajectory.cpp.s
+.PHONY : main_record_trajectory.s
+
+# target to generate assembly for a file
+main_record_trajectory.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/record_trajectory.dir/build.make CMakeFiles/record_trajectory.dir/main_record_trajectory.cpp.s
+.PHONY : main_record_trajectory.cpp.s
+
 solver/shape_matching_gpu.o: solver/shape_matching_gpu.cu.o
 .PHONY : solver/shape_matching_gpu.o
 
@@ -355,6 +392,7 @@ solver/shape_matching_gpu.o: solver/shape_matching_gpu.cu.o
 solver/shape_matching_gpu.cu.o:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/solver/shape_matching_gpu.cu.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/record_trajectory.dir/build.make CMakeFiles/record_trajectory.dir/solver/shape_matching_gpu.cu.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/solver/shape_matching_gpu.cu.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/solver/shape_matching_gpu.cu.o
 .PHONY : solver/shape_matching_gpu.cu.o
@@ -366,6 +404,7 @@ solver/shape_matching_gpu.i: solver/shape_matching_gpu.cu.i
 solver/shape_matching_gpu.cu.i:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/solver/shape_matching_gpu.cu.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/record_trajectory.dir/build.make CMakeFiles/record_trajectory.dir/solver/shape_matching_gpu.cu.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/solver/shape_matching_gpu.cu.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/solver/shape_matching_gpu.cu.i
 .PHONY : solver/shape_matching_gpu.cu.i
@@ -377,6 +416,7 @@ solver/shape_matching_gpu.s: solver/shape_matching_gpu.cu.s
 solver/shape_matching_gpu.cu.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu.dir/build.make CMakeFiles/pf_sim_gpu.dir/solver/shape_matching_gpu.cu.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/pf_sim_gpu_viewer.dir/build.make CMakeFiles/pf_sim_gpu_viewer.dir/solver/shape_matching_gpu.cu.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/record_trajectory.dir/build.make CMakeFiles/record_trajectory.dir/solver/shape_matching_gpu.cu.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/verify_gpu.dir/build.make CMakeFiles/verify_gpu.dir/solver/shape_matching_gpu.cu.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/debug_tumor.dir/build.make CMakeFiles/debug_tumor.dir/solver/shape_matching_gpu.cu.s
 .PHONY : solver/shape_matching_gpu.cu.s
@@ -423,6 +463,7 @@ help:
 	@echo "... pf_sim"
 	@echo "... pf_sim_gpu"
 	@echo "... pf_sim_gpu_viewer"
+	@echo "... record_trajectory"
 	@echo "... verify_gpu"
 	@echo "... debug_tumor.o"
 	@echo "... debug_tumor.i"
@@ -436,6 +477,9 @@ help:
 	@echo "... main_gpu_viewer.o"
 	@echo "... main_gpu_viewer.i"
 	@echo "... main_gpu_viewer.s"
+	@echo "... main_record_trajectory.o"
+	@echo "... main_record_trajectory.i"
+	@echo "... main_record_trajectory.s"
 	@echo "... solver/shape_matching_gpu.o"
 	@echo "... solver/shape_matching_gpu.i"
 	@echo "... solver/shape_matching_gpu.s"

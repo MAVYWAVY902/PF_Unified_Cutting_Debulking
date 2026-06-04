@@ -1,0 +1,45 @@
+## Auto-generated for Test α/β
+name: "test_a_uniform"
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.005
+  gravity: [0, -9.81, 0]
+  num_iterations: 6
+  stiffness: 0.85
+  damping: 0.95
+  substeps: 8
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.05
+
+clusters:
+  rings: 2
+
+knife:
+  radius: 0.025
+  cutting_interval: 4
+  alpha_min: 7.0
+  aspiration_threshold: 0.45
+  damage_growth_rate: 0.15
+  per_edge_alpha: false
+  damage_model: "sharpness"
+  per_particle_tau: false
+  per_particle_stiffness: false
+  stiff_low: 0.85
+  stiff_high: 0.85
+  stiff_gradient_axis: "x"
+  stiff_pattern: "gradient"
+  stiff_inclusion_radius_frac: 0.25
+
+self_collision:
+  enabled: true
+  radius: 0.012
+  stiffness: 0.8
+
+viewer:
+  draw_surface: false
+  draw_wireframe: true
+  draw_points: true
