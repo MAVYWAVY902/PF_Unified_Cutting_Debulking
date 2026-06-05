@@ -43,6 +43,11 @@ def calibrate_online(
     window_size: int = 20,
     n_hist_samples: int = 4,
     teacher_force: bool = True,              # overwrite sim pos with obs (auto-OFF when use_inner_gd)
+    chamfer_state: bool = False,             # ★ B1': CORRESPONDENCE-FREE state correction. Each frame
+                                             #   snap sim surface particles to their NEAREST obs surface
+                                             #   point (Chamfer/NN), not the same-index obs point. Interior
+                                             #   free-runs. = teacher forcing without particle IDs (the
+                                             #   real-D405-compatible registration). Overrides teacher_force.
     teacher_force_every: int = 1,            # ★ reset pos to obs every W frames (1=every frame).
                                              #   W>1 lets cavity free-evolve within window so the
                                              #   long-horizon signal accumulates (recovers landscape
@@ -61,6 +66,12 @@ def calibrate_online(
     dyn_alive_thresh: float = 0.5,           #   observed-alpha above this = alive/visible
     dyn_band_frac: float = 0.08,             #   surface band thickness as fraction of depth span
     dyn_grid_n: int = 8,                     #   lateral grid resolution for column-top detection
+    cav_occupancy: bool = False,             # ★ B3: CORRESPONDENCE-FREE L_cav. Replace per-particle
+                                             #   alpha mismatch with a lateral-grid OCCUPANCY mismatch:
+                                             #   per cell, (soft alive-fraction in sim) vs (alive-fraction
+                                             #   observed). = comparing the cavity as a spatial field
+                                             #   (point-cloud holes), no particle IDs. Needs surf_top_axis.
+    cav_grid_n: int = 12,                    #   lateral grid resolution for occupancy cells
     snapshot_every: int = 0,                 # ★ if >0, append (step, tau_pp_np) to snapshot_out
                                              #   every N steps (+ one at step 0 = init) for viz.
     snapshot_out: Optional[list] = None,
@@ -92,6 +103,21 @@ def calibrate_online(
     theta_torch = torch.tensor(theta_3d_np, dtype=torch.float32, device=device,
                                  requires_grad=False)
     far_knife = (pos_rest.max(0) + 10.0).astype(np.float32)
+    surf_idx_np = surface_idx.detach().cpu().numpy()        # for chamfer_state NN snap
+
+    # ----- occupancy L_cav precompute (correspondence-free cavity, B3) -----
+    if cav_occupancy:
+        cot = ctx["surf_top_axis"]
+        clat = [a for a in range(3) if a != cot]
+        lo = pos_rest.min(0); hi = pos_rest.max(0); span = hi - lo + 1e-9
+        sp_pos = pos_rest[surf_idx_np]
+        cb0 = np.clip(((sp_pos[:, clat[0]] - lo[clat[0]]) / span[clat[0]] * cav_grid_n).astype(int), 0, cav_grid_n - 1)
+        cb1 = np.clip(((sp_pos[:, clat[1]] - lo[clat[1]]) / span[clat[1]] * cav_grid_n).astype(int), 0, cav_grid_n - 1)
+        cav_cell = cb0 * cav_grid_n + cb1
+        cav_ncells = cav_grid_n * cav_grid_n
+        A_cav = torch.zeros(cav_ncells, len(surf_idx_np), dtype=torch.float32, device=device)
+        A_cav[cav_cell, np.arange(len(surf_idx_np))] = 1.0
+        cav_cap = A_cav.sum(1) + 1e-6                        # particles per cell (for fraction)
 
     # ----- dynamic-surface precompute (lateral grid + rest depth) -----
     # The observable set is recomputed each frame: per lateral (non-top) grid cell,
@@ -284,7 +310,13 @@ def calibrate_online(
                 # ===== L_cav (only used in simplified mode; inner GD includes cav already) =====
                 L_cav = torch.tensor(0.0, device=device)
                 if lambda_outer_cav > 0 and not use_inner_gd:
-                    L_cav = ((alpha_t[cur_surf] - obs_alpha_now[cur_surf]) ** 2).sum()
+                    if cav_occupancy:
+                        # correspondence-free: per-cell alive-FRACTION mismatch (sim soft vs obs)
+                        sim_occ = (A_cav @ alpha_t[surface_idx]) / cav_cap
+                        obs_occ = (A_cav @ (obs_alpha_now[surface_idx] > 0.5).float()) / cav_cap
+                        L_cav = ((sim_occ - obs_occ) ** 2).sum()
+                    else:
+                        L_cav = ((alpha_t[cur_surf] - obs_alpha_now[cur_surf]) ** 2).sum()
 
                 # ===== Replay L_hist (pos + alpha jointly) =====
                 # PBD(state_in_h, knife_h, current_k) ?= obs_out_h
@@ -341,10 +373,22 @@ def calibrate_online(
                 # Teacher-force position to obs only every `teacher_force_every` frames.
                 # Within a window, sim free-evolves so cavity errors accumulate (strong signal);
                 # at window boundary we reset to obs to prevent runaway divergence / NaN.
-                do_tf = (use_inner_gd or teacher_force) and ((t + 1) % teacher_force_every == 0)
-                if do_tf:
-                    obs_np = obs_pos_now.detach().cpu().numpy().astype(np.float32)
-                    state_after["pos"] = obs_np.copy()
+                if chamfer_state:
+                    # CORRESPONDENCE-FREE: snap sim surface particles to nearest obs
+                    # surface point (treat obs surface as an unordered point cloud).
+                    # Interior keeps its free-run state.
+                    pos_np = state_after["pos"]
+                    sim_surf = torch.tensor(pos_np[surf_idx_np], dtype=torch.float32, device=device)
+                    obs_surf = obs_pos_now[surface_idx]                      # (Ns,3) obs cloud
+                    nn = torch.cdist(sim_surf, obs_surf).argmin(1)           # nearest obs pt per sim surf
+                    snapped = obs_surf[nn].detach().cpu().numpy().astype(np.float32)
+                    pos_np = pos_np.copy(); pos_np[surf_idx_np] = snapped
+                    state_after["pos"] = pos_np
+                else:
+                    do_tf = (use_inner_gd or teacher_force) and ((t + 1) % teacher_force_every == 0)
+                    if do_tf:
+                        obs_np = obs_pos_now.detach().cpu().numpy().astype(np.float32)
+                        state_after["pos"] = obs_np.copy()
                 state = state_after
 
                 # logging
