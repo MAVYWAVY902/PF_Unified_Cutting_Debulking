@@ -27,7 +27,7 @@ from tools.pointnetpp.test_group_generalize import make_raster
 TAU_HARD, TAU_SOFT, STIFF = 0.55, 0.15, 0.9
 cfg = MESH_CONFIGS[0]; dev = "cuda:0"
 solver, rest0, mi = setup_solver_with_rest(str(REPO / cfg["path"]), fix_threshold_fraction=0.20)
-N = solver.N; solver.damping = 0.95; solver.num_iterations = 2; solver.enable_cutting = True   # occ-only: blow-up-immune, num_iter=2 native
+N = solver.N; solver.damping = 0.95; solver.num_iterations = 1; solver.enable_cutting = True   # num_iter=1 to MATCH the (b) comparison (no confound)
 solver.muller_stiff_remap = False; solver.tau_soften = False   # (b) OFF — pure α channel
 pr0 = mi["vertices"]; solver.gravity = wp.vec3(0., -9.81, 0.); solver.floor_y = float(pr0[:, 2].min() - 1.0)
 kr = cfg["knife_radius_abs"]; top = cfg["top_axis"]
@@ -70,12 +70,15 @@ def ramped_press(reach_shallow=1.0, reach_deep=10.0, n_lines=6, T_line=12, dwell
     return one
 
 
-TRAJ = {"fixed_graze": fixed_traj(), "ramped_press": ramped_press()}
+TRAJ = {"fixed": fixed_traj(), "ramped": ramped_press()}
+# (tau_soften, lambda_chamfer, lambda_outer_cav)
+CONFIGS = {"occ": (False, 0.0, 1.0), "both_bal": (True, 1.0, 5.0e-4)}
 
 
-def recover(pattern, traj, seed):
+def recover(pattern, traj, cfgname, seed):
+    ts, lc, loc = CONFIGS[cfgname]
     rng = np.random.default_rng(seed)
-    solver.num_iterations = 2; solver.muller_stiff_remap = False; solver.tau_soften = False; solver.enable_cutting = True
+    solver.num_iterations = 1; solver.muller_stiff_remap = False; solver.tau_soften = ts; solver.enable_cutting = True
     xn = (pr[:, sweep] - bb0[sweep]) / bs[sweep]; zn = (pr[:, la] - bb0[la]) / bs[la]
     hard = (np.floor(4.0 * (xn + zn)).astype(int) % 2 == 0) if pattern == "DIAG" \
         else (((xn - 0.5) ** 2 + (zn - 0.5) ** 2) < 0.25 ** 2)
@@ -88,21 +91,23 @@ def recover(pattern, traj, seed):
     solver.reset_to_rest(pr)
     op, oa = gen_obs_per_particle_stiff(solver, rest_state, theta, np.full(N, STIFF, np.float32), traj, kr, dev, tau_truth_np=tau_truth)
     multi = [(traj, [torch.tensor(p, device=dev) for p in op], [torch.tensor(a, device=dev) for a in oa])]
-    _, tau, _ = calibrate_online("Group+phase0", ctx, multi, N_passes=4, lr=0.03, lr_tau=0.5,
-                                 lr_decay_per_pass=0.6, lambda_hist=0.0, lambda_outer_cav=1.0,
+    _, tau, _ = calibrate_online(f"Group+{cfgname}", ctx, multi, N_passes=4, lr=0.03, lr_tau=0.5,
+                                 lr_decay_per_pass=0.6, lambda_hist=0.0, lambda_outer_cav=loc,
                                  return_best=True, line_search=False, verbose=False,
-                                 chamfer_loss=True, lambda_chamfer=0.0, cav_occupancy=True,   # occ-only
+                                 chamfer_loss=True, lambda_chamfer=lc, cav_occupancy=True,
                                  cav_occ_pointcloud=True, cav_occ_meannorm=True)
+    solver.tau_soften = False
     return float(tau[hard].mean()), float(tau[~hard].mean())
 
 
 SEEDS = (0, 1, 2)
-print(f"\n{'pattern':7s} {'traj':>13s}  {'τ_hard→0.55':>12s} {'τ_soft→0.15':>12s} {'abs_err':>8s}")
+print(f"\n{'pattern':7s} {'config':>9s} {'traj':>7s}  {'τ_hard→0.55':>12s} {'τ_soft→0.15':>12s} {'abs_err':>8s}")
 for pattern in ("DIAG", "SPOT"):
-    for tname, traj in TRAJ.items():
-        TH, TS = [], []
-        for s in SEEDS:
-            h, so = recover(pattern, traj, s); TH.append(h); TS.append(so)
-        ae = abs(np.mean(TH) - TAU_HARD) + abs(np.mean(TS) - TAU_SOFT)
-        print(f"{pattern:7s} {tname:>13s}  {np.mean(TH):.3f}±{np.std(TH):.3f}  {np.mean(TS):.3f}±{np.std(TS):.3f}  {ae:>8.3f}", flush=True)
-print("\nwant: ramped_press abs_err << fixed_graze (esp. SPOT overshoot 0.79→~0.55) → occ time-density fixes overshoot → (b) NOT needed")
+    for cfgname in CONFIGS:
+        for tname, traj in TRAJ.items():
+            TH, TS = [], []
+            for s in SEEDS:
+                h, so = recover(pattern, traj, cfgname, s); TH.append(h); TS.append(so)
+            ae = abs(np.mean(TH) - TAU_HARD) + abs(np.mean(TS) - TAU_SOFT)
+            print(f"{pattern:7s} {cfgname:>9s} {tname:>7s}  {np.mean(TH):.3f}±{np.std(TH):.3f}  {np.mean(TS):.3f}±{np.std(TS):.3f}  {ae:>8.3f}", flush=True)
+print("\nKEY: does occ+ramped reach both_bal level? If yes → (b) NOT needed (subtraction). If occ+ramped still >> both_bal → (b) helps even with good excitation.")
