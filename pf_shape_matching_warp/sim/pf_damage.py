@@ -8,6 +8,13 @@ import warp as wp
 DAMAGE_INT_SCALE = float(1000000)
 
 
+# NOTE 2026-06-10: a "drift-free" smooth_max0 (√-smoothmax) was tried here to replace the
+# softplus smooth-max in damage accumulation. REMOVED — it was catastrophic for τ recovery
+# (GROUP DIAG 60%→-0.4%): the softplus ln2/k "drift" inflates damage past τ and is what makes
+# the soft/hard τ contrast observable. Keep softplus. See
+# project_warp_cpp_alignment_mechanisms_2026_06_09 + the τ-regression note.
+
+
 # ============== Edge Damage (P(F) computation) ==============
 
 @wp.kernel
@@ -236,6 +243,8 @@ def finalize_particle_damage_kernel_ssa(
     # Single-assignment chain — no local re-assign, no array R-M-W
     mean_dmg = particle_damage_sum[i] / cnt
     diff = mean_dmg - particle_damage[i]
+    # NOTE 2026-06-10: reverted to softplus (see edge-damage kernel) while isolating the
+    # GROUP τ regression.
     sp_arg = wp.clamp(20.0 * diff, -50.0, 50.0)
     increment = wp.log(1.0 + wp.exp(sp_arg)) / 20.0
 
@@ -413,6 +422,9 @@ def update_edge_damage_kernel_ssa_param_arr(
     rest = pf_rest[eid]
     rest_safe = wp.where(rest > 0.01, rest, 1.0)
     target = 1.0 - pf / rest_safe
+    # NOTE 2026-06-10: reverted smooth_max0 back to softplus while ISOLATING whether the
+    # drift fix or the inside-knife gate broke GROUP τ recovery (60%→0%). softplus's ln2/k
+    # floor inflates damage well past τ → may be LOAD-BEARING for soft/hard τ contrast.
     target_clamped = wp.log(1.0 + wp.exp(wp.clamp(20.0 * target, -50.0, 50.0))) / 20.0
     current = edge_damage[eid]
     dmg_diff = target_clamped - current
@@ -472,16 +484,16 @@ def update_soft_removal_kernel_ssa_param_arr_cusa(
     sharpness_arr: wp.array(dtype=wp.float32),
     alpha_next: wp.array(dtype=wp.float32),
 ):
-    """cpp_sim-parity CUSA: damage-driven sigmoid + persistence.
+    """cpp_sim-parity CUSA: damage-driven sigmoid + inside-knife gate + persistence.
 
-    Geometric inside-knife gate REMOVED (caused alpha to never reach 0 because
-    collision pushes particles to knife surface BEFORE alpha update). Persistence
-    via wp.min(proposed, alpha_prev) preserves cpp_sim's "once removed, stays
-    removed" semantic while keeping monotonicity through forward sim.
+    α = min( α_prev , 1 - g·(1 - σ(-s·(damage - τ))) ),  g = inside-knife window.
 
-    Args pos/knife_pos/knife_radius are kept in signature for API stability
-    (caller passes them) but unused by current logic. Future inside-knife
-    extension could use pre-collision pos.
+    Restores the geometric gate (2026-06-09): α drops only where the knife is, so
+    particles stop disappearing once it moves away. Gate uses the START-OF-SUBSTEP
+    position (pre-collision) — caller MUST pass self.p["pos"], not pred_pos. The
+    earlier "gate failed" note was because pred_pos is post-collision (penetrating
+    particles get pushed onto the knife surface, dist≈r_knife → g≈0.5). See the
+    per-particle τ variant for the full rationale.
     """
     i = wp.tid()
     if fixed[i] == 1:
@@ -490,15 +502,21 @@ def update_soft_removal_kernel_ssa_param_arr_cusa(
     threshold = threshold_arr[0]
     sharpness = sharpness_arr[0]
 
-    # Damage-driven alpha (same as non-CUSA path)
+    # Smooth inside-knife window on pre-collision position.
+    kr = knife_radius_arr[0]
+    kp = knife_pos[0]
+    dvec = pos[i] - kp
+    dist = wp.sqrt(wp.dot(dvec, dvec) + 1.0e-8)
+    gate_arg = wp.clamp(20.0 * (kr - dist) / kr, -50.0, 50.0)
+    g = 1.0 / (1.0 + wp.exp(-gate_arg))
+
+    # Damage-driven alpha, then gate the DROP by the knife window.
     d = damage[i]
     exp_arg = wp.clamp(sharpness * (d - threshold), -50.0, 50.0)
-    alpha_proposed = 1.0 / (1.0 + wp.exp(exp_arg))
+    alpha_damage = 1.0 / (1.0 + wp.exp(exp_arg))
+    alpha_proposed = 1.0 - g * (1.0 - alpha_damage)
 
-    # Persistence: alpha never goes UP (matches cpp_sim "particles[pid].removed"
-    # boolean flag which only flips false→true, never reverses).
-    # Note: damage is already monotonic (softplus), so wp.min is usually no-op
-    # but guarantees the property explicitly + handles edge cases.
+    # Persistence: alpha never goes UP (cpp_sim "removed" flag is irreversible).
     alpha_next[i] = wp.min(alpha_proposed, alpha_prev[i])
 
 
@@ -518,15 +536,24 @@ def update_soft_removal_kernel_ssa_param_arr_pp_tau_cusa(
     sharpness_arr: wp.array(dtype=wp.float32),           # shape (1,) — global
     alpha_next: wp.array(dtype=wp.float32),
 ):
-    """Per-particle τ CUSA kernel.
+    """Per-particle τ CUSA kernel with inside-knife geometric gate.
 
-    α_i = σ(-s · (damage_i - τ_i))
-    Each particle i has its own threshold τ_i = threshold_per_particle[i].
-    Same persistence (wp.min) as global-τ CUSA kernel.
+    α_i = min( α_prev_i ,  1 - g_i·(1 - σ(-s·(damage_i - τ_i))) )
 
-    Use cases:
-       - sys-ID per-particle toughness field (heterogeneous tissue)
-       - tumor (low τ, brittle) vs background (high τ, tough)
+    where g_i = σ( S_gate·(r_knife - ‖pos_i - knife‖)/r_knife ) is a smooth
+    inside-knife window (1 inside, 0.5 at the surface, 0 outside) — the
+    differentiable mirror of cpp_sim process_fragments' `dist < knife_r` gate
+    (cutting_manager.h:273). 2026-06-09.
+
+    Restores the geometric gate that was previously removed: α is only pulled
+    DOWN where the knife currently is, so a particle stops "disappearing" once
+    the knife moves away (symptom ③). Persistence (wp.min) keeps it removed.
+    Uses pos = START-OF-SUBSTEP position (pre-collision) — caller must pass
+    self.p["pos"], NOT pred_pos — which is why the gate failed before (collision
+    pushes penetrating particles onto the knife surface, dist≈r_knife → g≈0.5).
+
+    ∂α/∂τ = g·∂σ/∂τ → gradient flows for τ exactly where the knife passes (the
+    only place τ is observable), and is gated off elsewhere (correct null-space).
     """
     i = wp.tid()
     if fixed[i] == 1:
@@ -536,11 +563,21 @@ def update_soft_removal_kernel_ssa_param_arr_pp_tau_cusa(
     threshold = threshold_per_particle[i]   # per-particle τ
     sharpness = sharpness_arr[0]             # global
 
+    # Smooth inside-knife window on pre-collision position.
+    kr = knife_radius_arr[0]
+    kp = knife_pos[0]
+    dvec = pos[i] - kp
+    dist = wp.sqrt(wp.dot(dvec, dvec) + 1.0e-8)
+    gate_arg = wp.clamp(20.0 * (kr - dist) / kr, -50.0, 50.0)
+    g = 1.0 / (1.0 + wp.exp(-gate_arg))
+
+    # Damage-driven alpha, then gate the DROP (g·(1-α_damage)) by knife window.
     d = damage[i]
     exp_arg = wp.clamp(sharpness * (d - threshold), -50.0, 50.0)
-    alpha_proposed = 1.0 / (1.0 + wp.exp(exp_arg))
+    alpha_damage = 1.0 / (1.0 + wp.exp(exp_arg))
+    alpha_proposed = 1.0 - g * (1.0 - alpha_damage)
 
-    # Persistence (same as global-τ kernel).
+    # Persistence: alpha never goes UP (cpp_sim "removed" flag is irreversible).
     alpha_next[i] = wp.min(alpha_proposed, alpha_prev[i])
 
 

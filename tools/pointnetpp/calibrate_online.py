@@ -43,6 +43,19 @@ def calibrate_online(
     window_size: int = 20,
     n_hist_samples: int = 4,
     teacher_force: bool = True,              # overwrite sim pos with obs (auto-OFF when use_inner_gd)
+    chamfer_loss: bool = False,              # ★ 2026-06-13: CORRESPONDENCE-FREE via SOFT LOSS (not state
+                                             #   overwrite). L_gap = symmetric (bidirectional) Chamfer
+                                             #   distance(sim surf cloud, obs surf cloud); state FREE-RUNS
+                                             #   (no overwrite). Fixes chamfer_state's hard-NN-snap sign-flip
+                                             #   (ICP local-min injected into state). See DiffCloud/Liang.
+    lambda_chamfer: float = 1.0,             #   weight on the bidirectional Chamfer L_gap
+    soft_corr_state: bool = False,           # ★ 2026-06-13: CORRESPONDENCE-FREE SOFT state correction.
+                                             #   corrected sim surf pos = softmax(-d²/T)-weighted avg of
+                                             #   obs cloud (RPM-Net/robust-OT style soft assignment, the
+                                             #   principled middle between hard NN-snap and free-run). T =
+                                             #   soft_corr_temp. T→0 = hard snap; T→∞ = pull to centroid.
+                                             #   Real-D405 transferable (only needs raw 3D clouds, no IDs).
+    soft_corr_temp: float = 1.0e-4,          #   softmax temperature (m²); ~(c·edge)² for c-edge neighborhood
     chamfer_state: bool = False,             # ★ B1': CORRESPONDENCE-FREE state correction. Each frame
                                              #   snap sim surface particles to their NEAREST obs surface
                                              #   point (Chamfer/NN), not the same-index obs point. Interior
@@ -54,6 +67,14 @@ def calibrate_online(
                                              #   gradient that per-frame teacher forcing kills).
     return_best: bool = False,               # ★ snapshot params per pass; return the lowest
                                              #   pass-mean-loss snapshot (anti-overshoot).
+    line_search: bool = False,               # ★ (DDBot 2026) per-frame line search on the
+                                             #   Adam step: take the unit Adam step, then try
+                                             #   stepsize multipliers and keep the one that
+                                             #   most reduces this frame's data loss. Stops
+                                             #   overshoot on rugged loss (GROUP τ collapse).
+                                             #   Costs ~len(ls_alphas)+1 extra forwards/frame.
+                                             #   Only active when use_inner_gd=False.
+    ls_alphas: Tuple = (0.1, 0.5, 1.0, 1.5, 2.0),
     dynamic_surface: bool = False,           # ★ re-detect the observable set EACH FRAME from the
                                              #   observed alpha: per lateral column, the topmost
                                              #   still-alive particle band = currently visible
@@ -72,6 +93,16 @@ def calibrate_online(
                                              #   observed). = comparing the cavity as a spatial field
                                              #   (point-cloud holes), no particle IDs. Needs surf_top_axis.
     cav_grid_n: int = 12,                    #   lateral grid resolution for occupancy cells
+    cav_occ_pointcloud: bool = False,        # ★ 2026-06-13: REAL-derivable occupancy — OBS side from
+                                             #   binning the raw obs POINT CLOUD by CURRENT lateral position
+                                             #   (count present points per cell / rest density), NOT from
+                                             #   per-particle alpha labels (the synth cheat). NO IDs.
+    cav_occ_meannorm: bool = False,          # ★ 2026-06-14: SAMPLING-INVARIANT occupancy — normalize sim_occ
+                                             #   and obs_occ each by their own mean before the loss, so a
+                                             #   uniform DOWNSAMPLE (sparse real cloud) cancels out (obs_occ
+                                             #   scaled by keep_frac → mean scales too → ratio invariant).
+                                             #   Fixes the downsample collapse (rest-density baseline assumes
+                                             #   full sampling). Use with cav_occ_pointcloud for real D405.
     snapshot_every: int = 0,                 # ★ if >0, append (step, tau_pp_np) to snapshot_out
                                              #   every N steps (+ one at step 0 = init) for viz.
     snapshot_out: Optional[list] = None,
@@ -118,6 +149,19 @@ def calibrate_online(
         A_cav = torch.zeros(cav_ncells, len(surf_idx_np), dtype=torch.float32, device=device)
         A_cav[cav_cell, np.arange(len(surf_idx_np))] = 1.0
         cav_cap = A_cav.sum(1) + 1e-6                        # particles per cell (for fraction)
+        # for point-cloud occupancy (obs binned by CURRENT lateral position, no IDs)
+        _cav_lo = torch.tensor([lo[clat[0]], lo[clat[1]]], dtype=torch.float32, device=device)
+        _cav_span = torch.tensor([span[clat[0]], span[clat[1]]], dtype=torch.float32, device=device)
+
+        def _occ_binned(pts, weights):
+            """Occupancy by CURRENT lateral position: bin pts into the grid, sum `weights` per cell,
+            normalize by rest density (cav_cap). pts binning is index-only (detach pos upstream);
+            gradient flows through `weights` (=α for sim). Real-derivable (no IDs)."""
+            la = ((pts[:, clat[0]] - _cav_lo[0]) / _cav_span[0] * cav_grid_n).long().clamp(0, cav_grid_n - 1)
+            lb = ((pts[:, clat[1]] - _cav_lo[1]) / _cav_span[1] * cav_grid_n).long().clamp(0, cav_grid_n - 1)
+            cell = la * cav_grid_n + lb
+            occ = torch.zeros(cav_ncells, dtype=torch.float32, device=device)
+            return occ.scatter_add(0, cell, weights) / cav_cap
 
     # ----- dynamic-surface precompute (lateral grid + rest depth) -----
     # The observable set is recomputed each frame: per lateral (non-top) grid cell,
@@ -241,6 +285,11 @@ def calibrate_online(
     total_steps = 0
     t0 = time.time()
     initial_lrs = [pg["lr"] for pg in opt.param_groups]
+    ls_params = [p for g in opt.param_groups for p in g["params"]]  # for line search
+    if line_search and use_inner_gd:
+        if verbose:
+            print("  [line_search] disabled (use_inner_gd=True not supported)", flush=True)
+        line_search = False
     best_loss = float("inf")
     best_snapshot = None
 
@@ -305,15 +354,37 @@ def calibrate_online(
                 else:
                     delta_x = None
                     delta_dv = None
-                    L_gap = ((pos_t[cur_surf] - obs_pos_now[cur_surf]) ** 2).sum()
+                    if chamfer_loss:
+                        # CORRESPONDENCE-FREE soft loss: symmetric Chamfer between sim & obs
+                        # surface point clouds (no index/NN state overwrite). cdist+min is
+                        # differentiable a.e.; both directions for partial/sampling robustness.
+                        sim_s = pos_t[cur_surf]
+                        obs_s = obs_pos_now[cur_surf]
+                        d = torch.cdist(sim_s, obs_s)
+                        L_gap = lambda_chamfer * (d.min(1).values.mean() + d.min(0).values.mean())
+                    else:
+                        L_gap = ((pos_t[cur_surf] - obs_pos_now[cur_surf]) ** 2).sum()
 
                 # ===== L_cav (only used in simplified mode; inner GD includes cav already) =====
                 L_cav = torch.tensor(0.0, device=device)
                 if lambda_outer_cav > 0 and not use_inner_gd:
                     if cav_occupancy:
                         # correspondence-free: per-cell alive-FRACTION mismatch (sim soft vs obs)
+                        # sim side = rest-cell A_cav (material frame): consistent particle→cell mapping
+                        # across frames + aligned with rest-frame τ-grouping + clean [0,1] norm. (sym
+                        # current-pos sim binning was tested 2026-06-13 and is WORSE — scrambles the
+                        # per-frame gradient; do NOT bin sim by current position.)
                         sim_occ = (A_cav @ alpha_t[surface_idx]) / cav_cap
-                        obs_occ = (A_cav @ (obs_alpha_now[surface_idx] > 0.5).float()) / cav_cap
+                        if cav_occ_pointcloud:
+                            # REAL: obs occupancy from raw point cloud (present pts, current pos, no IDs)
+                            present = obs_alpha_now[surface_idx] > 0.5      # synth visibility proxy (real cloud lacks removed)
+                            pc = obs_pos_now[surface_idx][present]
+                            obs_occ = _occ_binned(pc, torch.ones(pc.shape[0], device=device)).detach()
+                        else:
+                            obs_occ = (A_cav @ (obs_alpha_now[surface_idx] > 0.5).float()) / cav_cap
+                        if cav_occ_meannorm:                          # sampling-invariant (cancels downsample)
+                            sim_occ = sim_occ / (sim_occ.mean() + 1e-6)
+                            obs_occ = obs_occ / (obs_occ.mean() + 1e-6)
                         L_cav = ((sim_occ - obs_occ) ** 2).sum()
                     else:
                         L_cav = ((alpha_t[cur_surf] - obs_alpha_now[cur_surf]) ** 2).sum()
@@ -352,7 +423,51 @@ def calibrate_online(
                     + lambda_smooth * L_smooth
                 opt.zero_grad()
                 L.backward()
-                opt.step()
+
+                if not line_search:
+                    opt.step()
+                else:
+                    # DDBot-style line search: take the unit Adam step, then scale it by
+                    # candidate multipliers and keep the one minimizing THIS frame's data
+                    # loss (forward re-run at this frame's IC). Anti-overshoot on rugged loss.
+                    def _cand_data_loss(s_pp, t_pp):
+                        a_c, p_c, _ = WarpFullForwardOp.apply(
+                            theta_torch, solver, state, cur_traj[t], knife_radius, s_pp, t_pp)
+                        lg = ((p_c[cur_surf] - obs_pos_now[cur_surf]) ** 2).sum()
+                        lc = torch.tensor(0.0, device=device)
+                        if lambda_outer_cav > 0:
+                            if cav_occupancy:
+                                so = (A_cav @ a_c[surface_idx]) / cav_cap
+                                if cav_occ_pointcloud:
+                                    present = obs_alpha_now[surface_idx] > 0.5
+                                    pc = obs_pos_now[surface_idx][present]
+                                    oo = _occ_binned(pc, torch.ones(pc.shape[0], device=device)).detach()
+                                else:
+                                    oo = (A_cav @ (obs_alpha_now[surface_idx] > 0.5).float()) / cav_cap
+                                if cav_occ_meannorm:
+                                    so = so / (so.mean() + 1e-6); oo = oo / (oo.mean() + 1e-6)
+                                lc = ((so - oo) ** 2).sum()
+                            else:
+                                lc = ((a_c[cur_surf] - obs_alpha_now[cur_surf]) ** 2).sum()
+                        return float((lg + lambda_outer_cav * lc).item())
+
+                    old_p = [p.detach().clone() for p in ls_params]
+                    opt.step()                                   # unit Adam step (also updates Adam state)
+                    step_vec = [p.detach() - o for p, o in zip(ls_params, old_p)]
+                    best_a, best_l = 1.0, None
+                    with torch.no_grad():
+                        for a_ls in ls_alphas:
+                            for p, o, sv in zip(ls_params, old_p, step_vec):
+                                p.copy_(o + a_ls * sv)
+                            s_c, t_c = reconstruct_fields()
+                            l_c = _cand_data_loss(s_c, t_c)
+                            if best_l is None or l_c < best_l:
+                                best_l, best_a = l_c, a_ls
+                        # commit best multiplier + re-run forward so solver ends in chosen state
+                        for p, o, sv in zip(ls_params, old_p, step_vec):
+                            p.copy_(o + best_a * sv)
+                        s_c, t_c = reconstruct_fields()
+                        _cand_data_loss(s_c, t_c)
 
                 # ===== push (state_in, knife, obs_pos, obs_alpha) to history =====
                 H_buffer.append((
@@ -373,7 +488,25 @@ def calibrate_online(
                 # Teacher-force position to obs only every `teacher_force_every` frames.
                 # Within a window, sim free-evolves so cavity errors accumulate (strong signal);
                 # at window boundary we reset to obs to prevent runaway divergence / NaN.
-                if chamfer_state:
+                if chamfer_loss:
+                    # CORRESPONDENCE-FREE soft loss → state FREE-RUNS (no overwrite). The
+                    # Chamfer L_gap pulls params via gradient; we never inject (possibly wrong)
+                    # correspondence into the physics state (unlike chamfer_state hard-snap).
+                    pass
+                elif soft_corr_state:
+                    # CORRESPONDENCE-FREE SOFT state correction: each sim surf particle is
+                    # corrected to a softmax(-d²/T)-weighted average of the obs cloud (soft
+                    # assignment, RPM-Net/robust-OT). Robust to mis-correspondence (no single-NN
+                    # commitment) yet keeps the alignment role of teacher-force. Detached.
+                    pos_np = state_after["pos"]
+                    sim_surf = torch.tensor(pos_np[surf_idx_np], dtype=torch.float32, device=device)
+                    obs_surf = obs_pos_now[surface_idx]                      # (Ns,3) obs cloud, no IDs
+                    d2 = torch.cdist(sim_surf, obs_surf) ** 2                # (Ns_sim, Ns_obs)
+                    w = torch.softmax(-d2 / max(soft_corr_temp, 1e-12), dim=1)
+                    corrected = (w @ obs_surf).detach().cpu().numpy().astype(np.float32)
+                    pos_np = pos_np.copy(); pos_np[surf_idx_np] = corrected
+                    state_after["pos"] = pos_np
+                elif chamfer_state:
                     # CORRESPONDENCE-FREE: snap sim surface particles to nearest obs
                     # surface point (treat obs surface as an unordered point cloud).
                     # Interior keeps its free-run state.

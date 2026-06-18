@@ -952,6 +952,10 @@ def apply_kernel_ssa_param_arr_pp(
     alpha: wp.array(dtype=wp.float32),
     fixed: wp.array(dtype=wp.int32),
     stiffness_per_particle: wp.array(dtype=wp.float32),
+    stiff_exp: float,                        # Müller 2007 exp remap exponent (1/num_iter); 1.0 = off
+    tau_per_particle: wp.array(dtype=wp.float32),  # (b) 2026-06-15: per-particle τ for d/τ softening
+    tau_soften: float,                       # (b): 1.0 = soften by d/τ (τ-coupled, wakes position
+                                             #   channel); 0.0 = legacy raw-damage softening (τ-blind).
     shape_delta: wp.array(dtype=wp.vec3),
 ):
     i = wp.tid()
@@ -960,9 +964,23 @@ def apply_kernel_ssa_param_arr_pp(
 
     stiffness = stiffness_per_particle[i]   # ← per-particle (vs [0])
     dmg = damage[i]
-    local_stiff = stiffness * (1.0 - dmg * 0.95)
+    # (b) 2026-06-15: τ-coupled cohesive softening. Legacy softens by raw damage (τ-blind →
+    # position channel carries no τ). d/τ ratio softens by "fraction toward fracture": high-τ
+    # (tough) stays stiff longer, low-τ softens early → pre-fracture deformation carries τ →
+    # dense position-channel τ signal. ∂(local_stiff)/∂τ = 0.95·k·d/τ² ≠ 0 for all 0<d<τ
+    # (vs raw-damage = 0). NOTE wp.where evaluates BOTH branches → guard tau by max(·,1e-4).
+    tau_i = wp.max(tau_per_particle[i], 1.0e-4)
+    ratio = wp.clamp(dmg / tau_i, 0.0, 1.0)         # d/τ ∈ [0,1]; saturates in removal region
+    dmg_eff = wp.where(tau_soften > 0.5, ratio, dmg)
+    local_stiff = stiffness * (1.0 - dmg_eff * 0.95)
+    # Müller 2007 iteration-count-independent stiffness: k' = 1-(1-k)^(1/ns).
+    # stiff_exp=1.0 -> k'=k (legacy). stiff_exp=1/num_iter -> cumulative stiffness over
+    # num_iter passes ≈ one application of k, removing the num_iter eff-stiffness inflation
+    # that drives the cutting blow-up. base in [0.15,1] (local_stiff<=0.85) -> pow safe.
+    base = wp.max(1.0 - local_stiff, 1.0e-6)
+    k_eff = 1.0 - wp.pow(base, stiff_exp)
     inv_count = 1.0 / wp.float32(delta_counts[i])
-    correction = local_stiff * inv_count * deltas[i]
+    correction = k_eff * inv_count * deltas[i]
 
     wp.atomic_add(shape_delta, i, correction)
 
@@ -1064,10 +1082,22 @@ def update_velocity_kernel_ssa(
     alpha: wp.array(dtype=wp.float32),
     fixed: wp.array(dtype=wp.int32),
     inv_dt: float,
+    alpha_vel_scale: float,                  # 0.0 = legacy (no scale); 1.0 = α-weighted carry (regime D)
     pos_out: wp.array(dtype=wp.vec3),        # OUT: new pos
     vel_out: wp.array(dtype=wp.vec3),        # OUT: new vel
 ):
-    """SSA Phase 2C: wp.where mask + cycle-scoped output buffers."""
+    """SSA Phase 2C: wp.where mask + cycle-scoped output buffers.
+
+    alpha_vel_scale (2026-06-12): α-weighted velocity carry. The blow-up root cause
+    (diag_blowup_rootcause.py) is that this kernel reconstructs v=(pred-old)/dt with a
+    mask that saturates to ≈1 for any α>0.05, UNDOING the α-damping that predict_kernel_ssa
+    already applied (v_damped = v*damping*α). Half-removed "zombie" particles (0.01<α<0.5)
+    thus keep full velocity → debris flies off (3.2× body-diagonal → NaN). Scaling the
+    carried velocity by continuous α restores the predict↔update symmetry and is smooth
+    in α (differentiable). GRADIENT-NEUTRAL for per-frame backward: vel_out is never read
+    by the loss (L_gap reads pos, L_cav reads α) and carries to the next frame DETACHED,
+    so ∂L/∂τ, ∂L/∂k are unchanged. Default 0.0 keeps legacy behavior bit-identical.
+    """
     i = wp.tid()
 
     a = alpha[i]
@@ -1084,7 +1114,10 @@ def update_velocity_kernel_ssa(
     new_pos = pred_pos[i]
 
     # masked write: alive → new value; dead/fixed → preserve previous
-    vel_out[i] = mask * new_vel + (1.0 - mask) * vel_in[i]
+    blended_vel = mask * new_vel + (1.0 - mask) * vel_in[i]
+    # α-weighted carry: scale = 1 when alpha_vel_scale=0 (legacy); scale = a when =1 (regime D).
+    vel_scale = (1.0 - alpha_vel_scale) + alpha_vel_scale * a
+    vel_out[i] = vel_scale * blended_vel
     pos_out[i] = mask * new_pos + (1.0 - mask) * pos_in[i]
 
 
@@ -1172,3 +1205,67 @@ def collision_kernel_batched_ssa(
         p_new = p_floor
 
     wp.atomic_add(collision_delta, i, p_new - p0)
+
+
+# ============== Self-collision (soft penalty, differentiable) ==============
+# Option (A) 2026-06-09: differentiable mirror of cpp_sim self_collision_kernel
+# (shape_matching_gpu.cu:353 hash-grid). Needed so a SEVERED fragment (made free by
+# warp_cluster_split) LANDS on the base instead of passing through it — warp's
+# collision_kernel only handles floor+knife, no particle-particle contact.
+#
+# Differentiability: the neighbor SET (which j) comes from a wp.HashGrid built on the
+# current positions — a DETACHED spatial index (a sparsity pattern, no adjoint). The
+# repulsion FORCE given a pair is a smooth function of (pred_pos[i], pred_pos[j]) and is
+# differentiable; gradient flows through it. Same "discrete mode detached, smooth response
+# in-tape" pattern as the cluster split. Each thread writes ONLY sc_delta[i] (pushes i away
+# from each neighbor j) — symmetric in effect, parallel-safe, no cross-write to j.
+#
+# collision_dist MUST be < the rest nearest-neighbor spacing, else bonded neighbors get
+# repelled and fight the shape-matching (mesh explodes). cpp relies on the same radius<spacing
+# property (no same-cluster exclusion). Caller sets solver.self_collision_dist accordingly.
+
+@wp.kernel
+def self_collision_kernel_ssa(
+    grid: wp.uint64,
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    fixed: wp.array(dtype=wp.int32),
+    collision_dist: float,
+    stiffness: float,
+    sc_delta: wp.array(dtype=wp.vec3),       # OUTPUT (atomic_add, requires_grad)
+    sc_count: wp.array(dtype=wp.int32),      # OUTPUT (atomic_add)
+):
+    i = wp.tid()
+    if alpha[i] < 0.01 or fixed[i] == 1:
+        return
+    pi = pred_pos[i]
+    # Detached neighbor query (grid built on current positions).
+    query = wp.hash_grid_query(grid, pi, collision_dist)
+    for j in query:
+        if j != i and alpha[j] > 0.01:
+            e = pi - pred_pos[j]
+            d2 = wp.dot(e, e)
+            if d2 < collision_dist * collision_dist and d2 > 1.0e-12:
+                d = wp.sqrt(d2)
+                overlap = collision_dist - d                 # > 0 inside contact
+                # smooth repulsion: push i away from j by half the overlap × stiffness.
+                corr = (stiffness * 0.5 * overlap / d) * e
+                wp.atomic_add(sc_delta, i, corr)
+                wp.atomic_add(sc_count, i, 1)
+
+
+@wp.kernel
+def apply_self_collision_ssa_kernel(
+    pred_pos_in: wp.array(dtype=wp.vec3),
+    sc_delta: wp.array(dtype=wp.vec3),
+    sc_count: wp.array(dtype=wp.int32),
+    pred_pos_out: wp.array(dtype=wp.vec3),       # WRITE (fresh buffer, SSA-clean)
+):
+    """pred_pos_out = pred_pos_in + sc_delta / max(count,1). Averaging (count) keeps the
+    correction bounded when a particle contacts many neighbors (cpp uses the same /count)."""
+    i = wp.tid()
+    c = sc_count[i]
+    if c == 0:
+        pred_pos_out[i] = pred_pos_in[i]
+    else:
+        pred_pos_out[i] = pred_pos_in[i] + sc_delta[i] / wp.float32(c)

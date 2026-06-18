@@ -1,0 +1,80 @@
+"""Grazing (shallow y=0.93) vs deep (y=0.70) cut: τ recovery comparison (GROUP, DIAG+SPOT).
+Prediction from the observability sweep (Σ‖gτ‖: grazing 77 vs deep 0.0): grazing recovers τ,
+deep fails (no surface τ-signal). Single trajectory per depth so depth is the only variable.
+"""
+import sys, time, numpy as np, torch
+from pathlib import Path
+REPO = Path("/home/yunxin/pf-shape-matching")
+sys.path.insert(0, str(REPO)); sys.path.insert(0, str(REPO / "pf_shape_matching_warp"))
+import warp as wp; wp.init()
+from tools.day2_solver_wrapper import setup_solver_with_rest, solver_save_state
+from tools.day6b_full_forward_torch_op import WarpFullForwardOp
+from tools.stageA_inclusion_recovery import gen_obs_per_particle_stiff
+from tools.pointnetpp.hierarchy import build_hierarchy
+from tools.pointnetpp.multi_mesh_test import MESH_CONFIGS
+from tools.pointnetpp.calibrate_online import calibrate_online
+from tools.pointnetpp.surface_projection import column_grid_assignment
+from tools.pointnetpp.test_group_generalize import make_raster
+
+TAU_HARD, TAU_SOFT, TAU_INIT, STIFF = 0.55, 0.15, 0.30, 0.5
+cfg = MESH_CONFIGS[0]; dev = "cuda:0"
+solver, rest_state0, mi = setup_solver_with_rest(str(REPO / cfg["path"]), fix_threshold_fraction=0.20)
+N = solver.N; solver.damping = 0.95; solver.num_iterations = 2; solver.enable_cutting = True
+pr0 = mi["vertices"]; solver.gravity = wp.vec3(0., -9.81, 0.); solver.floor_y = float(pr0[:, 2].min() - 1.0)
+kr = cfg["knife_radius_abs"]; top = cfg["top_axis"]
+print(f"N={N} (grazing y=0.93 vs deep y=0.70 τ recovery)")
+
+
+def recovery(y_frac, pattern):
+    solver.num_iterations = 2; solver.enable_cutting = True
+    solver.reset_to_rest(pr0); far = pr0.max(0) + 10.
+    sw = torch.tensor(np.full(N, STIFF, np.float32), device=dev); twt = torch.tensor(np.full(N, TAU_INIT, np.float32), device=dev)
+    tht = torch.tensor([3., 20., 0.3], dtype=torch.float32, device=dev); st = rest_state0
+    with torch.no_grad():
+        for _ in range(60):
+            _, pw, _ = WarpFullForwardOp.apply(tht, solver, st, far, kr, sw, twt); st = solver_save_state(solver)
+    pr = pw.cpu().numpy().copy(); rest_state = st
+    bb0, bb1 = pr.min(0), pr.max(0); bs = bb1 - bb0
+    lat = [a for a in range(3) if a != top]; sweep, la = lat[0], lat[1]
+    surf = pr[:, top] > (bb1[top] - 0.10 * bs[top]); surf_idx = torch.tensor(np.where(surf)[0], dtype=torch.long, device=dev)
+    col_id, _ = column_grid_assignment(pr, surf, top, grid_n=8)
+    xn = (pr[:, sweep] - bb0[sweep]) / bs[sweep]; zn = (pr[:, la] - bb0[la]) / bs[la]
+    hard = (np.floor(4.0 * (xn + zn)).astype(int) % 2 == 0) if pattern == "DIAG" \
+        else (((xn - 0.5) ** 2 + (zn - 0.5) ** 2) < 0.25 ** 2)
+    tau_truth = np.where(hard, TAU_HARD, TAU_SOFT).astype(np.float32)
+    traj = make_raster(bb0, bb1, top, sweep, la, y_frac, 8, 25)
+    stiff_u = np.full(N, STIFF, np.float32); theta_truth = np.array([3., 20., 0.3], np.float32)
+    ea = solver.e["a"].numpy().astype(np.int64); eb = solver.e["b"].numpy().astype(np.int64)
+    eat = torch.tensor(ea, dtype=torch.long, device=dev); ebt = torch.tensor(eb, dtype=torch.long, device=dev)
+    ert = torch.tensor(np.linalg.norm(pr[ea] - pr[eb], axis=1), dtype=torch.float32, device=dev)
+    H = build_hierarchy(torch.from_numpy(pr).to(dev, torch.float32),
+                        M1=min(512, max(32, N // 20)), M2=min(64, max(8, N // 200)), k_neighbors=3)
+    ctx = dict(solver=solver, rest_state=rest_state, N=N, device=dev, knife_radius=kr, pos_rest=pr,
+               theta_3d_np=theta_truth, stiff_init_np=np.full(N, STIFF, np.float32), tau_init_np=np.full(N, TAU_INIT, np.float32),
+               tau_bound=(0.05, 0.95), surface_idx=surf_idx, edges_a_t=eat, edges_b_t=ebt, edges_rest_t=ert, H=H, group_col_id=col_id)
+    solver.reset_to_rest(pr)
+    op, oa = gen_obs_per_particle_stiff(solver, rest_state, theta_truth, stiff_u, traj, kr, dev, tau_truth_np=tau_truth)
+    multi = [(traj, [torch.tensor(p, device=dev) for p in op], [torch.tensor(a, device=dev) for a in oa])]
+    t0 = time.time()
+    _, tau, _ = calibrate_online("Group+L_pos_partial", ctx, multi, N_passes=4, lr=0.03, lr_tau=0.5,
+                                 lr_decay_per_pass=0.6, lambda_hist=0.0, lambda_outer_cav=1.0,
+                                 return_best=True, line_search=False, verbose=False)
+    rec = (tau[hard].mean() - tau[~hard].mean()) / (TAU_HARD - TAU_SOFT) * 100
+    return float(rec), time.time() - t0
+
+
+REPS = 3
+print(f"\n{'pattern':7s} {'depth':>8s}  {'recovery% (3 seeds)':>26s}  {'mean±std':>14s}")
+agg = {}
+for pname in ("DIAG", "SPOT"):
+    for y, label in [(0.93, "grazing"), (0.70, "deep")]:
+        recs = [recovery(y, pname)[0] for _ in range(REPS)]
+        m, s = float(np.mean(recs)), float(np.std(recs))
+        agg[(pname, label)] = (m, s)
+        print(f"{pname:7s} {label:>8s}  {str([round(r,1) for r in recs]):>26s}  {m:6.1f}±{s:.1f}%", flush=True)
+print()
+for pname in ("DIAG", "SPOT"):
+    gm, gs = agg[(pname, "grazing")]; dm, ds = agg[(pname, "deep")]
+    verdict = "grazing WINS" if gm - dm > gs + ds else ("FLAT/overlap" if abs(gm - dm) < gs + ds else "deep wins")
+    print(f"{pname}: grazing {gm:.1f}±{gs:.1f}  vs  deep {dm:.1f}±{ds:.1f}  → {verdict}")
+solver.num_iterations = 2; solver.enable_cutting = True

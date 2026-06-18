@@ -30,6 +30,9 @@ from .kernels import (
     # project_layer_a_fix_implementation_plan_2026_05_05.md.
     apply_shape_delta_ssa_kernel,
     apply_collision_delta_ssa_kernel,
+    # Self-collision (soft penalty, differentiable) — 2026-06-09, optional (default off)
+    self_collision_kernel_ssa,
+    apply_self_collision_ssa_kernel,
     update_velocity_kernel,
     # Phase 2C (2026-05-07): SSA variant of update_velocity replaces alpha-based
     # early return with wp.where mask + cycle-scoped output buffers. Unblocks
@@ -108,6 +111,10 @@ class ShapeMatchingSolver:
         self.aspiration_threshold = 0.3
         self.soft_removal_sharpness = 20.0  # sigmoid sharpness for differentiable removal
         self.cutting_update_interval = 50
+        # 2026-06-13: master switch for the REMOVAL/cutting block (decoupled from the
+        # knife collider). True = debulk (cut). False = non-destructive PRESS (indent only,
+        # α stays 1, topology intact) → stiffness-calibration mode. See _substep step 4.
+        self.enable_cutting = True
 
         # CUSA parity mode (2026-05-25): cpp_sim-style inside-knife gate +
         # persistence on alpha. Eliminates zombie particles by restricting alpha
@@ -152,6 +159,40 @@ class ShapeMatchingSolver:
         self._ssa_edge_damage_buffers = None        # list[wp.array(num_edges)]
         self._ssa_particle_damage_buffers = None    # list[wp.array(N)]
         self._ssa_cycle_index = 0                   # which buffer slot to write next
+
+        # Self-collision (soft penalty, differentiable) — 2026-06-09. OPTIONAL, default
+        # OFF so all calibration/RL/gradient-verified paths are untouched. When True, a
+        # particle-particle repulsion runs after the Jacobi loop so a SEVERED fragment
+        # (made free by warp_cluster_split) lands on the base instead of passing through
+        # (warp's collision_kernel only does floor+knife). self_collision_dist MUST be
+        # < rest nearest-neighbor spacing or bonded neighbors fight shape-matching.
+        # Caller sets self_collision_dist (e.g. 0.5×mean_edge) + stiffness before step().
+        # α-weighted velocity carry in update_velocity_kernel_ssa (2026-06-12).
+        # 0.0 = legacy (bit-identical default); 1.0 = scale carried velocity by α to
+        # tame half-removed "zombie" debris flyers (forward-stability fix, regime D in
+        # diag_blowup_rootcause.py). Gradient-neutral for per-frame backward — see kernel
+        # docstring. Default OFF so production behavior is unchanged until verified.
+        self.alpha_vel_scale = 0.0
+        # Müller 2007 iteration-count-independent stiffness remap (2026-06-12):
+        # k_eff = 1-(1-k)^(1/num_iterations) in apply_kernel_ssa_param_arr_pp. False = legacy
+        # (stiff_exp=1.0). True removes the eff-stiffness-grows-with-num_iter inflation that is
+        # the literature-named cause of the cutting blow-up (XPBD "iteration-count-dependent
+        # stiffness"). Default OFF until verified.
+        self.muller_stiff_remap = False
+        # (b) 2026-06-15: τ-coupled cohesive softening in apply_kernel_ssa_param_arr_pp.
+        # False = legacy raw-damage softening (τ-blind position channel). True = soften by
+        # d/τ ratio → high-τ stays stiff longer → pre-fracture deformation carries τ → wakes
+        # the dense position channel (so a position/chamfer loss can read τ). Default OFF.
+        # Only active when both stiffness AND threshold are per-particle (N,). See memory
+        # project_tau_observability_physics (∂α/∂τ band) — this moves τ into position channel.
+        self.tau_soften = False
+        self.use_self_collision = False
+        self.self_collision_dist = 0.005
+        self.self_collision_stiffness = 1.0
+        self.self_collision_iters = 4          # Jacobi-style passes/substep to resolve
+                                               # penetration (one weak pass can't stop a
+                                               # fast rigid chunk; cpp iterates in-loop).
+        self._self_collision_grid = None       # lazy wp.HashGrid
 
         # Day 6b (2026-05-22): optional wp.array path for θ — when set, the
         # cutting block uses *_ssa_param_arr kernels so autograd flows back to
@@ -595,6 +636,16 @@ class ShapeMatchingSolver:
                         f"per-particle stiffness must have shape (N,) = ({N},), "
                         f"got shape ({stiff_arr.shape[0]},)"
                     )
+                    _stiff_exp = (1.0 / float(self.num_iterations)) if self.muller_stiff_remap else 1.0
+                    # (b) 2026-06-15: τ-coupled softening. Active only when threshold is also
+                    # per-particle (N,) AND self.tau_soften. Pass the SAME threshold array used
+                    # by the α kernel (so τ gradient is consistent across both channels). When
+                    # off, pass damage as a harmless (N,) placeholder (wp.where evaluates both
+                    # branches; tau_soften=0 selects the raw-damage branch → exact legacy).
+                    _thr = self.theta_wp.get("threshold") if self.theta_wp is not None else None
+                    _tau_pp_ok = (_thr is not None and _thr.shape[0] == N)
+                    _tau_soft = 1.0 if (self.tau_soften and _tau_pp_ok) else 0.0
+                    _tau_arr = _thr if _tau_pp_ok else self.p["damage"]
                     wp.launch(
                         apply_kernel_ssa_param_arr_pp,
                         dim=N,
@@ -602,6 +653,9 @@ class ShapeMatchingSolver:
                             _deltas_it, _delta_counts_it,
                             self.p["damage"], self._current_alpha(), self.p["fixed"],
                             stiff_arr,
+                            _stiff_exp,
+                            _tau_arr,
+                            _tau_soft,
                             _shape_delta_it,
                         ],
                         device=self.device,
@@ -699,8 +753,48 @@ class ShapeMatchingSolver:
             device=self.device,
         )
 
+        # 3c. Self-collision (soft penalty, differentiable) — OPTIONAL, after the Jacobi
+        # loop so a severed free fragment lands on the base instead of passing through.
+        # Detached hash-grid neighbor search + smooth in-tape repulsion (SSA: write to a
+        # fresh sc_delta, apply into a fresh pred_pos buffer). Default off → no-op.
+        if self.use_self_collision:
+            if self._self_collision_grid is None:
+                self._self_collision_grid = wp.HashGrid(64, 64, 64, device=self.device)
+            # Jacobi-style: rebuild grid + push each pass so deep penetration is resolved
+            # progressively (a single weak pass can't stop a fast rigid fragment).
+            for _sc_it in range(self.self_collision_iters):
+                # build is non-differentiable spatial indexing (detached); cell size = dist.
+                self._self_collision_grid.build(self.p["pred_pos"], self.self_collision_dist)
+                sc_delta = wp.zeros(N, dtype=wp.vec3, device=self.device, requires_grad=True)
+                sc_count = wp.zeros(N, dtype=wp.int32, device=self.device)
+                wp.launch(
+                    self_collision_kernel_ssa,
+                    dim=N,
+                    inputs=[
+                        self._self_collision_grid.id,
+                        self.p["pred_pos"], self._current_alpha(), self.p["fixed"],
+                        self.self_collision_dist, self.self_collision_stiffness,
+                        sc_delta, sc_count,
+                    ],
+                    device=self.device,
+                )
+                new_pred_pos = wp.empty_like(self.p["pred_pos"])
+                wp.launch(
+                    apply_self_collision_ssa_kernel,
+                    dim=N,
+                    inputs=[self.p["pred_pos"], sc_delta, sc_count],
+                    outputs=[new_pred_pos],
+                    device=self.device,
+                )
+                self.p["pred_pos"] = new_pred_pos
+
         # 4. Cutting pipeline (every N steps when knife active)
-        if (self.knife_active == 1 and self.e is not None and
+        # enable_cutting (2026-06-13) decouples REMOVAL from the knife COLLIDER: with
+        # enable_cutting=False the knife still indents (collision_kernel_ssa, knife_active=1)
+        # but no edge/particle damage or α-removal runs → topology intact. This is the
+        # non-destructive PRESS mode for stiffness (k) calibration — same solver, just skips
+        # the cutting block (no new simulator needed).
+        if (self.knife_active == 1 and self.enable_cutting and self.e is not None and
                 self.step_count % self.cutting_update_interval == 0):
             num_edges = self.e["num_edges"]
 
@@ -808,7 +902,11 @@ class ShapeMatchingSolver:
                                 dim=N,
                                 inputs=[
                                     pd_next, alpha_prev, self.p["fixed"],
-                                    self.p["pred_pos"],
+                                    # START-OF-SUBSTEP pos (pre-collision) for the
+                                    # inside-knife gate. pred_pos is post-collision
+                                    # (particles pushed onto knife surface → gate
+                                    # fails). pos is untouched until update_velocity.
+                                    self.p["pos"],
                                     self.knife_pos,
                                     self.theta_wp["knife_radius"],
                                     self.theta_wp["threshold"],  # (N,)
@@ -824,7 +922,9 @@ class ShapeMatchingSolver:
                                 dim=N,
                                 inputs=[
                                     pd_next, alpha_prev, self.p["fixed"],
-                                    self.p["pred_pos"],
+                                    # START-OF-SUBSTEP pos (pre-collision); see
+                                    # per-particle τ launch above for rationale.
+                                    self.p["pos"],
                                     self.knife_pos,
                                     self.theta_wp["knife_radius"],
                                     self.theta_wp["threshold"],  # (1,)
@@ -957,7 +1057,7 @@ class ShapeMatchingSolver:
                     self.p["pos"], self.p["vel"],
                     self.p["pred_pos"], self.p["old_pos"],
                     self._current_alpha(), self.p["fixed"],
-                    inv_dt,
+                    inv_dt, self.alpha_vel_scale,
                 ],
                 outputs=[new_pos, new_vel],
                 device=self.device,
