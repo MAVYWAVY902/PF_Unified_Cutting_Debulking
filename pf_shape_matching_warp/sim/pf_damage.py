@@ -166,6 +166,73 @@ def apply_edge_damage_delta_kernel(
     wp.atomic_add(edge_damage, eid, edge_damage_delta[eid])
 
 
+@wp.kernel
+def fast_detach_boost_kernel(
+    pred_pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    edge_a: wp.array(dtype=wp.int32),
+    edge_b: wp.array(dtype=wp.int32),
+    knife_pos: wp.array(dtype=wp.vec3),
+    knife_radius: float,
+    gain: float,
+    edge_damage_delta: wp.array(dtype=wp.float32),
+):
+    """RESIDUAL-TRIGGERED FAST DETACH (2026-06-18): edges whose midpoint is DEEP inside the knife carry
+    the worst knife-vs-shape-matching residual (knife pushes out, cluster pulls in → energy pump → blow-up).
+    Dump a large damage boost there so they cross τ in ~1 step → particle detaches from its cluster
+    immediately (mimics cpp's hard cut, relieving the residual) WHILE staying differentiable (smooth
+    sigmoid gate, atomic_add). gain=0 → no-op. Added to the SAME edge_damage_delta the main kernel fills."""
+    eid = wp.tid()
+    a = edge_a[eid]
+    b = edge_b[eid]
+    if alpha[a] < 0.01 or alpha[b] < 0.01:
+        return
+    mid = (pred_pos[a] + pred_pos[b]) * 0.5
+    diff = mid - knife_pos[0]
+    dist = wp.sqrt(wp.dot(diff, diff) + 1.0e-8)
+    pen = knife_radius - dist                                   # >0 when edge midpoint is inside the knife
+    gate = 1.0 / (1.0 + wp.exp(wp.clamp(-40.0 * (pen - knife_radius * 0.25), -50.0, 50.0)))
+    wp.atomic_add(edge_damage_delta, eid, gain * gate)
+
+
+@wp.kernel
+def rerest_cut_clusters_kernel(
+    pos: wp.array(dtype=wp.vec3),
+    alpha: wp.array(dtype=wp.float32),
+    starts: wp.array(dtype=wp.int32),
+    sizes: wp.array(dtype=wp.int32),
+    particle_ids: wp.array(dtype=wp.int32),
+    rest_offsets_in: wp.array(dtype=wp.vec3),
+    alpha_thresh: float,
+    rest_offsets_out: wp.array(dtype=wp.vec3),
+):
+    """Step 2A (2026-06-18): cpp-style FULL re-rest of CUT clusters. A cluster with ANY member alpha<thresh
+    (touched by the cut) resets its rest shape to the CURRENT positions (rest_offset = pos − centroid) →
+    shape-matching goal = current → residual zeroed → no blow-up (mimics cpp check_and_split + Cluster::init).
+    Un-cut clusters pass through unchanged. Run DETACHED (outside the tape); writes a SEPARATE out buffer so
+    the in-flight backward (which reads rest_offsets_in) is NOT corrupted. One thread per cluster; CSR ranges
+    are disjoint → no atomics."""
+    c = wp.tid()
+    start = starts[c]
+    n = sizes[c]
+    if n < 1:
+        return
+    cm = wp.vec3(0.0, 0.0, 0.0)
+    cut = float(0.0)
+    for j in range(n):
+        pid = particle_ids[start + j]
+        cm = cm + pos[pid]
+        if alpha[pid] < alpha_thresh:
+            cut = 1.0
+    cm = cm / float(n)
+    for j in range(n):
+        pid = particle_ids[start + j]
+        if cut > 0.5:
+            rest_offsets_out[start + j] = pos[pid] - cm
+        else:
+            rest_offsets_out[start + j] = rest_offsets_in[start + j]
+
+
 # ============== Particle Damage Aggregation ==============
 # Differentiable version: atomic_add (mean) instead of atomic_max.
 # Mean is differentiable via wp.Tape(); max (int-scaled) is not.

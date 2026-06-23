@@ -1,0 +1,92 @@
+"""Can τ be recovered from the 0.55%-cavity ALONE, with the (b) softening crutch removed?
+  occ_nob : tau_soften OFF in BOTH obs and calib; occ-only loss (cavity occupancy). Pure cavity signal.
+  with_b  : tau_soften ON; chamfer+occ (the video setting). The (b) crutch included — for contrast.
+τ controls REMOVAL (higher τ → harder to cut → smaller cavity), so occ CAN read τ from cavity shape
+even without (b). Question: with only 0.55% removed, are the hard/soft cavity differences big enough?
+num_iter=6 (firm video setting), STIFF=0.9, SPOT+DIAG, 3 seeds. Reports hard/soft τ + contrast%.
+"""
+import sys, numpy as np, torch
+from pathlib import Path
+REPO = Path("/home/yunxin/pf-shape-matching")
+sys.path.insert(0, str(REPO)); sys.path.insert(0, str(REPO / "pf_shape_matching_warp"))
+import warp as wp; wp.init()
+from tools.day2_solver_wrapper import setup_solver_with_rest, solver_save_state
+from tools.day6b_full_forward_torch_op import WarpFullForwardOp
+from tools.stageA_inclusion_recovery import gen_obs_per_particle_stiff
+from tools.pointnetpp.hierarchy import build_hierarchy
+from tools.pointnetpp.multi_mesh_test import MESH_CONFIGS
+from tools.pointnetpp.calibrate_online import calibrate_online
+from tools.pointnetpp.surface_projection import column_grid_assignment
+from tools.pointnetpp.test_group_generalize import make_raster
+
+TAU_HARD, TAU_SOFT, STIFF, NUM_ITER, REACH_MM, R = 0.55, 0.15, 0.9, 6, 4.0, 3
+cfg = MESH_CONFIGS[0]; dev = "cuda:0"
+solver, rest0, mi = setup_solver_with_rest(str(REPO / cfg["path"]), fix_threshold_fraction=0.20)
+N = solver.N; solver.damping = 0.95; solver.num_iterations = NUM_ITER; solver.muller_stiff_remap = False; solver.enable_cutting = True
+pr0 = mi["vertices"]; solver.gravity = wp.vec3(0., -9.81, 0.); solver.floor_y = float(pr0[:, 2].min() - 1.0)
+kr = cfg["knife_radius_abs"]; top = cfg["top_axis"]
+theta = np.array([3., 20., 0.3], np.float32); thetat = torch.tensor(theta, device=dev)
+sw = torch.tensor(np.full(N, STIFF, np.float32), device=dev); tw = torch.tensor(np.full(N, 0.3, np.float32), device=dev)
+print(f"N={N} OCC-ONLY (no-b) vs WITH-b   STIFF={STIFF} num_iter={NUM_ITER}")
+
+solver.tau_soften = False
+solver.reset_to_rest(pr0); far = pr0.max(0) + 10.; st = rest0
+with torch.no_grad():
+    for _ in range(140):
+        _, pw, _ = WarpFullForwardOp.apply(thetat, solver, st, far, kr, sw, tw); st = solver_save_state(solver)
+pr = pw.cpu().numpy().copy(); rest_state = st
+bb0, bb1 = pr.min(0), pr.max(0); bs = bb1 - bb0
+lat = [a for a in range(3) if a != top]; sweep, la = lat[0], lat[1]
+surf = pr[:, top] > (bb1[top] - 0.10 * bs[top]); surf_idx = torch.tensor(np.where(surf)[0], dtype=torch.long, device=dev)
+col_id, _ = column_grid_assignment(pr, surf, top, grid_n=8)
+ea = solver.e["a"].numpy().astype(np.int64); eb = solver.e["b"].numpy().astype(np.int64)
+eat = torch.tensor(ea, dtype=torch.long, device=dev); ebt = torch.tensor(eb, dtype=torch.long, device=dev)
+ert = torch.tensor(np.linalg.norm(pr[ea] - pr[eb], axis=1), dtype=torch.float32, device=dev)
+H = build_hierarchy(torch.from_numpy(pr).to(dev, torch.float32), M1=min(512, max(32, N // 20)), M2=min(64, max(8, N // 200)), k_neighbors=3)
+y_center = bb1[top] - REACH_MM * 1e-3 + kr
+base = make_raster(bb0, bb1, top, sweep, la, 0.5, 6, 12)
+one = [(kp.copy().astype(np.float32)) for kp in base]
+for kp in one: kp[top] = np.float32(y_center)
+traj = one * R
+
+# (tau_soften, lambda_chamfer, lambda_outer_cav)
+CONFIGS = {"occ_nob": (False, 0.0, 1.0), "with_b": (True, 1.0, 5.0e-4)}
+
+
+def recover(pattern, cfgname, seed):
+    ts, lc, loc = CONFIGS[cfgname]; rng = np.random.default_rng(seed)
+    xn = (pr[:, sweep] - bb0[sweep]) / bs[sweep]; zn = (pr[:, la] - bb0[la]) / bs[la]
+    hard = (((xn - 0.5) ** 2 + (zn - 0.5) ** 2) < 0.25 ** 2) if pattern == "SPOT" \
+        else (np.floor(4.0 * (xn + zn)).astype(int) % 2 == 0)
+    tau_truth = np.where(hard, TAU_HARD, TAU_SOFT).astype(np.float32)
+    tau_init = rng.uniform(0.12, 0.58, N).astype(np.float32)
+    ctx = dict(solver=solver, rest_state=rest_state, N=N, device=dev, knife_radius=kr, pos_rest=pr,
+               theta_3d_np=theta, stiff_init_np=np.full(N, STIFF, np.float32), tau_init_np=tau_init,
+               tau_bound=(0.05, 0.95), surface_idx=surf_idx, edges_a_t=eat, edges_b_t=ebt, edges_rest_t=ert, H=H,
+               group_col_id=col_id, surf_top_axis=top)
+    solver.num_iterations = NUM_ITER; solver.enable_cutting = True; solver.tau_soften = ts
+    solver.reset_to_rest(pr)
+    op, oa = gen_obs_per_particle_stiff(solver, rest_state, theta, np.full(N, STIFF, np.float32), traj, kr, dev, tau_truth_np=tau_truth)
+    rem = float((oa[-1] < 0.5).mean()) * 100
+    multi = [(traj, [torch.tensor(p, device=dev) for p in op], [torch.tensor(a, device=dev) for a in oa])]
+    solver.tau_soften = ts
+    _, tau, _ = calibrate_online(f"Group+{cfgname}", ctx, multi, N_passes=4, lr=0.03, lr_tau=0.5,
+                                 lr_decay_per_pass=0.6, lambda_hist=0.0, lambda_outer_cav=loc,
+                                 return_best=True, line_search=False, verbose=False,
+                                 chamfer_loss=(lc > 0), lambda_chamfer=lc, cav_occupancy=True,
+                                 cav_occ_pointcloud=True, cav_occ_meannorm=True)
+    solver.tau_soften = False
+    return float(tau[hard].mean()), float(tau[~hard].mean()), rem
+
+
+SEEDS = (0, 1, 2)
+print(f"\n{'pattern':7s} {'config':>8s}  {'τ_hard→0.55':>12s} {'τ_soft→0.15':>12s} {'contrast%':>9s} {'removed%':>8s}")
+for pattern in ("SPOT", "DIAG"):
+    for cfgname in CONFIGS:
+        TH, TS, RM = [], [], []
+        for s in SEEDS:
+            h, so, rm = recover(pattern, cfgname, s); TH.append(h); TS.append(so); RM.append(rm)
+        ct = (np.mean(TH) - np.mean(TS)) / (TAU_HARD - TAU_SOFT) * 100
+        print(f"{pattern:7s} {cfgname:>8s}  {np.mean(TH):.3f}±{np.std(TH):.3f}  {np.mean(TS):.3f}±{np.std(TS):.3f}  {ct:>8.0f}% {np.mean(RM):>7.2f}%", flush=True)
+print("\ncontrast% = how well hard/soft are separated (100% = perfect). occ_nob = pure 0.55% cavity, no (b) crutch.")
+print("If occ_nob contrast collapses to ~0 while with_b is higher → the recovery was riding on (b), not the cavity.")

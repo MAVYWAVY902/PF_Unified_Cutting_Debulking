@@ -1,5 +1,6 @@
 """Shape Matching PBD Solver using Warp kernels."""
 import warp as wp
+import numpy as np
 from .kernels import (
     predict_kernel,              # legacy — kept for forward-only paths
     predict_kernel_ssa,          # SSA — Stage B (2026-04-22), fixes `v=v*damping`
@@ -42,6 +43,8 @@ from .kernels import (
 from .pf_damage import (
     update_edge_damage_kernel,         # legacy
     update_edge_damage_kernel_ssa,     # SSA version — writes to edge_damage_delta
+    fast_detach_boost_kernel,          # residual-triggered fast detach (mimics cpp hard cut)
+    rerest_cut_clusters_kernel,        # Step 2A: cpp-style plastic re-rest of cut clusters
     apply_edge_damage_delta_kernel,    # legacy in-place atomic_add apply
     update_particle_damage_kernel,
     finalize_particle_damage_kernel,   # legacy — kept for forward-only paths
@@ -186,6 +189,26 @@ class ShapeMatchingSolver:
         # Only active when both stiffness AND threshold are per-particle (N,). See memory
         # project_tau_observability_physics (∂α/∂τ band) — this moves τ into position channel.
         self.tau_soften = False
+        # 2026-06-18: residual-triggered FAST DETACH. When ON, edges deep in the knife get a damage boost
+        # so conflicted particles detach in ~1 step (mimics cpp hard cut → relieves the knife-vs-shape-matching
+        # residual that blows warp up at deeper cuts / more iterations). Default OFF. gain≈2 → cross any τ<1 in 1 step.
+        self.fast_detach = False
+        self.fast_detach_gain = 2.0
+        # Step 2A (2026-06-18): cpp-style plastic RE-REST. When ON, after each step (DETACHED, outside the
+        # tape) any cluster with a member alpha<plastic_alpha_thresh resets its rest shape to the CURRENT
+        # positions → zeroes the knife-vs-shape-matching residual → deep cuts don't blow up. Written to a
+        # SEPARATE _rest_offsets_next buffer (not c["rest_offsets"]) so the in-flight backward is intact;
+        # solver_save_state carries it to the next frame's rest. Default OFF.
+        self.plastic_rerest = False
+        self.plastic_alpha_thresh = 0.95
+        self._rest_offsets_next = None
+        # ② 2026-06-17: cohesive-LAW shape exponent. dmg_eff = clamp(d/τ)^p in the (b) softening.
+        # p=1.0 = linear (our calibration law B). p≠1 = mismatched "real" law A (law-mismatch test).
+        # Used to generate obs under a DIFFERENT softening law than the d/τ-linear calib law, to
+        # quantify how much mis-specifying the cohesive law biases τ. Default 1.0 = no change.
+        self.tau_soften_exp = 1.0            # scalar (uniform law). Set a per-particle (N,) numpy array
+        self.tau_soften_exp_field = None     # here for HETEROGENEOUS law (inclusion p ≠ surrounding p).
+        self._soften_wp = None; self._soften_scalar_cache = None; self._soften_field_cache = None  # cache
         self.use_self_collision = False
         self.self_collision_dist = 0.005
         self.self_collision_stiffness = 1.0
@@ -373,6 +396,36 @@ class ShapeMatchingSolver:
         """One simulation timestep (may contain multiple substeps)."""
         for _sub in range(self.substeps):
             self._substep()
+
+    def apply_plastic_rerest(self):
+        """Step 2A (2026-06-18): cpp-style plastic re-rest. Call AFTER step(), OUTSIDE the wp.Tape (detached).
+        Cut clusters (any member alpha<plastic_alpha_thresh) reset rest_offsets → current shape, written to
+        self._rest_offsets_next (NOT c["rest_offsets"], so the in-flight backward tape is intact). The caller's
+        solver_save_state then carries _rest_offsets_next as the next frame's rest. No-op if plastic_rerest off."""
+        if not self.plastic_rerest:
+            return
+        if self._rest_offsets_next is None:
+            self._rest_offsets_next = wp.empty_like(self.c["rest_offsets"])
+        alpha_cur = (self._ssa_alpha_buffers[self._ssa_cycle_index]
+                     if (self.use_ssa_soft_removal and self._ssa_alpha_buffers is not None)
+                     else self.p["alpha"])
+        wp.launch(
+            rerest_cut_clusters_kernel,
+            dim=self.num_clusters,
+            inputs=[
+                self.p["pos"], alpha_cur,
+                self.c["starts"], self.c["sizes"], self.c["particle_ids"],
+                self.c["rest_offsets"], float(self.plastic_alpha_thresh),
+                self._rest_offsets_next,
+            ],
+            device=self.device,
+        )
+
+    def current_rest_offsets_wp(self):
+        """The rest_offsets to SAVE this frame: the plastic-updated buffer if re-rest ran, else the live one."""
+        if self.plastic_rerest and self._rest_offsets_next is not None:
+            return self._rest_offsets_next
+        return self.c["rest_offsets"]
 
     def _substep(self):
         """One physics substep. dt_sub = self.dt / self.substeps."""
@@ -646,6 +699,16 @@ class ShapeMatchingSolver:
                     _tau_pp_ok = (_thr is not None and _thr.shape[0] == N)
                     _tau_soft = 1.0 if (self.tau_soften and _tau_pp_ok) else 0.0
                     _tau_arr = _thr if _tau_pp_ok else self.p["damage"]
+                    # ② cohesive-law shape p as a per-particle wp.array (cached; rebuilt only on change).
+                    _fld = self.tau_soften_exp_field
+                    if _fld is not None:
+                        if self._soften_wp is None or self._soften_field_cache is not _fld:
+                            self._soften_wp = wp.array(np.asarray(_fld, np.float32), dtype=wp.float32, device=self.device)
+                            self._soften_field_cache = _fld; self._soften_scalar_cache = None
+                    else:
+                        if self._soften_wp is None or self._soften_scalar_cache != self.tau_soften_exp:
+                            self._soften_wp = wp.array(np.full(N, float(self.tau_soften_exp), np.float32), dtype=wp.float32, device=self.device)
+                            self._soften_scalar_cache = self.tau_soften_exp; self._soften_field_cache = None
                     wp.launch(
                         apply_kernel_ssa_param_arr_pp,
                         dim=N,
@@ -656,6 +719,7 @@ class ShapeMatchingSolver:
                             _stiff_exp,
                             _tau_arr,
                             _tau_soft,
+                            self._soften_wp,
                             _shape_delta_it,
                         ],
                         device=self.device,
@@ -845,6 +909,19 @@ class ShapeMatchingSolver:
                             self.e["a"], self.e["b"],
                             self.e["pf_rest"], ed_prev,
                             self.knife_pos, self.knife_radius, self.alpha_min,
+                            self.e["damage_delta"],
+                        ],
+                        device=self.device,
+                    )
+                if self.fast_detach:
+                    wp.launch(
+                        fast_detach_boost_kernel,
+                        dim=num_edges,
+                        inputs=[
+                            self.p["pred_pos"], alpha_prev,
+                            self.e["a"], self.e["b"],
+                            self.knife_pos, self.knife_radius,
+                            self.fast_detach_gain,
                             self.e["damage_delta"],
                         ],
                         device=self.device,

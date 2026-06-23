@@ -29,17 +29,20 @@ from tools.pointnetpp.calibrate_online import calibrate_online
 from tools.pointnetpp.surface_projection import column_grid_assignment
 from tools.pointnetpp.test_group_generalize import make_raster
 
-TAU_HARD, TAU_SOFT, STIFF = 0.55, 0.15, 0.9
+TAU_HARD, TAU_SOFT, STIFF = 0.55, 0.15, 0.9   # 0.9 + num_iter=6: firm self-supporting solid (diag_water_*: 3% sag, stable cut)
+NUM_ITER = 6                                   # was 1 (softest, forced by blow-up myth) → 6 is firm AND stable on shallow graze
 REACH_MM, R = 4.0, 3
 cfg = MESH_CONFIGS[0]; dev = "cuda:0"
 solver, rest0, mi = setup_solver_with_rest(str(REPO / cfg["path"]), fix_threshold_fraction=0.20)
-N = solver.N; solver.damping = 0.95; solver.num_iterations = 1; solver.enable_cutting = True   # (b): num_iter=1
+N = solver.N; solver.damping = 0.95; solver.num_iterations = NUM_ITER; solver.enable_cutting = True   # firm self-support
 pr0 = mi["vertices"]; solver.gravity = wp.vec3(0., -9.81, 0.); solver.floor_y = float(pr0[:, 2].min() - 1.0)
 kr = cfg["knife_radius_abs"]; top = cfg["top_axis"]
 tht = torch.tensor([3., 20., 0.3], device=dev); swt = lambda v: torch.tensor(np.full(N, v, np.float32), device=dev)
 solver.reset_to_rest(pr0); far = pr0.max(0) + 10.; st = rest0
+# settle 140 frames: the cube UNDER-DAMPED-BOUNCES (sag 0→10.9→7.0→7.9mm), dead-still only by ~f120
+# (diag_settle_time.py). 60 caught it mid-bounce → it kept sinking during the cut. 140 = fully static first.
 with torch.no_grad():
-    for _ in range(60):
+    for _ in range(140):
         _, pw, _ = WarpFullForwardOp.apply(tht, solver, st, far, kr, swt(STIFF), swt(0.3)); st = solver_save_state(solver)
 pr = pw.cpu().numpy().copy(); rest_state = st
 bb0, bb1 = pr.min(0), pr.max(0); bs = bb1 - bb0
@@ -54,7 +57,7 @@ H = build_hierarchy(torch.from_numpy(pr).to(dev, torch.float32), M1=min(512, max
 
 def run(pattern):
     rng = np.random.default_rng(0)
-    solver.num_iterations = 1; solver.tau_soften = True            # (b) ON
+    solver.num_iterations = NUM_ITER; solver.tau_soften = True     # (b) ON, firm
     xn = (pr[:, sweep] - bb0[sweep]) / bs[sweep]; zn = (pr[:, la] - bb0[la]) / bs[la]
     hard = (np.floor(4.0 * (xn + zn)).astype(int) % 2 == 0) if pattern == "DIAG" \
         else (((xn - 0.5) ** 2 + (zn - 0.5) ** 2) < 0.25 ** 2)
@@ -96,10 +99,13 @@ def make_video(pattern):
     PX, PY, PZ = sweep, la, top      # PZ (height) = Y so gravity is "down" and sag is visible
     vmin, vmax = 0.10, 0.60
     elev, azim = 22, -62
+    ghost = pr[sub]                  # static full-body footprint for the camera panel (holes = removed)
 
-    fig = plt.figure(figsize=(21, 6.5))
-    titles = ["GROUND TRUTH τ (on the real cut body)", "RECONSTRUCTED τ (evolving)", "DEFORMATION |disp| mm (sag + cut)"]
-    axs = [fig.add_subplot(1, 3, k + 1, projection="3d") for k in range(3)]
+    fig = plt.figure(figsize=(33, 6.5))
+    titles = ["GROUND TRUTH τ (hard vs soft)", "RANDOM init τ (what sim starts from)",
+              "RECONSTRUCTED τ (evolving)", "OBS point cloud (camera)\ncavity = holes where cut",
+              "DEFORMATION |disp| mm (sag + cut)"]
+    axs = [fig.add_subplot(1, 5, k + 1, projection="3d") for k in range(5)]
 
     def style(ax, t):
         ax.set_title(t, fontsize=11)
@@ -113,29 +119,37 @@ def make_video(pattern):
     f0 = steps[0] % len(traj); pres0 = oa[f0][sub] > 0.5
     P0 = op[f0][sub]
     sc_gt = axs[0].scatter(P0[pres0, PX], P0[pres0, PY], P0[pres0, PZ], c=tau_truth[sub][pres0], cmap="viridis", vmin=vmin, vmax=vmax, s=4, depthshade=True, linewidths=0)
-    sc_rc = axs[1].scatter(P0[pres0, PX], P0[pres0, PY], P0[pres0, PZ], c=taus[0][sub][pres0], cmap="viridis", vmin=vmin, vmax=vmax, s=4, depthshade=True, linewidths=0)
-    sc_df = axs[2].scatter(P0[pres0, PX], P0[pres0, PY], P0[pres0, PZ], c=disp_all[f0][pres0], cmap="magma", vmin=0, vmax=dvmax, s=4, depthshade=True, linewidths=0)
+    sc_in = axs[1].scatter(P0[pres0, PX], P0[pres0, PY], P0[pres0, PZ], c=tau_init[sub][pres0], cmap="viridis", vmin=vmin, vmax=vmax, s=4, depthshade=True, linewidths=0)
+    sc_rc = axs[2].scatter(P0[pres0, PX], P0[pres0, PY], P0[pres0, PZ], c=taus[0][sub][pres0], cmap="viridis", vmin=vmin, vmax=vmax, s=4, depthshade=True, linewidths=0)
+    axs[3].scatter(ghost[:, PX], ghost[:, PY], ghost[:, PZ], c="0.85", s=3, depthshade=False, linewidths=0)   # static ghost → holes pop
+    sc_cam = axs[3].scatter(P0[pres0, PX], P0[pres0, PY], P0[pres0, PZ], c="#1f77b4", s=4, depthshade=True, linewidths=0)
+    sc_df = axs[4].scatter(P0[pres0, PX], P0[pres0, PY], P0[pres0, PZ], c=disp_all[f0][pres0], cmap="magma", vmin=0, vmax=dvmax, s=4, depthshade=True, linewidths=0)
     km = [a.scatter([traj[f0][PX]], [traj[f0][PY]], [traj[f0][PZ]], c="red", s=80, marker="o") for a in axs]
     for a, t in zip(axs, titles): style(a, t)
-    plt.colorbar(sc_df, ax=axs[2], fraction=0.03, pad=0.08, label="|disp| (mm)")
+    plt.colorbar(sc_gt, ax=axs[2], fraction=0.025, pad=0.10, label="τ (toughness)")
+    plt.colorbar(sc_df, ax=axs[4], fraction=0.025, pad=0.10, label="|disp| (mm)")
 
     def upd(i):
         cur = steps[i] % len(traj); pres = oa[cur][sub] > 0.5
         P = op[cur][sub]
         xs, ys, zs = P[pres, PX], P[pres, PY], P[pres, PZ]
-        for sc, c in ((sc_gt, tau_truth[sub][pres]), (sc_rc, taus[i][sub][pres]), (sc_df, disp_all[cur][pres])):
+        for sc, c in ((sc_gt, tau_truth[sub][pres]), (sc_in, tau_init[sub][pres]),
+                      (sc_rc, taus[i][sub][pres]), (sc_df, disp_all[cur][pres])):
             sc._offsets3d = (xs, ys, zs); sc.set_array(c)
+        sc_cam._offsets3d = (xs, ys, zs)
         for k in km:
             k._offsets3d = ([traj[cur][PX]], [traj[cur][PY]], [traj[cur][PZ]])
         tau = taus[i]
         ct = (tau[hard].mean() - tau[~hard].mean()) / (TAU_HARD - TAU_SOFT) * 100
-        axs[1].set_title(f"RECONSTRUCTED τ — step {steps[i]}\nhard {tau[hard].mean():.2f} / soft {tau[~hard].mean():.2f} ({ct:.0f}%)", fontsize=10)
-        return sc_gt, sc_rc, sc_df
+        ds = disp_all[cur][tau_truth[sub] < 0.3].mean(); dh = disp_all[cur][tau_truth[sub] > 0.3].mean()
+        axs[2].set_title(f"RECONSTRUCTED τ — step {steps[i]}\nhard {tau[hard].mean():.2f} / soft {tau[~hard].mean():.2f} ({ct:.0f}%)", fontsize=10)
+        axs[4].set_title(f"DEFORMATION |disp| mm\nsoft {ds:.1f} > hard {dh:.1f} (the (b) signal)", fontsize=10)
+        return sc_gt, sc_in, sc_rc, sc_cam, sc_df
 
-    fig.suptitle(f"{pattern} — PERSPECTIVE, STIFF=0.9 both_bal: Y(vertical)=gravity → sag + cut depth visible", fontsize=13)
+    fig.suptitle(f"{pattern} — PERSPECTIVE 5-panel, STIFF={STIFF} both_bal: Y(vertical)=gravity → sag + cut depth visible", fontsize=13)
     anim = FuncAnimation(fig, upd, frames=len(taus), interval=180)
     outd = REPO / "tools/pointnetpp/viz_out"; outd.mkdir(exist_ok=True)
-    out = outd / f"tau_recovery_persp_{pattern}.gif"
+    out = outd / f"tau_recovery_persp_firm_{pattern}.gif"
     anim.save(str(out), writer=PillowWriter(fps=6)); plt.close(fig)
     print(f"saved {out}  ({len(taus)} frames)", flush=True)
 

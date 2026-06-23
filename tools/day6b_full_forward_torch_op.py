@@ -149,6 +149,10 @@ class WarpFullForwardOp(torch.autograd.Function):
         with tape:
             solver.step()
 
+        # Step 2A: cpp-style plastic re-rest — DETACHED (outside the tape), writes _rest_offsets_next.
+        # No-op unless solver.plastic_rerest. Does NOT touch c["rest_offsets"] → backward tape stays valid.
+        solver.apply_plastic_rerest()
+
         # Snapshot output state (the wp.arrays we need to seed gradient on)
         if solver.use_ssa_soft_removal:
             ci = solver._ssa_cycle_index

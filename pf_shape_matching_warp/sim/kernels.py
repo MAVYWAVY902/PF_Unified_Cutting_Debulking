@@ -956,6 +956,11 @@ def apply_kernel_ssa_param_arr_pp(
     tau_per_particle: wp.array(dtype=wp.float32),  # (b) 2026-06-15: per-particle τ for d/τ softening
     tau_soften: float,                       # (b): 1.0 = soften by d/τ (τ-coupled, wakes position
                                              #   channel); 0.0 = legacy raw-damage softening (τ-blind).
+    soften_exp_arr: wp.array(dtype=wp.float32),  # ② 2026-06-17: PER-PARTICLE cohesive-LAW shape.
+                                             #   dmg_eff=clamp(d/τ)^p_i. p=1.0 = linear (calib law B).
+                                             #   p≠1 = mismatched law. Per-particle → HETEROGENEOUS law
+                                             #   (inclusion uses p_hard, surrounding p_soft) — tests the
+                                             #   real risk: tumor≠normal tissue soften differently.
     shape_delta: wp.array(dtype=wp.vec3),
 ):
     i = wp.tid()
@@ -971,7 +976,8 @@ def apply_kernel_ssa_param_arr_pp(
     # (vs raw-damage = 0). NOTE wp.where evaluates BOTH branches → guard tau by max(·,1e-4).
     tau_i = wp.max(tau_per_particle[i], 1.0e-4)
     ratio = wp.clamp(dmg / tau_i, 0.0, 1.0)         # d/τ ∈ [0,1]; saturates in removal region
-    dmg_eff = wp.where(tau_soften > 0.5, ratio, dmg)
+    ratio_p = wp.pow(ratio, soften_exp_arr[i])      # ② per-particle cohesive-law shape (heterogeneous OK)
+    dmg_eff = wp.where(tau_soften > 0.5, ratio_p, dmg)
     local_stiff = stiffness * (1.0 - dmg_eff * 0.95)
     # Müller 2007 iteration-count-independent stiffness: k' = 1-(1-k)^(1/ns).
     # stiff_exp=1.0 -> k'=k (legacy). stiff_exp=1/num_iter -> cumulative stiffness over

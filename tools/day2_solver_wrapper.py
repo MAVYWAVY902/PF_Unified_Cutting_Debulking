@@ -64,6 +64,9 @@ def solver_save_state(solver) -> dict:
         particle_damage=pd_np,
         edge_damage=ed_np,
         cluster_quat=c["cluster_quat"].numpy().copy(),
+        # Step 1/2 (2026-06-18): cluster rest shape is CARRIED STATE. With plastic_rerest ON, save the
+        # plastic-updated buffer (cut clusters re-rested to current shape); else the live build-time rest.
+        rest_offsets=solver.current_rest_offsets_wp().numpy().copy(),
         step_count=int(solver.step_count),
     )
 
@@ -115,6 +118,12 @@ def solver_load_state(solver, state_dict):
         cq_arr = wp.array(state_dict["cluster_quat"].astype(np.float32),
                            dtype=wp.quat, device=solver.device)
         wp.copy(c["cluster_quat"], cq_arr)
+    # Step 1 (2026-06-18): restore carried cluster rest shape (no-op until Step 2 re-rests it).
+    # Guarded so pre-Step-1 state_dicts (no key) keep using the build-time rest unchanged.
+    if "rest_offsets" in state_dict and state_dict["rest_offsets"] is not None:
+        ro_arr = wp.array(state_dict["rest_offsets"].astype(np.float32),
+                           dtype=wp.vec3, device=solver.device)
+        wp.copy(c["rest_offsets"], ro_arr)
     if "step_count" in state_dict:
         solver.step_count = int(state_dict["step_count"])
 
