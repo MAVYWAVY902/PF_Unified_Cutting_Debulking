@@ -212,6 +212,10 @@ public:
     // Populated by upload_per_edge_alpha.
     std::vector<float> alpha_per_edge_cpu;
 
+    // Sharp features of the CUT_CURVE channel (used when config.use_sharp_edge_damage = 1).
+    void set_cut_segments(const std::vector<float3>& segs) { h_cut_segments = segs; cut_segments_dirty = true; }
+    const std::vector<float3>& cut_segments() const { return h_cut_segments; }
+
     // 初始化 SDF (通用: bone or tool)
     void init_sdf(SDFData& sdf, const std::vector<float>& sdf_data,
                   int res_x, int res_y, int res_z,
@@ -232,9 +236,12 @@ private:
 
     // GPU cutting kernels
     void gpu_update_damage();
-    // CUT_CURVE channel segments (tool local frame, 2 float3 per segment); see sync_cut_segments
+    // CUT_CURVE channel features (tool local frame, 2 float3 per segment; a point feature has
+    // equal endpoints). Host copy set by set_cut_segments, uploaded on the next damage update.
     std::vector<float3> h_cut_segments;
     float3* d_cut_segments = nullptr;
+    size_t d_cut_segments_cap = 0;
+    bool cut_segments_dirty = false;
     void sync_cut_segments();
     void gpu_aspirate();
     void gpu_update_particle_damage();

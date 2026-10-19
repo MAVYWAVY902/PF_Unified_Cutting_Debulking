@@ -340,13 +340,19 @@ int main(int argc, char** argv) {
             float wx = px - kp.x, wy = py - kp.y, wz = pz - kp.z;
             l[0] = KR[0]*wx + KR[3]*wy + KR[6]*wz; l[1] = KR[1]*wx + KR[4]*wy + KR[7]*wz; l[2] = KR[2]*wx + KR[5]*wy + KR[8]*wz;
         };
-        auto mid_to_sharp = [&](const float m[3]) {
-            float3 A = g.config.sharp_edge_a, B = g.config.sharp_edge_b;
-            float ab[3] = {B.x-A.x, B.y-A.y, B.z-A.z}, am[3] = {m[0]-A.x, m[1]-A.y, m[2]-A.z};
-            float t = (am[0]*ab[0]+am[1]*ab[1]+am[2]*ab[2]) / (ab[0]*ab[0]+ab[1]*ab[1]+ab[2]*ab[2]);
-            t = std::min(1.0f, std::max(0.0f, t));
-            float d[3] = {am[0]-t*ab[0], am[1]-t*ab[1], am[2]-t*ab[2]};
-            return std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]);
+        auto mid_to_sharp = [&](const float m[3]) {   // distance to the nearest sharp feature
+            const auto& S = g.cut_segments();
+            float best = 1e30f;
+            for (size_t k = 0; k + 1 < S.size(); k += 2) {
+                float3 A = S[k], B = S[k + 1];
+                float ab[3] = {B.x-A.x, B.y-A.y, B.z-A.z}, am[3] = {m[0]-A.x, m[1]-A.y, m[2]-A.z};
+                float L2 = ab[0]*ab[0]+ab[1]*ab[1]+ab[2]*ab[2];
+                float t = L2 > 0.0f ? (am[0]*ab[0]+am[1]*ab[1]+am[2]*ab[2]) / L2 : 0.0f;
+                t = std::min(1.0f, std::max(0.0f, t));
+                float d[3] = {am[0]-t*ab[0], am[1]-t*ab[1], am[2]-t*ab[2]};
+                best = std::min(best, std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]));
+            }
+            return best;
         };
         int pass_count = 0;
         auto pass_through_frame = [&](int frame, const float3& kp) {

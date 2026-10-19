@@ -11,6 +11,7 @@
 #include "core/sim_config.h"
 #include "solver/shape_matching_gpu.h"
 #include "core/rigid_mesh.h"
+#include "core/tool_features.h"
 #include <iostream>
 #include <cstdio>
 #include <cstring>
@@ -55,6 +56,8 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     const float ts = cfg.tool_scale;
     s.config.sharp_edge_a = make_float3(ts * cfg.sharp_edge_a[0], ts * cfg.sharp_edge_a[1], ts * cfg.sharp_edge_a[2]);
     s.config.sharp_edge_b = make_float3(ts * cfg.sharp_edge_b[0], ts * cfg.sharp_edge_b[1], ts * cfg.sharp_edge_b[2]);
+    if (cfg.use_sharp_edge_damage)                 // manual feature = the one configured segment
+        s.set_cut_segments({s.config.sharp_edge_a, s.config.sharp_edge_b});
     // Step 2 tool switches (defaults = legacy)
     s.config.sdf_normal_mode = (cfg.sdf_normal == "trilinear") ? 1 : 0;
     s.config.sdf_pf_edge_radius = cfg.sdf_pf_edge_radius ? 1 : 0;
@@ -129,6 +132,18 @@ inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s,
             }
 
             tool_mesh.compute_sdf(cfg.tool_sdf_resolution, 0.2);
+
+            // Step 3b: cut_features: auto → sharp edges / points of the (centred, scaled) mesh are
+            // the CUT_CURVE channel. No feature = blunt tool: contact only, no cutting.
+            if (cfg.cut_features == "auto") {
+                SharpFeatures f = extract_sharp_features(tool_mesh, cfg.sharp_angle_deg);
+                print_sharp_features(f, cfg.sharp_angle_deg);
+                std::vector<float3> segs;
+                for (const auto& p : f.seg) segs.push_back(make_float3((float)p.x(), (float)p.y(), (float)p.z()));
+                s.config.use_sharp_edge_damage = 1;
+                s.set_cut_segments(segs);
+                if (segs.empty()) std::printf("[cut-features] no sharp feature: the tool is blunt (contact only)\n");
+            }
 
             float3 origin = make_float3(
                 (float)tool_mesh.sdf_origin.x(),

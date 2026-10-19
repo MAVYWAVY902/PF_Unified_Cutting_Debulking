@@ -12,8 +12,9 @@
 //   CUT_SURFACE  the tool solid itself, d = phi (sphere: |x-c| - R; grid SDF: trilinear phi).
 //                Used by the sphere / CUSA tip and by the legacy volumetric mesh-SDF damage.
 //                subtract_re = 0 reproduces the legacy grid kernel (sdist = phi, no -r_e).
-//   CUT_CURVE    sharp features as line segments in the tool LOCAL frame (blade edge, curette rim,
-//                needle tip = a degenerate polyline), d = distance to the nearest segment.
+//   CUT_CURVE    sharp features in the tool LOCAL frame: line segments (blade edge, curette rim) and
+//                points (needle / trocar tip, a segment with equal endpoints); d = distance to the
+//                nearest feature (core/tool_features.h extracts them from the tool mesh).
 //
 // Each set keeps the float operations of the kernel it replaces (sphere update_edge_damage_kernel,
 // tool_sdf_damage_kernel, sharp_edge_damage_kernel), including its search band:
@@ -56,15 +57,17 @@ __device__ inline bool cut_channel_sdist(const CutChannel& c, float3 mid, float 
         float3 ab = make_float3(B.x - A.x, B.y - A.y, B.z - A.z);
         float3 am = make_float3(m.x - A.x, m.y - A.y, m.z - A.z);
         float ab_dot_ab = ab.x*ab.x + ab.y*ab.y + ab.z*ab.z;
-        if (ab_dot_ab < 1e-12f) continue;                   // degenerate segment
-        float t = (am.x*ab.x + am.y*ab.y + am.z*ab.z) / ab_dot_ab;
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
+        float t = 0.0f;                                     // point feature (A == B): distance to A
+        if (ab_dot_ab >= 1e-12f) {
+            t = (am.x*ab.x + am.y*ab.y + am.z*ab.z) / ab_dot_ab;
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+        }
         float3 cl = make_float3(A.x + t * ab.x, A.y + t * ab.y, A.z + t * ab.z);
         float dx = m.x - cl.x, dy = m.y - cl.y, dz = m.z - cl.z;
         best = fminf(best, sqrtf(dx*dx + dy*dy + dz*dz + 1e-12f));
     }
-    if (best > 1e29f) return false;                         // no valid segment
+    if (best > 1e29f) return false;                         // no feature
     if (best > r_e * 3.0f) return false;
     sdist = best - r_e;
     return true;

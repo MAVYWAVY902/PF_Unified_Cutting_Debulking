@@ -115,6 +115,11 @@ struct SimConfigYAML {
     bool use_sharp_edge_damage = false;
     float sharp_edge_a[3] = {0.0f, 0.0f, 0.0f};
     float sharp_edge_b[3] = {0.0f, 0.0f, 0.0f};
+    // Step 3b: cut_features: auto = sharp edges / points extracted from the tool mesh
+    //   (core/tool_features.h; wedge or cone apex angle < sharp_angle_deg). A mesh without sharp
+    //   features then cuts nothing (blunt tool). Mutually exclusive with sharp_edge_a/b (manual).
+    std::string cut_features = "none";   // "none" | "auto"   (manual sharp_edge_a/b = legacy)
+    float sharp_angle_deg = 30.0f;
 
     // Damage growth rate per substep. 1.0 = instant snap to target (old behavior).
     // 0.02 = ~25 substeps to break from full pressure → user sees ~50ms deformation
@@ -281,6 +286,24 @@ struct SimConfigYAML {
                 sharp_edge_b[1] = b[1].as<float>();
                 sharp_edge_b[2] = b[2].as<float>();
             }
+            if (k["cut_features"]) {
+                cut_features = k["cut_features"].as<std::string>();
+                if (cut_features != "none" && cut_features != "auto") {
+                    std::cerr << "Config error: knife.cut_features='" << cut_features
+                              << "' (expected none | auto)" << std::endl;
+                    return false;
+                }
+                if (cut_features == "auto" && use_sharp_edge_damage) {
+                    std::cerr << "Config error: knife.cut_features: auto together with sharp_edge_a/b "
+                                 "(choose automatic extraction OR the manual segment)" << std::endl;
+                    return false;
+                }
+                if (cut_features == "auto" && tool_mesh_path.empty() && !k["tool_mesh"]) {
+                    std::cerr << "Config error: knife.cut_features: auto needs knife.tool_mesh" << std::endl;
+                    return false;
+                }
+            }
+            if (k["sharp_angle_deg"]) sharp_angle_deg = k["sharp_angle_deg"].as<float>();
             if (k["damage_growth_rate"]) damage_growth_rate = k["damage_growth_rate"].as<float>();
             if (k["per_edge_alpha"]) per_edge_alpha = k["per_edge_alpha"].as<bool>();
             if (k["alpha_min_low"])  alpha_min_low  = k["alpha_min_low"].as<float>();
@@ -434,6 +457,8 @@ struct SimConfigYAML {
 
     void print() const {
         std::cout << "=== Config: " << name << " ===" << std::endl;
+        std::cout << "  cut_features: " << (use_sharp_edge_damage ? "manual sharp_edge_a/b" : cut_features)
+                  << (cut_features == "auto" ? " (sharp_angle_deg=" + std::to_string(sharp_angle_deg) + ")" : "") << std::endl;
         std::cout << "  tool: scale=" << tool_scale << " sdf_normal=" << sdf_normal
                   << " sdf_pf_edge_radius=" << (sdf_pf_edge_radius ? "on" : "off")
                   << " aspiration_reach=" << aspiration_reach << std::endl;

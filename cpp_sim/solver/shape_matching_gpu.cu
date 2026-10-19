@@ -930,7 +930,7 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
     int blocks_e = (E + 255) / 256;
 
     // Cut channel (tool_channels.cuh), same priority as before Step 3:
-    //   1. use_sharp_edge_damage=1 → CUT_CURVE on the sharp-edge segment(s)
+    //   1. use_sharp_edge_damage=1 → CUT_CURVE on the sharp features (set_cut_segments; none → no cut)
     //   2. mesh SDF tool           → CUT_SURFACE on the grid SDF (legacy volumetric damage)
     //   3. fallback                → CUT_SURFACE on the analytic sphere
     CutChannel ch = {};
@@ -941,6 +941,7 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
         memcpy(ch.tool.rot, config.knife_rot, sizeof(ch.tool.rot));
         ch.seg = d_cut_segments;
         ch.num_seg = (int)h_cut_segments.size() / 2;
+        if (ch.num_seg == 0) return;          // blunt tool: no sharp feature, nothing to cut
     } else if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
         ch.kind = CUT_SURFACE;
         ch.tool = grid_tool_desc(config, d_tool_sdf);
@@ -962,18 +963,17 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
         damage_model_mode);
 }
 
-// Sharp-edge segments for the CUT_CURVE channel: currently the single configured segment
-// sharp_edge_a → sharp_edge_b (tool local frame). Uploaded only when it changes.
+// Upload the CUT_CURVE features when set_cut_segments changed them.
 void ShapeMatchingGPUSolver::sync_cut_segments() {
-    std::vector<float3> segs = {config.sharp_edge_a, config.sharp_edge_b};
-    bool same = segs.size() == h_cut_segments.size();
-    for (size_t k = 0; same && k < segs.size(); k++)
-        same = segs[k].x == h_cut_segments[k].x && segs[k].y == h_cut_segments[k].y && segs[k].z == h_cut_segments[k].z;
-    if (same && d_cut_segments) return;
-    if (d_cut_segments && segs.size() > h_cut_segments.size()) { cudaFree(d_cut_segments); d_cut_segments = nullptr; }
-    if (!d_cut_segments) CUDA_CHECK(cudaMalloc(&d_cut_segments, segs.size() * sizeof(float3)));
-    CUDA_CHECK(cudaMemcpy(d_cut_segments, segs.data(), segs.size() * sizeof(float3), cudaMemcpyHostToDevice));
-    h_cut_segments = segs;
+    if (!cut_segments_dirty) return;
+    size_t n = h_cut_segments.size();
+    if (n > d_cut_segments_cap) {
+        if (d_cut_segments) cudaFree(d_cut_segments);
+        CUDA_CHECK(cudaMalloc(&d_cut_segments, n * sizeof(float3)));
+        d_cut_segments_cap = n;
+    }
+    if (n > 0) CUDA_CHECK(cudaMemcpy(d_cut_segments, h_cut_segments.data(), n * sizeof(float3), cudaMemcpyHostToDevice));
+    cut_segments_dirty = false;
 }
 
 void ShapeMatchingGPUSolver::gpu_update_particle_damage() {
