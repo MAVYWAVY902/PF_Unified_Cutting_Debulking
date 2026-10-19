@@ -1444,6 +1444,12 @@ void ShapeMatchingGPUSolver::download_positions(std::vector<float3>& positions) 
     CUDA_CHECK(cudaMemcpy(positions.data(), d_particles.pos, N * sizeof(float3), cudaMemcpyDeviceToHost));
 }
 
+void ShapeMatchingGPUSolver::download_predicted_positions(std::vector<float3>& positions) {
+    int N = d_particles.N;
+    positions.resize(N);
+    CUDA_CHECK(cudaMemcpy(positions.data(), d_particles.predicted_pos, N * sizeof(float3), cudaMemcpyDeviceToHost));
+}
+
 void ShapeMatchingGPUSolver::download_removed(std::vector<int>& removed) {
     int N = d_particles.N;
     removed.resize(N);

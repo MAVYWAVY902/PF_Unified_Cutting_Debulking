@@ -120,11 +120,20 @@ struct TetMesh {
                                 const std::vector<int>* tet_broken = nullptr) {
         surface_faces.clear();
 
-        auto encode_face = [](int a, int b, int c) -> int64_t {
+        // Key = the sorted vertex triple itself (was a*1e10+b*1e5+c: collided once N > 100000).
+        using FaceKey = std::array<int, 3>;
+        struct FaceKeyHash {
+            size_t operator()(const FaceKey& k) const {
+                uint64_t h = 1469598103934665603ULL;            // FNV-1a over the three indices
+                for (int x : k) { h ^= (uint32_t)x; h *= 1099511628211ULL; }
+                return (size_t)h;
+            }
+        };
+        auto encode_face = [](int a, int b, int c) -> FaceKey {
             if (a > b) std::swap(a, b);
             if (b > c) std::swap(b, c);
             if (a > b) std::swap(a, b);
-            return (int64_t)a * 100000LL * 100000LL + (int64_t)b * 100000LL + c;
+            return {a, b, c};
         };
 
         // 记录每个面的出现次数、原始顶点顺序、以及第四个顶点（用于法线方向）
@@ -133,7 +142,7 @@ struct TetMesh {
             int fourth;  // 所在 tet 的第四个顶点
             int count;
         };
-        std::unordered_map<int64_t, FaceInfo> face_map;
+        std::unordered_map<FaceKey, FaceInfo, FaceKeyHash> face_map;
         face_map.reserve(tets.size() * 2);
 
         for (int ti = 0; ti < (int)tets.size(); ti++) {

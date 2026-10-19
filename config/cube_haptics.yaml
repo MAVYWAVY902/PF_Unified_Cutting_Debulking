@@ -1,0 +1,64 @@
+## P(F) Shape Matching - Cube + Haply Inverse3 (2026-09-19)
+## = cube_test.yaml 的物理参数 + 针对 0.3m cube 重新标定的 haptics 映射。
+
+name: "Cube (Haptics)"
+
+## cube_tet.msh: 0.3m x 0.3m x 0.3m, 21745 顶点, 109967 四面体
+## (viewer 会把 mesh 抬到 y∈[0.001, 0.301]，顶面中心 = (0.15, 0.301, 0.15))
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.005
+  gravity: [0, -9.81, 0]
+  num_iterations: 16
+  stiffness: 1.0
+  damping: 0.95
+  substeps: 4
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.10
+
+clusters:
+  rings: 2
+
+## 球形刀 (同 cube_test.yaml)
+knife:
+  radius: 0.04          # 2026-09-19: 0.02 → 0.04
+  cutting_interval: 4
+  alpha_min: 7.0
+  aspiration_threshold: 0.7
+
+## Haply Inverse3 + VerseGrip
+## 2026-09-19 实测手柄静止时 raw=(-0.0825, -0.0420, 0.0349)，以此为工作空间中心，
+## 使静止时刀落在 cube 顶面中心正上方 3cm (sim_offset)。
+## scale=1.0: 设备移动 1cm = 仿真里 1cm (cube 是 30cm，Inverse3 工作范围约 ±15cm)。
+## 方向不对就改 pos_axes / pos_signs（候选见 tumor_debulk_haptics.yaml 注释）。
+haptics:
+  enabled: true
+  websocket_url: "ws://localhost:10001"
+  workspace_center: [-0.0825, -0.0420, 0.0349]
+  sim_offset: [0.15, 0.33, 0.15]
+  scale: 1.0
+  versagrip_correction: true
+  button_activates_knife: true
+  pos_axes: [0, 2, 1]
+  pos_signs: [1, 1, -1]
+
+self_collision:
+  enabled: true
+  radius: 0.0045       # 2026-09-19: kernel 判定距离 = 2×radius = 9mm ≈ 粒子间距 8.9mm (原 0.012 → 24mm, 2.7× 间距, 刀压时粒子被弹飞)
+  stiffness: 0.8
+
+## 地板 Coulomb 摩擦 (2026-09-19, 对齐 cardinalsim tumor_debulk.yaml)
+## 没有 mesh，只用来覆盖 collision_kernel 的地板 μ_s/μ_k (默认 0.5/0.3)。
+## 该模型的"法向力"= 每 substep 穿透深度 (~0.1mm)，μ 必须大才能锁住落地碎片。
+rigid_object:
+  friction_s: 2.0
+  friction_k: 1.5
+
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: false

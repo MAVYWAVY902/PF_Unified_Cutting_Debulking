@@ -168,6 +168,9 @@ public:
 
     // 下载位置回 CPU（给渲染用）
     void download_positions(std::vector<float3>& positions);
+    // Read-only diagnostic: predicted_pos as the cutting kernels saw it this step
+    // (aspirate/damage run on predicted_pos after the Jacobi loop). No physics effect.
+    void download_predicted_positions(std::vector<float3>& positions);
     void download_removed(std::vector<int>& removed);
     void download_damage(std::vector<float>& damage);
 

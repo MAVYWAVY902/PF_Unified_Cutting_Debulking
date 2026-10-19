@@ -37,6 +37,9 @@ public:
         m_cam_pitch = pitch;
     }
 
+    // Step 0.5b: ask the main loop to exit after the current frame (used when a replay ends)
+    void request_close() { if (m_window) glfwSetWindowShouldClose(m_window, GLFW_TRUE); }
+
     // 刀具状态
     Vec3 knife_pos = Vec3(0, 0.3, 0.09);
     Eigen::Matrix3d knife_rot = Eigen::Matrix3d::Identity();  // tool rotation
@@ -152,11 +155,12 @@ public:
                 char title[128];
                 int disp_clusters = num_clusters_display > 0 ? num_clusters_display : (int)solver->clusters.size();
                 snprintf(title, sizeof(title),
-                    "P(F) Shape Matching%s | %d particles | %d clusters | %.1f FPS | %s",
+                    "P(F) Shape Matching%s | %d particles | %d clusters | %.1f FPS | %s%s",
                     on_step ? " [GPU]" : "",
                     solver->particles.size(), disp_clusters,
                     frame_count / (now - last_time),
-                    m_paused ? "PAUSED" : "RUNNING");
+                    m_paused ? "PAUSED" : "RUNNING",
+                    m_move_mode ? (knife_active ? " | MOVE KNIFE (M)" : " | MOVE KNIFE (M) - knife OFF, press K") : "");
                 glfwSetWindowTitle(m_window, title);
                 frame_count = 0;
                 last_time = now;
@@ -301,6 +305,9 @@ private:
     bool m_lmb_down = false, m_rmb_down = false;
     double m_last_mx = 0, m_last_my = 0;
     bool m_space_held = false;
+    // Sticky knife-move mode (key M). Needed for remote desktops (e.g. TeamViewer) that deliver
+    // every key as PRESS+RELEASE in the same instant, so "hold Space" can never be observed.
+    bool m_move_mode = false;
     bool m_paused = false;
     bool m_track_object = true;  // 相机追踪物体质心
 
@@ -954,14 +961,32 @@ private:
     }
 
     // ---- GLFW Callbacks ----
-    static void key_callback(GLFWwindow* w, int key, int /*scancode*/, int action, int mods) {
+    // PFSM_INPUT_DEBUG=1 → log raw key/cursor events to stderr (diagnostics only)
+    static bool input_debug() {
+        static int on = -1;
+        if (on < 0) { const char* v = std::getenv("PFSM_INPUT_DEBUG"); on = (v && *v && *v != '0') ? 1 : 0; }
+        return on == 1;
+    }
+    static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
         auto* self = (Viewer*)glfwGetWindowUserPointer(w);
+        if (input_debug()) {
+            const char* an = action == GLFW_PRESS ? "PRESS" : action == GLFW_RELEASE ? "RELEASE" : "REPEAT";
+            const char* kn = glfwGetKeyName(key, scancode);
+            fprintf(stderr, "[INPUT %.3f] key=%d(%s) scancode=%d %s mods=%d | space_held(before)=%d knife_active=%d\n",
+                    glfwGetTime(), key, key == GLFW_KEY_SPACE ? "SPACE" : (kn ? kn : "?"), scancode, an, mods,
+                    (int)self->m_space_held, (int)self->knife_active);
+        }
         if (key == GLFW_KEY_SPACE) {
             self->m_space_held = (action != GLFW_RELEASE);
         }
         if (action == GLFW_PRESS) {
             if (key == GLFW_KEY_P) self->m_paused = !self->m_paused;
             if (key == GLFW_KEY_K) self->knife_active = !self->knife_active;
+            if (key == GLFW_KEY_M) {
+                self->m_move_mode = !self->m_move_mode;
+                printf("[input] knife move mode %s (mouse = %s)\n", self->m_move_mode ? "ON" : "OFF",
+                       self->m_move_mode ? "move knife, scroll = forward/back" : "camera");
+            }
             if (key == GLFW_KEY_R && !(mods & GLFW_MOD_SHIFT)) {
                 self->knife_pos = Vec3(0.09, 0.3, 0.09);
                 self->knife_rot = Eigen::Matrix3d::Identity();
@@ -1022,8 +1047,18 @@ private:
         Eigen::Vector3f right, up, fwd;
         self->_get_camera_axes(right, up, fwd);
 
-        if (self->m_space_held && self->knife_active) {
-            // Space + 移动鼠标：移动刀具（灵敏度和相机距离成比例）
+        if (input_debug()) {
+            static double last_t = -1.0;
+            double now = glfwGetTime();
+            if (now - last_t > 0.1 || self->m_space_held) {   // throttle when nothing interesting
+                fprintf(stderr, "[INPUT %.3f] cursor dx=%.1f dy=%.1f | space_held=%d knife_active=%d lmb=%d rmb=%d\n",
+                        now, dx, dy, (int)self->m_space_held, (int)self->knife_active,
+                        (int)self->m_lmb_down, (int)self->m_rmb_down);
+                last_t = now;
+            }
+        }
+        if ((self->m_space_held || self->m_move_mode) && self->knife_active) {
+            // Space(按住) 或 M(切换) + 移动鼠标：移动刀具（灵敏度和相机距离成比例）
             float scale = self->m_cam_dist * 0.002f;
 
             self->knife_pos += Vec3(right.x(), right.y(), right.z()) * dx * scale;
@@ -1050,8 +1085,8 @@ private:
         Eigen::Vector3f right, up, fwd;
         self->_get_camera_axes(right, up, fwd);
 
-        if (self->m_space_held && self->knife_active) {
-            // Space + Scroll：刀具沿视线方向前后移动
+        if ((self->m_space_held || self->m_move_mode) && self->knife_active) {
+            // Space(按住) 或 M(切换) + Scroll：刀具沿视线方向前后移动
             float scale = self->m_cam_dist * 0.1f;
             self->knife_pos += Vec3(fwd.x(), fwd.y(), fwd.z()) * limited_dy * scale;
         } else {

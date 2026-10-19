@@ -192,3 +192,31 @@ target_compile_options(debug_tumor PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-O3 -march=native>
     $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
 )
+
+# ===== Step-0 tool-geometry measurement harness (headless) =====
+add_executable(tool_bench
+    tool_bench.cpp
+    solver/shape_matching_gpu.cu
+)
+target_include_directories(tool_bench PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/svd3/svd3_cuda
+)
+target_link_libraries(tool_bench PRIVATE Eigen3::Eigen CUDA::cudart yaml-cpp)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(tool_bench PRIVATE OpenMP::OpenMP_CXX)
+endif()
+set_target_properties(tool_bench PROPERTIES CUDA_STANDARD 17 CUDA_ARCHITECTURES "75")
+target_compile_options(tool_bench PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-O3 -march=native>
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+)
+
+# ===== Step-0 tool SDF normal/depth check (host only) =====
+add_executable(sdf_normal_check sdf_normal_check.cpp)
+target_include_directories(sdf_normal_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(sdf_normal_check PRIVATE Eigen3::Eigen)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(sdf_normal_check PRIVATE OpenMP::OpenMP_CXX)
+endif()
+target_compile_options(sdf_normal_check PRIVATE -O3 -march=native)
