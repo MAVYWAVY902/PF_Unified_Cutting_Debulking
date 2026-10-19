@@ -73,6 +73,10 @@ int main(int argc, char** argv) {
     bool timing = false, replay_allow_mismatch = false, gpu_only = false;
     std::string replay_path, stats_path, write_traj_path;
     float depth = 0.0f;
+    // --tool mesh orientation: "flat" = identity (old behaviour; the dissector lies flat, its
+    // 71 mm length covers the whole tumour); "tipdown" = long axis vertical, blade width along
+    // the sweep (x), thickness along z → the tip enters the tissue edge-first.
+    std::string mesh_pose = "flat";
     for (int i = 3; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--tool" && i + 1 < argc) tool = argv[++i];
@@ -87,11 +91,13 @@ int main(int argc, char** argv) {
         else if (a == "--write-traj" && i + 1 < argc) write_traj_path = argv[++i];   // scripted pose → recording file   // replay without orphan cleanup / BFS (old behaviour)
         else if (a == "--stats" && i + 1 < argc) stats_path = argv[++i];
         else if (a == "--depth" && i + 1 < argc) depth = (float)std::atof(argv[++i]);
+        else if (a == "--mesh-pose" && i + 1 < argc) mesh_pose = argv[++i];
         else { fprintf(stderr, "unknown arg %s\n", a.c_str()); return 1; }
     }
     if (tool != "sphere" && tool != "gridsphere" && tool != "mesh") {
         fprintf(stderr, "--tool must be sphere|gridsphere|mesh\n"); return 1;
     }
+    if (mesh_pose != "flat" && mesh_pose != "tipdown") { fprintf(stderr, "--mesh-pose must be flat|tipdown\n"); return 1; }
 
     SimConfigYAML cfg;
     if (!cfg.load(config_path)) return 1;
@@ -187,7 +193,10 @@ int main(int argc, char** argv) {
     g.config.floor_y = cfg.floor_y;
     g.config.knife_pos = make_float3(100, 100, 100);
     float I3[9] = {1,0,0, 0,1,0, 0,0,1};
-    memcpy(g.config.knife_rot, I3, sizeof(I3));
+    // tipdown (row-major, local→world): local x (length) → world y, local y (thickness) → world z,
+    // local z (width) → world x
+    float TIPDOWN[9] = {0,0,1, 1,0,0, 0,1,0};
+    memcpy(g.config.knife_rot, (tool == "mesh" && mesh_pose == "tipdown") ? TIPDOWN : I3, sizeof(I3));
     g.config.knife_radius = cfg.knife_radius;
     g.config.knife_active = 0;
     g.config.self_collision_radius = cfg.self_collision_radius;
@@ -208,6 +217,7 @@ int main(int argc, char** argv) {
     g.init_edges(ea, eb, epf);
 
     const float R = cfg.knife_radius;
+    std::vector<float> tool_sdf_host; int tool_res[3] = {0, 0, 0}; float tool_org[3] = {0, 0, 0}, tool_cell[3] = {0, 0, 0};
     if (tool == "gridsphere") {
         // exact sphere SDF on a cubic grid, same 20% padding convention as compute_sdf
         float half = R * (1.0f + 2.0f * 0.2f);
@@ -230,6 +240,8 @@ int main(int argc, char** argv) {
                    make_float3((float)tm.sdf_origin.x(), (float)tm.sdf_origin.y(), (float)tm.sdf_origin.z()),
                    make_float3((float)tm.sdf_cell_size.x(), (float)tm.sdf_cell_size.y(), (float)tm.sdf_cell_size.z()),
                    "Tool(mesh)");
+        tool_sdf_host = tm.sdf_data;
+        for (int k = 0; k < 3; k++) { tool_res[k] = tm.sdf_res[k]; tool_org[k] = (float)tm.sdf_origin[k]; tool_cell[k] = (float)tm.sdf_cell_size[k]; }
     }
 
     // ---------------- Step 0.5c: replay a viewer recording (GPU-only pipeline) ----------------
@@ -304,10 +316,78 @@ int main(int argc, char** argv) {
         bmx[0] = std::max(bmx[0], p.x); bmx[1] = std::max(bmx[1], p.y); bmx[2] = std::max(bmx[2], p.z);
     }
     float zmid = 0.5f * (bmn[2] + bmx[2]);
-    float margin = 0.5f * R;
+    // ---- tool geometry used by the SCRIPT (not by the solver) ----
+    // Ls = length scale of the scripted motion: sphere → R (unchanged); mesh → half the tool's
+    // smallest extent (dissector: half the blade thickness). knife_radius is NOT the tool size for
+    // tool_type 1 (the GPU mesh-tool kernels never read it).
+    // tool_phi(p): host trilinear phi of the baked tool SDF at world point p (same voxel-centre
+    // convention as the kernels: local = R^T (p - knife_pos)).
+    const float* KR = g.config.knife_rot;
+    auto tool_phi = [&](float px, float py, float pz, const float3& kp) -> float {
+        float wx = px - kp.x, wy = py - kp.y, wz = pz - kp.z;
+        float l[3] = {KR[0]*wx + KR[3]*wy + KR[6]*wz, KR[1]*wx + KR[4]*wy + KR[7]*wz, KR[2]*wx + KR[5]*wy + KR[8]*wz};
+        float gc[3]; int i0[3]; float fr[3];
+        for (int k = 0; k < 3; k++) {
+            gc[k] = (l[k] - tool_org[k]) / tool_cell[k] - 0.5f;
+            if (gc[k] < 0.0f || gc[k] >= tool_res[k] - 1) return 1e30f;   // outside the baked box
+            i0[k] = (int)floorf(gc[k]); fr[k] = gc[k] - i0[k];
+        }
+        auto at = [&](int x, int y, int z) { return tool_sdf_host[((size_t)z * tool_res[1] + y) * tool_res[0] + x]; };
+        float c00 = at(i0[0],i0[1],i0[2])*(1-fr[0]) + at(i0[0]+1,i0[1],i0[2])*fr[0];
+        float c10 = at(i0[0],i0[1]+1,i0[2])*(1-fr[0]) + at(i0[0]+1,i0[1]+1,i0[2])*fr[0];
+        float c01 = at(i0[0],i0[1],i0[2]+1)*(1-fr[0]) + at(i0[0]+1,i0[1],i0[2]+1)*fr[0];
+        float c11 = at(i0[0],i0[1]+1,i0[2]+1)*(1-fr[0]) + at(i0[0]+1,i0[1]+1,i0[2]+1)*fr[0];
+        return (c00*(1-fr[1]) + c10*fr[1])*(1-fr[2]) + (c01*(1-fr[1]) + c11*fr[1])*fr[2];
+    };
+    float Ls = R;
+    // lower envelope of the (rotated) mesh tool: low_y[(ix,iz)] = lowest world-y offset (relative
+    // to the tool centre) where phi <= 0 in the vertical column at horizontal offset (dx,dz).
+    float fp_lo[2] = {0, 0}, fp_h = 0, y_lo = 0, y_hi = 0; int fp_n[2] = {0, 0};
+    std::vector<float> low_y;
+    if (tool == "mesh") {
+        float clo[3] = {1e30f, 1e30f, 1e30f}, chi[3] = {-1e30f, -1e30f, -1e30f};
+        for (int c = 0; c < 8; c++) {           // world AABB of the rotated baked box
+            float l[3];
+            for (int k = 0; k < 3; k++) l[k] = tool_org[k] + (((c >> k) & 1) ? tool_res[k] * tool_cell[k] : 0.0f);
+            for (int r = 0; r < 3; r++) {
+                float w = KR[r*3+0]*l[0] + KR[r*3+1]*l[1] + KR[r*3+2]*l[2];
+                clo[r] = std::min(clo[r], w); chi[r] = std::max(chi[r], w);
+            }
+        }
+        float cmin = std::min(tool_cell[0], std::min(tool_cell[1], tool_cell[2]));
+        fp_h = 0.5f * cmin; y_lo = clo[1]; y_hi = chi[1];
+        fp_lo[0] = clo[0]; fp_lo[1] = clo[2];
+        fp_n[0] = (int)ceilf((chi[0] - clo[0]) / fp_h); fp_n[1] = (int)ceilf((chi[2] - clo[2]) / fp_h);
+        low_y.assign((size_t)fp_n[0] * fp_n[1], 1e30f);
+        float ext_min = 1e30f, ext[3] = {-1e30f, -1e30f, -1e30f}, emn[3] = {1e30f, 1e30f, 1e30f};
+        const float3 O = make_float3(0, 0, 0);
+        for (int ix = 0; ix < fp_n[0]; ix++) for (int iz = 0; iz < fp_n[1]; iz++) {
+            float dx = fp_lo[0] + (ix + 0.5f) * fp_h, dz = fp_lo[1] + (iz + 0.5f) * fp_h;
+            for (float y = y_lo; y <= y_hi; y += 0.25f * cmin)
+                if (tool_phi(dx, y, dz, O) <= 0.0f) {
+                    low_y[(size_t)ix * fp_n[1] + iz] = y;
+                    emn[0] = std::min(emn[0], dx); ext[0] = std::max(ext[0], dx);
+                    emn[2] = std::min(emn[2], dz); ext[2] = std::max(ext[2], dz);
+                    break;
+                }
+        }
+        // vertical solid extent: scan the centre column range for the top too
+        for (int ix = 0; ix < fp_n[0]; ix++) for (int iz = 0; iz < fp_n[1]; iz++) {
+            if (low_y[(size_t)ix * fp_n[1] + iz] > 1e29f) continue;
+            float dx = fp_lo[0] + (ix + 0.5f) * fp_h, dz = fp_lo[1] + (iz + 0.5f) * fp_h;
+            for (float y = y_hi; y >= y_lo; y -= 0.25f * cmin)
+                if (tool_phi(dx, y, dz, O) <= 0.0f) { ext[1] = std::max(ext[1], y); break; }
+            emn[1] = std::min(emn[1], low_y[(size_t)ix * fp_n[1] + iz]);
+        }
+        for (int k = 0; k < 3; k++) ext_min = std::min(ext_min, ext[k] - emn[k]);
+        Ls = 0.5f * ext_min;
+        printf("[tool] mesh pose=%s | solid world extent (%.4f, %.4f, %.4f) m | footprint table %dx%d (h=%.5f) | script length scale Ls=%.5f\n",
+               mesh_pose.c_str(), ext[0] - emn[0], ext[1] - emn[1], ext[2] - emn[2], fp_n[0], fp_n[1], fp_h, Ls);
+    }
+    float margin = 0.5f * Ls;
     float x0 = bmn[0] + margin, x1 = bmx[0] - margin;
     // local top-surface height along the sweep line (follows curved tops, e.g. tumor)
-    float col = std::max(0.5f * R, 1.5f * avg_spacing);
+    float col = std::max(0.5f * Ls, 1.5f * avg_spacing);
     // Height profile is computed ONCE from the SETTLED body (end of the settle phase) and
     // never updated afterwards. (An earlier version re-read the current top each frame; after
     // removal the "top" became the cavity floor and the knife teleported down into its own
@@ -320,6 +400,17 @@ int main(int argc, char** argv) {
     (void)col;
     auto touch_at = [&](float x) {
         float h = -1e30f;
+        if (tool == "mesh") {
+            // centre height at which the tool's lower envelope first touches a settled particle
+            for (int i = 0; i < N; i++) {
+                const float3& p = settled_pos[i];
+                int ix = (int)floorf((p.x - x - fp_lo[0]) / fp_h), iz = (int)floorf((p.z - zmid - fp_lo[1]) / fp_h);
+                if (ix < 0 || iz < 0 || ix >= fp_n[0] || iz >= fp_n[1]) continue;
+                float ly = low_y[(size_t)ix * fp_n[1] + iz];
+                if (ly < 1e29f) h = std::max(h, p.y - ly);
+            }
+            return (h > -1e29f) ? h : bmx[1] - y_lo;
+        }
         for (int i = 0; i < N; i++) {
             const float3& p = settled_pos[i];
             float dx = p.x - x, dz = p.z - zmid, rho2 = dx*dx + dz*dz;
@@ -334,7 +425,7 @@ int main(int argc, char** argv) {
     float h0 = 0.0f;
 
     printf("=== tool_bench: %s | tool=%s | N=%d C=%d E=%d fixed=%d | spacing=%.5f | R=%.4f (R/spacing=%.2f)\n",
-           cfg.name.c_str(), tool.c_str(), N, C, E, n_fixed, avg_spacing, R, R / avg_spacing);
+           cfg.name.c_str(), tool.c_str(), N, C, E, n_fixed, avg_spacing, Ls, Ls / avg_spacing);
     printf("    dt=%.4f iters=%d substeps=%d cut_interval=%d alpha_min=%.2f tau=%.2f growth=%.3f sc=%d(r=%.4f)\n",
            cfg.dt, cfg.num_iterations, cfg.substeps, cfg.cutting_interval, cfg.alpha_min,
            cfg.aspiration_threshold, cfg.damage_growth_rate, (int)cfg.self_collision_enabled,
@@ -396,8 +487,8 @@ int main(int argc, char** argv) {
         float kx, ky;
         if (phase < 0)      { kx = 100.0f; ky = 100.0f; }
         // approach: centre from touch+0.2R (clear of the body) down to touch-R-depth (half-embedded + depth)
-        else if (phase == 0) { float t = (float)(f - S + 1) / A; kx = x0; ky = (h0 + 0.2f * R) + t * (-1.2f * R - depth); }
-        else                 { float t = (float)(f - S - A) / std::max(W - 1, 1); kx = x0 + t * (x1 - x0); ky = touch_at(kx) - R - depth; }
+        else if (phase == 0) { float t = (float)(f - S + 1) / A; kx = x0; ky = (h0 + 0.2f * Ls) + t * (-1.2f * Ls - depth); }
+        else                 { float t = (float)(f - S - A) / std::max(W - 1, 1); kx = x0 + t * (x1 - x0); ky = touch_at(kx) - Ls - depth; }
         float3 kp = make_float3(kx, ky, zmid);
         g.config.knife_pos = kp;
         g.config.knife_active = (phase >= 0) ? 1 : 0;
@@ -456,12 +547,15 @@ int main(int argc, char** argv) {
         int rem_total = 0, new_rem = 0, n_contact = 0;
         for (int i = 0; i < N; i++) {
             rem_total += rem_now[i];
-            if (phase >= 0 && !rem_now[i] && sphere_dist(pos[i], kp) < R * (1.0f + 1e-4f)) n_contact++;
+            if (phase >= 0 && !rem_now[i]) {
+                if (tool == "mesh") { if (tool_phi(pos[i].x, pos[i].y, pos[i].z, kp) < 1e-4f * Ls) n_contact++; }
+                else if (sphere_dist(pos[i], kp) < R * (1.0f + 1e-4f)) n_contact++;
+            }
         }
         static int rem_total_prev = 0; new_rem = rem_total - rem_total_prev; rem_total_prev = rem_total;
         if (phase >= 0) n_contact += new_rem;   // removed this frame were on the knife surface (verified by depth bins)
         if (n_contact > 0 && first_contact < 0) first_contact = f;
-        if (timing && new_rem > 0 && first_removal < 0) first_removal = f;
+        if ((timing || tool == "mesh") && new_rem > 0 && first_removal < 0) first_removal = f;
         if (timing) rem_prev = rem_now;
         int nb = 0; float maxd = 0.0f;
         if (!timing) {
@@ -520,7 +614,7 @@ int main(int argc, char** argv) {
     printf("removed total: %d / %d\n", rem_total, N);
     printf("phases: settle %d | approach %d (centre from touch+0.2R down to touch-R-%.4f, touch(x0)=%.4f) | sweep %d frames\n", S, A, depth, h0, W);
     printf("first contact frame: %d | first removal frame: %d | max knife step per frame: vertical %.5f m (%.3fR), lateral %.5f m (%.3fR)\n",
-           first_contact, first_removal, max_step_y, max_step_y / R, max_step_xy, max_step_xy / R);
+           first_contact, first_removal, max_step_y, max_step_y / Ls, max_step_xy, max_step_xy / Ls);
     printf("final_state FNV-1a: %016llx\n", (unsigned long long)h);
     printf("GPU ms/frame (knife active, %d substeps%s): median=%.2f p90=%.2f p99=%.2f max=%.2f\n",
            cfg.substeps, timing ? "" : ", instrumented", pct(0.5), pct(0.9), pct(0.99), act.empty() ? 0.0 : act.back());
