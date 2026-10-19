@@ -120,7 +120,6 @@ public:
     EdgesGPU d_edges;
     SDFData d_rigid_sdf = {};   // bone SDF (static)
     SDFData d_tool_sdf = {};    // tool SDF (local frame, moves with knife_pos)
-    float* d_knife_rot = nullptr;  // [9] rotation matrix on GPU
     SimConfigGPU config;
 
     int step_count = 0;
@@ -233,6 +232,10 @@ private:
 
     // GPU cutting kernels
     void gpu_update_damage();
+    // CUT_CURVE channel segments (tool local frame, 2 float3 per segment); see sync_cut_segments
+    std::vector<float3> h_cut_segments;
+    float3* d_cut_segments = nullptr;
+    void sync_cut_segments();
     void gpu_aspirate();
     void gpu_update_particle_damage();
 

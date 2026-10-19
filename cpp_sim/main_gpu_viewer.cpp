@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
     CuttingManager cutting_mgr;
     cutting_mgr.alpha_min = cfg.alpha_min;
     cutting_mgr.tau_low = 0.05f;
-    cutting_mgr.init(cpu_solver.clusters, cpu_solver.particles);
+    cutting_mgr.init(cpu_solver.clusters, cpu_solver.particles, use_tet ? &tet_mesh.vertex_neighbors : nullptr);
 
     // 提取边数据给 GPU
     std::vector<int> edge_a, edge_b;
@@ -279,46 +279,9 @@ int main(int argc, char** argv) {
     if (num_edges > 0) {
         gpu_solver.init_edges(edge_a, edge_b, edge_pf_rest);
 
-        // Per-edge α field (Stage 1 validation): if enabled, allocate and
-        // compute a linear-gradient α field along selected axis.
-        gpu_solver.per_edge_alpha = cfg.per_edge_alpha;
-        if (cfg.per_edge_alpha) {
-            // Determine axis index
-            int axis = 0;
-            if (cfg.alpha_gradient_axis == "y") axis = 1;
-            else if (cfg.alpha_gradient_axis == "z") axis = 2;
-
-            // Compute bbox of positions along that axis
-            float axis_min =  1e30f;
-            float axis_max = -1e30f;
-            for (const auto& p : positions) {
-                float v = (axis == 0) ? p.x : (axis == 1) ? p.y : p.z;
-                if (v < axis_min) axis_min = v;
-                if (v > axis_max) axis_max = v;
-            }
-            float axis_range = axis_max - axis_min;
-            if (axis_range < 1e-6f) axis_range = 1.0f;  // safety
-
-            // Per-edge α: linear interpolation based on midpoint position
-            std::vector<float> alpha_per_edge(num_edges);
-            for (int e = 0; e < num_edges; e++) {
-                int a = edge_a[e], b = edge_b[e];
-                float mid;
-                if (axis == 0)      mid = 0.5f * (positions[a].x + positions[b].x);
-                else if (axis == 1) mid = 0.5f * (positions[a].y + positions[b].y);
-                else                mid = 0.5f * (positions[a].z + positions[b].z);
-                float t = (mid - axis_min) / axis_range;
-                alpha_per_edge[e] = cfg.alpha_min_low
-                                     + t * (cfg.alpha_min_high - cfg.alpha_min_low);
-            }
-            gpu_solver.upload_per_edge_alpha(alpha_per_edge);
-            printf("[CUT] per_edge_alpha ENABLED: axis=%s, α range [%.3f, %.3f]\n",
-                   cfg.alpha_gradient_axis.c_str(),
-                   cfg.alpha_min_low, cfg.alpha_min_high);
-        } else {
-            printf("[CUT] per_edge_alpha DISABLED: global alpha_min=%.3f\n",
-                   cfg.alpha_min);
-        }
+        // Heterogeneous material fields (per-edge α, per-particle τ / stiffness) — shared with
+        // tool_bench (core/solver_setup.h, 3a′). The τ and stiffness fields were not applied here before.
+        setup_material_fields(cfg, gpu_solver, positions, edge_a, edge_b);
     }
 
     // --- Rigid mesh collision + tool mesh SDF --- (Step 1: shared with tool_bench, core/solver_setup.h)

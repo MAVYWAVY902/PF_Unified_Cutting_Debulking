@@ -1,6 +1,6 @@
 #include "shape_matching_gpu.h"
 #include "svd3_cuda.h"
-#include "tool_query.cuh"   // Step 1: unified tool query (sphere)
+#include "tool_channels.cuh"   // Step 1: unified tool query (sphere)
 #include <cub/cub.cuh>
 #include <cstdio>
 #include <iostream>
@@ -413,18 +413,20 @@ __global__ void self_collision_kernel(
 
 // ============== Cutting Kernels ==============
 
-// 边 P(F) 计算 + damage 更新（每边一线程）
-// Per-edge α support: if alpha_min_per_edge is non-null, read α from array;
-// otherwise use alpha_min_scalar. Single kernel handles both modes.
-// damage_model: 0 = sharpness (legacy), 1 = toughness (α scales growth rate inverse)
-__global__ void update_edge_damage_kernel(
+// Edge damage from the tool's CUT channel (tool_channels.cuh). One kernel for every intruder set
+// (sphere / grid-SDF surface, sharp-edge curve); replaces update_edge_damage_kernel (sphere),
+// tool_sdf_damage_kernel (grid) and sharp_edge_damage_kernel (curve) with the same arithmetic.
+// Material fields apply to every channel:
+//   alpha_min_per_edge  nullable per-edge α (nullptr → alpha_min_scalar)
+//   damage_model        0 = sharpness (legacy), 1 = toughness (growth rate / α)
+__global__ void tool_damage_kernel(
     float3* pred_pos, int* removed,
     int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
-    ToolDesc tool,
+    CutChannel channel,
     float alpha_min_scalar,
-    const float* alpha_min_per_edge,   // nullable: nullptr → use scalar
+    const float* alpha_min_per_edge,
     float damage_growth_rate, int num_edges,
-    int damage_model)                   // 0=sharpness, 1=toughness
+    int damage_model)
 {
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
     if (eid >= num_edges || broken[eid]) return;
@@ -441,9 +443,6 @@ __global__ void update_edge_damage_kernel(
     mid.y = (pred_pos[a].y + pred_pos[b].y) * 0.5f;
     mid.z = (pred_pos[a].z + pred_pos[b].z) * 0.5f;
 
-    // 只更新刀具附近的边 (Step 1: tool op; sphere = legacy 3R search radius)
-    if (tool_outside_damage_band(tool, mid, 0.0f)) return;   // r_e unused for the sphere
-
     // 边半径（circumsphere）
     float ex = pred_pos[a].x - pred_pos[b].x;
     float ey = pred_pos[a].y - pred_pos[b].y;
@@ -451,10 +450,9 @@ __global__ void update_edge_damage_kernel(
     float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
     if (radius < 1e-10f) return;
 
-    // 用刀具**表面**（非中心）作为闯入者: intruder distance = signed distance phi to the tool
-    // surface (sphere: |mid-c| - R, same expression as before Step 1)
-    float intruder_dist = tool_query(tool, mid).phi;
-    float sdist = intruder_dist - radius;
+    // intruder distance of the cut channel (also the search band: outside → no update)
+    float sdist;
+    if (!cut_channel_sdist(channel, mid, radius, sdist)) return;
     float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
 
     // Damage 更新 — capped growth (rate=1.0 → 原 max-update 行为, byte-identical debulk)
@@ -559,7 +557,7 @@ __global__ void aspirate_kernel(
 // ============== Host Functions ==============
 
 // Step 2: grid-SDF tool description for tool_query.cuh (built per launch on the host; the
-// rotation is copied by value — the same numbers the legacy kernels read from d_knife_rot).
+// rotation is copied by value).
 static ToolDesc grid_tool_desc(const SimConfigGPU& c, const SDFData& sdf) {
     ToolDesc t = {};
     t.type = 1; t.pos = c.knife_pos; t.radius = c.knife_radius; t.reach = c.aspiration_reach;
@@ -857,22 +855,6 @@ __global__ void sdf_collision_kernel(
     }
 }
 
-// Apply R^T (transpose/inverse of rotation) to a vector
-__device__ float3 apply_rot_transpose(const float* R, float3 v) {
-    return make_float3(
-        R[0]*v.x + R[3]*v.y + R[6]*v.z,  // R^T row 0 = R column 0
-        R[1]*v.x + R[4]*v.y + R[7]*v.z,
-        R[2]*v.x + R[5]*v.y + R[8]*v.z);
-}
-
-// Apply R (forward rotation) to a vector
-__device__ float3 apply_rot(const float* R, float3 v) {
-    return make_float3(
-        R[0]*v.x + R[1]*v.y + R[2]*v.z,
-        R[3]*v.x + R[4]*v.y + R[5]*v.z,
-        R[6]*v.x + R[7]*v.y + R[8]*v.z);
-}
-
 // Tool SDF collision: transform particle to tool local frame, query SDF
 __global__ void tool_sdf_collision_kernel(
     float3* pred_pos, int* removed, int* fixed, ToolDesc tool, int N)
@@ -882,156 +864,6 @@ __global__ void tool_sdf_collision_kernel(
     // Step 2: via tool_query.cuh (legacy push arithmetic; normal per tool.normal_mode)
     float3 p = pred_pos[i];
     if (tool_project_out(tool, p)) pred_pos[i] = p;
-}
-
-// Tool SDF damage: compute distance from edge midpoint to tool surface
-__global__ void tool_sdf_damage_kernel(
-    float3* pred_pos, int* removed,
-    int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
-    ToolDesc tool,
-    int pf_edge_radius,                 // Step 2 switch: 1 = intruder distance phi - r_e (sphere form)
-    float alpha_min, float damage_growth_rate, int num_edges)
-{
-    int eid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (eid >= num_edges || broken[eid]) return;
-
-    int a = edge_a[eid], b = edge_b[eid];
-    if (removed[a] || removed[b]) return;
-
-    float3 mid = make_float3(
-        (pred_pos[a].x + pred_pos[b].x) * 0.5f,
-        (pred_pos[a].y + pred_pos[b].y) * 0.5f,
-        (pred_pos[a].z + pred_pos[b].z) * 0.5f);
-
-    // Edge circumradius
-    float ex = pred_pos[a].x - pred_pos[b].x;
-    float ey = pred_pos[a].y - pred_pos[b].y;
-    float ez = pred_pos[a].z - pred_pos[b].z;
-    float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
-    if (radius < 1e-10f) return;
-
-    // Only process edges near tool surface (|phi| < 3 * radius); outside the grid → skip
-    if (tool_outside_damage_band(tool, mid, radius)) return;
-    float phi = tool_query(tool, mid, false).phi;
-
-    // P(F) from the signed distance.
-    //   legacy (pf_edge_radius=0): sdist = phi            — the edge radius is NOT subtracted
-    //   fixed  (pf_edge_radius=1): sdist = phi - r_e      — same intruder model as the sphere
-    //     kernel (sdist = |mid-c| - R - r_e). For a true SDF phi this is exact for a sphere and a
-    //     conservative (1-Lipschitz) lower bound of the edge-sphere clearance for any tool shape.
-    float sdist = pf_edge_radius ? (phi - radius) : phi;
-    float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
-
-    float rest = pf_rest[eid];
-    if (rest > 0.01f) {
-        float target = fmaxf(0.0f, 1.0f - pf / rest);
-        float gap = target - damage[eid];
-        if (gap > 0.0f) {
-            float inc = gap < damage_growth_rate ? gap : damage_growth_rate;
-            damage[eid] = damage[eid] + inc;
-        }
-    }
-
-    if (damage[eid] > 0.5f) {
-        broken[eid] = 1;
-    }
-}
-
-// ============== Sharp-edge damage kernel ==============
-// Physical insight: a real scalpel cuts ONLY along its sharp edge line.
-// The blade body just pushes (collision). The previous tool_sdf_damage_kernel
-// incorrectly damaged every mesh edge inside the wedge SDF — so moving the blade
-// sideways (perpendicular to cutting direction) wrongly damaged tissue beside
-// the blade body, not just at the sharp edge.
-//
-// Fix: damage proportional to distance from mesh edge midpoint to the sharp
-// edge LINE SEGMENT in tool local frame. Same sigmoid P(F) formula, but
-// `sdist` is now point-to-line-segment distance, not SDF.
-//
-// Collision (tool_sdf_collision_kernel) is unchanged: full SDF push-out so the
-// blade body still does non-penetration correctly.
-__global__ void sharp_edge_damage_kernel(
-    float3* pred_pos, int* removed,
-    int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
-    float3 tool_pos, const float* tool_rot,
-    float3 sharp_a, float3 sharp_b,    // sharp edge endpoints in tool LOCAL frame
-    float alpha_min, float damage_growth_rate, int num_edges)
-{
-    int eid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (eid >= num_edges || broken[eid]) return;
-
-    int a = edge_a[eid], b = edge_b[eid];
-    if (removed[a] || removed[b]) return;
-
-    // Mesh edge midpoint in world → tool local frame
-    float3 mid_world = make_float3(
-        (pred_pos[a].x + pred_pos[b].x) * 0.5f - tool_pos.x,
-        (pred_pos[a].y + pred_pos[b].y) * 0.5f - tool_pos.y,
-        (pred_pos[a].z + pred_pos[b].z) * 0.5f - tool_pos.z);
-    float3 mid = apply_rot_transpose(tool_rot, mid_world);
-
-    // Closest point on sharp edge segment [sharp_a, sharp_b] to `mid`.
-    // t = clamp(((mid - sharp_a) · (sharp_b - sharp_a)) / |sharp_b - sharp_a|^2, 0, 1)
-    float3 ab = make_float3(sharp_b.x - sharp_a.x, sharp_b.y - sharp_a.y, sharp_b.z - sharp_a.z);
-    float3 am = make_float3(mid.x - sharp_a.x, mid.y - sharp_a.y, mid.z - sharp_a.z);
-    float ab_dot_ab = ab.x*ab.x + ab.y*ab.y + ab.z*ab.z;
-    if (ab_dot_ab < 1e-12f) return;
-    float t = (am.x*ab.x + am.y*ab.y + am.z*ab.z) / ab_dot_ab;
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-    float3 closest = make_float3(
-        sharp_a.x + t * ab.x,
-        sharp_a.y + t * ab.y,
-        sharp_a.z + t * ab.z);
-
-    float dx = mid.x - closest.x;
-    float dy = mid.y - closest.y;
-    float dz = mid.z - closest.z;
-    float dist_to_sharp = sqrtf(dx*dx + dy*dy + dz*dz + 1e-12f);
-
-    // Mesh edge circumradius (its own half-length)
-    float ex = pred_pos[a].x - pred_pos[b].x;
-    float ey = pred_pos[a].y - pred_pos[b].y;
-    float ez = pred_pos[a].z - pred_pos[b].z;
-    float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
-    if (radius < 1e-10f) return;
-
-    // Early reject if too far from sharp edge (more than 3x edge radius)
-    if (dist_to_sharp > radius * 3.0f) return;
-
-    // P(F) sigmoid on (distance to sharp edge - edge radius).
-    // Mirrors sphere/SDF version semantics: sdist < 0 when sharp edge is INSIDE
-    // the mesh edge's circumsphere → pf low → damage accumulates.
-    float sdist = dist_to_sharp - radius;
-    float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
-
-    float rest = pf_rest[eid];
-    if (rest > 0.01f) {
-        float target = fmaxf(0.0f, 1.0f - pf / rest);
-        // Capped growth (replaces old `damage = max(damage, target)` snap):
-        // gives time for shape-matching deformation to propagate before edges break.
-        float gap = target - damage[eid];
-        if (gap > 0.0f) {
-            float inc = gap < damage_growth_rate ? gap : damage_growth_rate;
-            damage[eid] = damage[eid] + inc;
-        }
-    }
-    if (damage[eid] > 0.5f) {
-        broken[eid] = 1;
-    }
-}
-
-// Tool SDF aspiration: remove high-damage particles inside tool
-__global__ void tool_sdf_aspirate_kernel(
-    float3* pred_pos, float* particle_damage, int* removed,
-    ToolDesc tool, float threshold, int N)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= N || removed[i]) return;
-    // Step 2: via tool_query.cuh (reach = 0 → legacy strict phi < 0)
-    if (tool_contains(tool, pred_pos[i]) && particle_damage[i] > threshold) {
-        removed[i] = 1;
-    }
 }
 
 // SDF debug: count particles inside rigid body
@@ -1097,39 +929,51 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
     int E = d_edges.num_edges;
     int blocks_e = (E + 255) / 256;
 
-    // Priority dispatch:
-    //   1. use_sharp_edge_damage=1 → sharp_edge_damage_kernel (physically correct cutting)
-    //   2. mesh SDF tool → tool_sdf_damage_kernel (volumetric damage, legacy)
-    //   3. fallback → update_edge_damage_kernel (sphere knife)
+    // Cut channel (tool_channels.cuh), same priority as before Step 3:
+    //   1. use_sharp_edge_damage=1 → CUT_CURVE on the sharp-edge segment(s)
+    //   2. mesh SDF tool           → CUT_SURFACE on the grid SDF (legacy volumetric damage)
+    //   3. fallback                → CUT_SURFACE on the analytic sphere
+    CutChannel ch = {};
     if (config.use_sharp_edge_damage) {
-        sharp_edge_damage_kernel<<<blocks_e, 256>>>(
-            d_particles.predicted_pos, d_particles.removed,
-            d_edges.particle_a, d_edges.particle_b,
-            d_edges.pf_rest, d_edges.damage, d_edges.broken,
-            config.knife_pos, d_knife_rot,
-            config.sharp_edge_a, config.sharp_edge_b,
-            alpha_min, config.damage_growth_rate, E);
+        sync_cut_segments();
+        ch.kind = CUT_CURVE;
+        ch.tool.pos = config.knife_pos;
+        memcpy(ch.tool.rot, config.knife_rot, sizeof(ch.tool.rot));
+        ch.seg = d_cut_segments;
+        ch.num_seg = (int)h_cut_segments.size() / 2;
     } else if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
-        tool_sdf_damage_kernel<<<blocks_e, 256>>>(
-            d_particles.predicted_pos, d_particles.removed,
-            d_edges.particle_a, d_edges.particle_b,
-            d_edges.pf_rest, d_edges.damage, d_edges.broken,
-            grid_tool_desc(config, d_tool_sdf), config.sdf_pf_edge_radius,
-            alpha_min, config.damage_growth_rate, E);
+        ch.kind = CUT_SURFACE;
+        ch.tool = grid_tool_desc(config, d_tool_sdf);
+        ch.subtract_re = config.sdf_pf_edge_radius;
     } else {
-        // Per-edge α dispatch: if per_edge_alpha enabled AND array allocated,
-        // pass the array pointer; kernel branches inside.
-        const float* alpha_arr = (per_edge_alpha && d_edges.alpha_min_per_edge != nullptr)
-                                  ? d_edges.alpha_min_per_edge : nullptr;
-        update_edge_damage_kernel<<<blocks_e, 256>>>(
-            d_particles.predicted_pos, d_particles.removed,
-            d_edges.particle_a, d_edges.particle_b,
-            d_edges.pf_rest, d_edges.damage, d_edges.broken,
-            make_sphere_tool(config.knife_pos, config.knife_radius),
-            alpha_min, alpha_arr,
-            config.damage_growth_rate, E,
-            damage_model_mode);
+        ch.kind = CUT_SURFACE;
+        ch.tool = make_sphere_tool(config.knife_pos, config.knife_radius);
+        ch.subtract_re = 1;
     }
+    // Material fields (per-edge α, damage model) apply to every channel.
+    const float* alpha_arr = (per_edge_alpha && d_edges.alpha_min_per_edge != nullptr)
+                              ? d_edges.alpha_min_per_edge : nullptr;
+    tool_damage_kernel<<<blocks_e, 256>>>(
+        d_particles.predicted_pos, d_particles.removed,
+        d_edges.particle_a, d_edges.particle_b,
+        d_edges.pf_rest, d_edges.damage, d_edges.broken,
+        ch, alpha_min, alpha_arr,
+        config.damage_growth_rate, E,
+        damage_model_mode);
+}
+
+// Sharp-edge segments for the CUT_CURVE channel: currently the single configured segment
+// sharp_edge_a → sharp_edge_b (tool local frame). Uploaded only when it changes.
+void ShapeMatchingGPUSolver::sync_cut_segments() {
+    std::vector<float3> segs = {config.sharp_edge_a, config.sharp_edge_b};
+    bool same = segs.size() == h_cut_segments.size();
+    for (size_t k = 0; same && k < segs.size(); k++)
+        same = segs[k].x == h_cut_segments[k].x && segs[k].y == h_cut_segments[k].y && segs[k].z == h_cut_segments[k].z;
+    if (same && d_cut_segments) return;
+    if (d_cut_segments && segs.size() > h_cut_segments.size()) { cudaFree(d_cut_segments); d_cut_segments = nullptr; }
+    if (!d_cut_segments) CUDA_CHECK(cudaMalloc(&d_cut_segments, segs.size() * sizeof(float3)));
+    CUDA_CHECK(cudaMemcpy(d_cut_segments, segs.data(), segs.size() * sizeof(float3), cudaMemcpyHostToDevice));
+    h_cut_segments = segs;
 }
 
 void ShapeMatchingGPUSolver::gpu_update_particle_damage() {
@@ -1162,18 +1006,16 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
     int N = d_particles.N;
     int blocks_n = (N + 255) / 256;
 
-    if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
-        tool_sdf_aspirate_kernel<<<blocks_n, 256>>>(
-            d_particles.predicted_pos, d_particles.damage, d_particles.removed,
-            grid_tool_desc(config, d_tool_sdf), aspiration_threshold, N);
-    } else {
-        const float* tau_arr = (per_particle_tau && d_tau_per_particle != nullptr)
-                                ? d_tau_per_particle : nullptr;
-        aspirate_kernel<<<blocks_n, 256>>>(
-            d_particles.predicted_pos, d_particles.damage, d_particles.removed,
-            make_sphere_tool(config.knife_pos, config.knife_radius, config.aspiration_reach),
-            aspiration_threshold, tau_arr, N);
-    }
+    // Aspirate channel: the tool's contains test (grid SDF or sphere, incl. aspiration_reach for
+    // both) and the material threshold (per-particle τ for every tool type).
+    ToolDesc tool = (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf)
+                        ? grid_tool_desc(config, d_tool_sdf)
+                        : make_sphere_tool(config.knife_pos, config.knife_radius, config.aspiration_reach);
+    const float* tau_arr = (per_particle_tau && d_tau_per_particle != nullptr)
+                            ? d_tau_per_particle : nullptr;
+    aspirate_kernel<<<blocks_n, 256>>>(
+        d_particles.predicted_pos, d_particles.damage, d_particles.removed,
+        tool, aspiration_threshold, tau_arr, N);
 }
 
 // ============== Simulation Step ==============
@@ -1182,12 +1024,6 @@ void ShapeMatchingGPUSolver::step() {
     int N = d_particles.N;
     int C = d_clusters.num_clusters;
     int blocks_n = (N + 255) / 256;
-
-    // Upload knife rotation to GPU
-    if (!d_knife_rot) {
-        CUDA_CHECK(cudaMalloc(&d_knife_rot, 9 * sizeof(float)));
-    }
-    CUDA_CHECK(cudaMemcpy(d_knife_rot, config.knife_rot, 9 * sizeof(float), cudaMemcpyHostToDevice));
 
     // 1. Predict
     predict_kernel<<<blocks_n, 256>>>(
@@ -1468,6 +1304,7 @@ void ShapeMatchingGPUSolver::build_hash_grid() {
 }
 
 void ShapeMatchingGPUSolver::cleanup() {
+    if (d_cut_segments) { cudaFree(d_cut_segments); d_cut_segments = nullptr; }
     cudaFree(d_particles.pos);
     cudaFree(d_particles.vel);
     cudaFree(d_particles.predicted_pos);

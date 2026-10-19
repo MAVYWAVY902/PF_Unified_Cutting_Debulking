@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
     std::string tool = "sphere";
     int n_frames = 80, grid_res = 64, n_settle = 60, n_approach = 30;
     bool timing = false, replay_allow_mismatch = false, gpu_only = false;
-    std::string replay_path, stats_path, write_traj_path, pass_path;
+    std::string replay_path, stats_path, write_traj_path, pass_path, topo_path;
     float depth = 0.0f;
     // --tool mesh orientation: "flat" = identity (old behaviour; the dissector lies flat, its
     // 71 mm length covers the whole tumour); "tipdown" = long axis vertical, blade width along
@@ -94,7 +94,8 @@ int main(int argc, char** argv) {
         else if (a == "--gpu-only") gpu_only = true;
         else if (a == "--write-traj" && i + 1 < argc) write_traj_path = argv[++i];   // scripted pose → recording file   // replay without orphan cleanup / BFS (old behaviour)
         else if (a == "--stats" && i + 1 < argc) stats_path = argv[++i];
-        else if (a == "--pass-through" && i + 1 < argc) pass_path = argv[++i];   // replay + mesh tool: per-frame tool/edge crossing diagnostic
+        else if (a == "--pass-through" && i + 1 < argc) pass_path = argv[++i];   
+        else if (a == "--dump-topology" && i + 1 < argc) topo_path = argv[++i];   // replay: final positions + cutting edges (a,b,broken)   // replay + mesh tool: per-frame tool/edge crossing diagnostic
         else if (a == "--depth" && i + 1 < argc) depth = (float)std::atof(argv[++i]);
         else if (a == "--mesh-pose" && i + 1 < argc) mesh_pose = argv[++i];
         else if (a == "--rigid" && i + 1 < argc) {
@@ -121,8 +122,6 @@ int main(int argc, char** argv) {
         cfg.rigid_mesh_path.clear();
     }
     std::filesystem::create_directories(out_dir);
-    if (cfg.per_particle_tau || cfg.per_particle_stiffness || cfg.per_edge_alpha)
-        printf("[WARN] heterogeneous fields in config are IGNORED by tool_bench (uniform material)\n");
 
     // ---------------- mesh + particles (mirror main_gpu_viewer) ----------------
     TetMesh tet_mesh;
@@ -171,7 +170,7 @@ int main(int argc, char** argv) {
 
     PFCalculator pf_calc; pf_calc.alpha_min = cfg.alpha_min; pf_calc.init_from_tets(tet_mesh.tets, N);
     CuttingManager cm; cm.alpha_min = cfg.alpha_min; cm.tau_low = 0.05f;
-    cm.init(cpu_solver.clusters, cpu_solver.particles);
+    cm.init(cpu_solver.clusters, cpu_solver.particles, &tet_mesh.vertex_neighbors);
     std::vector<int> ea, eb; std::vector<float> epf;
     for (auto& e : cm.edges) { ea.push_back(e.particle_a); eb.push_back(e.particle_b); epf.push_back(e.pf_rest); }
     int E = (int)ea.size();
@@ -222,6 +221,7 @@ int main(int argc, char** argv) {
            g.config.aspiration_reach);
     g.init(positions, velocities, removed, fixed_arr, cs, csz, pids, roff, rcm);
     g.init_edges(ea, eb, epf);
+    setup_material_fields(cfg, g, positions, ea, eb);   // 3a′: same heterogeneous fields as the viewer
     RigidMesh rigid_mesh;                             // Step 1: rigid obstacle (bone) like the viewer
     setup_rigid_object(cfg, g, y_offset, rigid_mesh);
 
@@ -421,6 +421,26 @@ int main(int argc, char** argv) {
         }
         if (pass_f) fclose(pass_f);
         if (pass_e) fclose(pass_e);
+        // --dump-topology F: end-of-replay state for offline connectivity checks.
+        //   F.particles.csv  i,x,y,z,removed,fixed      F.edges.csv  a,b,broken  (cutting edges)
+        if (!topo_path.empty()) {
+            std::vector<int> brk; g.download_edge_broken(brk);
+            FILE* fp = fopen((topo_path + ".particles.csv").c_str(), "w");
+            fprintf(fp, "i,x,y,z,removed,fixed\n");
+            for (int i = 0; i < N; i++)
+                fprintf(fp, "%d,%.9g,%.9g,%.9g,%d,%d\n", i, rpos[i].x, rpos[i].y, rpos[i].z, rrem[i], fixed_arr[i]);
+            fclose(fp);
+            FILE* fe = fopen((topo_path + ".edges.csv").c_str(), "w");
+            fprintf(fe, "a,b,broken\n");
+            for (int e = 0; e < E; e++) fprintf(fe, "%d,%d,%d\n", ea[e], eb[e], brk[e]);
+            fclose(fe);
+            FILE* fc = fopen((topo_path + ".clusters.txt").c_str(), "w");   // one cluster per line
+            for (const auto& c : cpu_solver.clusters) {
+                for (size_t k = 0; k < c.particle_ids.size(); k++) fprintf(fc, k ? " %d" : "%d", c.particle_ids[k]);
+                fprintf(fc, "\n");
+            }
+            fclose(fc);
+        }
         int rt = 0; for (int v : rrem) rt += v;
         printf("[replay] %d frames replayed (%s) | removed total %d / %d | stats -> %s\n", f,
                gpu_only ? "GPU-only" : "shared viewer pipeline", rt, N, sp.c_str());

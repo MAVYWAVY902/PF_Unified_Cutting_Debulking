@@ -200,40 +200,58 @@ inline bool cpu_bfs_split(
                 // 完全在单一 component 内 → 保持原状（包括原 rest_cm / rest_offsets）
                 new_clusters.push_back(c);
             } else {
-                // 跨 2+ components.
-                // ★ All-or-nothing 分裂: 仅当**所有**子组件 size >= MIN_NEW_CLUSTER_SIZE
-                //   才分裂(避免退化的 2-3 粒子 cluster SVD 数值不稳定 → spikes)。
-                //   否则保留原 cluster, soft damage 权重 (damage_shape_weight) 自然处理
-                //   边界粒子 — 它们仍在 cluster 里, SVD 不退化, 健康粒子 shape-match 正常,
-                //   damaged 粒子贡献被自动衰减。
-                //   旧版 (min=2): 单粒子 sub-component 被静默丢弃 → 粒子失去 cluster 成员资格
-                //                → 多个 cluster 同时丢失 → 粒子完全失去 shape-match → 飞出。
+                // 跨 2+ components → split per component.
+                //   sub-part >= MIN_NEW_CLUSTER_SIZE: becomes its own cluster, re-rested at the
+                //     current positions (碎片"接受"它分离时刻的形状为新平衡态).
+                //   sub-part <  MIN_NEW_CLUSTER_SIZE: dropped from THIS cluster only (a 2-3 particle
+                //     cluster has a degenerate SVD). Its particles keep their other memberships;
+                //     particles left with none are handled after the loop.
+                // (Was all-or-nothing: any small sub-part kept the WHOLE cluster across the cut. Cut
+                //  surfaces leave many 1-3 particle shards, so nearly every straddling cluster was
+                //  kept and the two sides stayed shape-matched together — e.g. a fully sliced cube
+                //  slab stayed coupled to the body through 2406 clusters.)
                 const int MIN_NEW_CLUSTER_SIZE = 4;
-                bool all_big_enough = true;
+                clusters_changed = true;
+                split_count++;
                 for (auto& [cid, ids] : by_component) {
-                    if ((int)ids.size() < MIN_NEW_CLUSTER_SIZE) {
-                        all_big_enough = false;
-                        break;
-                    }
-                }
-                if (all_big_enough) {
-                    clusters_changed = true;
-                    split_count++;
-                    for (auto& [cid, ids] : by_component) {
-                        Cluster nc;
-                        nc.particle_ids = ids;
-                        std::sort(nc.particle_ids.begin(), nc.particle_ids.end());
-                        // 用当前位置作 rest —— 碎片"接受"它分离时刻的形状为新平衡态。
-                        nc.init(cpu_solver.particles);
-                        new_clusters.push_back(std::move(nc));
-                    }
-                } else {
-                    // 子组件太小 → 不分裂, 保留原 cluster intact.
-                    // 跨切口粒子由 weighted cluster_solve (Müller 2005 with damage as mass)
-                    // 自然处理: damaged 侧贡献 ~5% 权重, intact 侧主导 cluster shape。
-                    new_clusters.push_back(c);
+                    if ((int)ids.size() < MIN_NEW_CLUSTER_SIZE) continue;
+                    Cluster nc;
+                    nc.particle_ids = ids;
+                    std::sort(nc.particle_ids.begin(), nc.particle_ids.end());
+                    nc.init(cpu_solver.particles);
+                    new_clusters.push_back(std::move(nc));
                 }
             }
+        }
+
+        // Particles that lost every membership but belong to a component of >= 2 particles get one
+        // cluster: the members of their former clusters that are in the same component (if that
+        // reaches MIN_NEW_CLUSTER_SIZE). Shards smaller than that stay free (no shape matching).
+        if (clusters_changed) {
+            const int MIN_NEW_CLUSTER_SIZE = 4;
+            std::vector<char> member(N, 0);
+            for (const auto& c : new_clusters) for (int pid : c.particle_ids) member[pid] = 1;
+            std::vector<std::vector<int>> old_of(N);
+            for (int ci = 0; ci < (int)cpu_solver.clusters.size(); ci++)
+                for (int pid : cpu_solver.clusters[ci].particle_ids) old_of[pid].push_back(ci);
+            int rescued = 0;
+            for (int pid = 0; pid < N; pid++) {
+                if (cpu_removed[pid] || member[pid] || old_of[pid].empty()) continue;
+                std::vector<int> ids;
+                for (int ci : old_of[pid])
+                    for (int q : cpu_solver.clusters[ci].particle_ids)
+                        if (!cpu_removed[q] && component_id[q] == component_id[pid]) ids.push_back(q);
+                std::sort(ids.begin(), ids.end());
+                ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+                if ((int)ids.size() < MIN_NEW_CLUSTER_SIZE) continue;
+                Cluster nc;
+                nc.particle_ids = ids;
+                nc.init(cpu_solver.particles);
+                for (int q : ids) member[q] = 1;
+                new_clusters.push_back(std::move(nc));
+                rescued++;
+            }
+            if (rescued > 0) printf("[CLUSTER-SPLIT] %d clusters rebuilt for particles that lost every membership\n", rescued);
         }
 
         if (clusters_changed) {

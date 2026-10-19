@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
     CuttingManager cutting_mgr;
     cutting_mgr.alpha_min = cfg.alpha_min;
     cutting_mgr.tau_low = 0.05f;
-    cutting_mgr.init(cpu_solver.clusters, cpu_solver.particles);
+    cutting_mgr.init(cpu_solver.clusters, cpu_solver.particles, &tet_mesh.vertex_neighbors);
     std::vector<int> edge_a, edge_b;
     std::vector<float> edge_pf_rest;
     for (auto& e : cutting_mgr.edges) {

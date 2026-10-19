@@ -56,12 +56,12 @@ __host__ __device__ inline ToolDesc make_sphere_tool(float3 c, float r, float re
 }
 
 // ---------------- grid helpers (same arithmetic as the legacy tool_sdf_* kernels) ----------------
-__device__ inline float3 tq_rot_T(const float* R, float3 v) {   // R^T v  (== apply_rot_transpose)
+__device__ inline float3 tq_rot_T(const float* R, float3 v) {   // R^T v
     return make_float3(R[0]*v.x + R[3]*v.y + R[6]*v.z,
                        R[1]*v.x + R[4]*v.y + R[7]*v.z,
                        R[2]*v.x + R[5]*v.y + R[8]*v.z);
 }
-__device__ inline float3 tq_rot(const float* R, float3 v) {     // R v    (== apply_rot)
+__device__ inline float3 tq_rot(const float* R, float3 v) {     // R v
     return make_float3(R[0]*v.x + R[1]*v.y + R[2]*v.z,
                        R[3]*v.x + R[4]*v.y + R[5]*v.z,
                        R[6]*v.x + R[7]*v.y + R[8]*v.z);

@@ -5,8 +5,8 @@
 // cut_only configs). Body MOVED from main_gpu_viewer.cpp without logic changes.
 // Also shared: rigid obstacle (bone) SDF and tool-mesh SDF baking — before this, tool_bench
 // never loaded the rigid obstacle (only its friction), so tumour configs differed from the viewer.
-// Not covered here (still program-specific): heterogeneous per-edge/per-particle fields
-// (allocated after init_edges, viewer only), input/pose.
+// Also shared since 3a′: heterogeneous material fields (setup_material_fields). Not covered here
+// (still program-specific): input/pose.
 
 #include "core/sim_config.h"
 #include "solver/shape_matching_gpu.h"
@@ -14,6 +14,10 @@
 #include <iostream>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
+#include <cmath>
+#include <string>
+#include <vector>
 
 inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s) {
     s.config.dt = cfg.dt;
@@ -147,4 +151,93 @@ inline bool parse_debulk_flag(const char* v, bool& out) {
     if (!std::strcmp(v, "off")) { out = false; return true; }
     std::fprintf(stderr, "--debulk must be on|off (got '%s')\n", v);
     return false;
+}
+
+// Heterogeneous material fields (yaml per_edge_alpha / per_particle_tau / per_particle_stiffness),
+// built from the REST positions and uploaded. Call after solver.init() and init_edges(). Shared by
+// the viewer and tool_bench (3a′): before this only main_record_trajectory.cpp uploaded the τ and
+// stiffness fields, so the interactive app silently simulated a uniform material for those configs.
+// Field formulas are the ones of main_record_trajectory.cpp / the viewer (unchanged):
+//   per-edge α:     linear in the edge midpoint along alpha_gradient_axis, alpha_min_low → high
+//   per-particle τ: linear along tau_gradient_axis, tau_low → tau_high
+//   stiffness:      "inclusion" (stiff_high inside a centred sphere of radius
+//                   stiff_inclusion_radius_frac × bbox half-extent, else stiff_low) or linear gradient
+inline void setup_material_fields(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s,
+                                  const std::vector<float3>& positions,
+                                  const std::vector<int>& edge_a, const std::vector<int>& edge_b) {
+    const int N = (int)positions.size();
+    auto axis_of = [](const std::string& a) { return a == "y" ? 1 : (a == "z" ? 2 : 0); };
+    auto comp = [](const float3& p, int axis) { return axis == 0 ? p.x : (axis == 1 ? p.y : p.z); };
+    auto axis_range = [&](int axis, float& lo, float& range) {
+        lo = 1e30f; float hi = -1e30f;
+        for (const auto& p : positions) { float v = comp(p, axis); lo = std::min(lo, v); hi = std::max(hi, v); }
+        range = hi - lo;
+        if (range < 1e-6f) range = 1.0f;
+    };
+
+    s.per_edge_alpha = cfg.per_edge_alpha;
+    if (cfg.per_edge_alpha && !edge_a.empty()) {
+        int axis = axis_of(cfg.alpha_gradient_axis); float lo, range; axis_range(axis, lo, range);
+        std::vector<float> alpha_per_edge(edge_a.size());
+        for (size_t e = 0; e < edge_a.size(); e++) {
+            float mid;
+            int a = edge_a[e], b = edge_b[e];
+            if (axis == 0)      mid = 0.5f * (positions[a].x + positions[b].x);
+            else if (axis == 1) mid = 0.5f * (positions[a].y + positions[b].y);
+            else                mid = 0.5f * (positions[a].z + positions[b].z);
+            float t = (mid - lo) / range;
+            alpha_per_edge[e] = cfg.alpha_min_low + t * (cfg.alpha_min_high - cfg.alpha_min_low);
+        }
+        s.upload_per_edge_alpha(alpha_per_edge);
+        printf("[CUT] per_edge_alpha ENABLED: axis=%s, α range [%.3f, %.3f]\n",
+               cfg.alpha_gradient_axis.c_str(), cfg.alpha_min_low, cfg.alpha_min_high);
+    } else {
+        printf("[CUT] per_edge_alpha DISABLED: global alpha_min=%.3f\n", cfg.alpha_min);
+    }
+
+    s.per_particle_tau = cfg.per_particle_tau;
+    if (cfg.per_particle_tau) {
+        int axis = axis_of(cfg.tau_gradient_axis); float lo, range; axis_range(axis, lo, range);
+        std::vector<float> tau(N);
+        for (int i = 0; i < N; i++) {
+            float t = (comp(positions[i], axis) - lo) / range;
+            tau[i] = cfg.tau_low + t * (cfg.tau_high - cfg.tau_low);
+        }
+        s.upload_per_particle_tau(tau);
+        printf("[CUT] per_particle_tau ENABLED: axis=%s, τ range [%.3f, %.3f]\n",
+               cfg.tau_gradient_axis.c_str(), cfg.tau_low, cfg.tau_high);
+    }
+
+    s.per_particle_stiffness = cfg.per_particle_stiffness;
+    if (cfg.per_particle_stiffness) {
+        float bmin[3] = {1e30f, 1e30f, 1e30f}, bmax[3] = {-1e30f, -1e30f, -1e30f};
+        for (const auto& p : positions)
+            for (int k = 0; k < 3; k++) { bmin[k] = std::min(bmin[k], comp(p, k)); bmax[k] = std::max(bmax[k], comp(p, k)); }
+        std::vector<float> stiff(N);
+        if (cfg.stiff_pattern == "inclusion") {
+            float c[3] = {0.5f*(bmin[0]+bmax[0]), 0.5f*(bmin[1]+bmax[1]), 0.5f*(bmin[2]+bmax[2])};
+            float half_extent = 0.5f * std::max({bmax[0]-bmin[0], bmax[1]-bmin[1], bmax[2]-bmin[2]});
+            float incl_r = cfg.stiff_inclusion_radius_frac * half_extent;
+            int n_inside = 0;
+            for (int i = 0; i < N; i++) {
+                float dx = positions[i].x - c[0], dy = positions[i].y - c[1], dz = positions[i].z - c[2];
+                bool in = std::sqrt(dx*dx + dy*dy + dz*dz) < incl_r;
+                stiff[i] = in ? cfg.stiff_high : cfg.stiff_low;
+                n_inside += in;
+            }
+            printf("[CUT] per_particle_stiffness ENABLED (inclusion): r_frac=%.2f, inside=%d/%d, range [%.3f, %.3f]\n",
+                   cfg.stiff_inclusion_radius_frac, n_inside, N, cfg.stiff_low, cfg.stiff_high);
+        } else {
+            int axis = axis_of(cfg.stiff_gradient_axis);
+            float lo = bmin[axis], range = bmax[axis] - bmin[axis];
+            if (range < 1e-6f) range = 1.0f;
+            for (int i = 0; i < N; i++) {
+                float t = (comp(positions[i], axis) - lo) / range;
+                stiff[i] = cfg.stiff_low + t * (cfg.stiff_high - cfg.stiff_low);
+            }
+            printf("[CUT] per_particle_stiffness ENABLED (gradient): axis=%s, range [%.3f, %.3f]\n",
+                   cfg.stiff_gradient_axis.c_str(), cfg.stiff_low, cfg.stiff_high);
+        }
+        s.upload_per_particle_stiffness(stiff);
+    }
 }

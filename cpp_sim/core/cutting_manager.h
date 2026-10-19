@@ -8,6 +8,8 @@
 #include <unordered_set>
 #include <queue>
 #include <cmath>
+#include <algorithm>
+#include <set>
 #include <iostream>
 
 // 簇内的一条边（两个粒子之间的连接）
@@ -33,7 +35,13 @@ public:
     int total_removed = 0;        // 累计移除的粒子数
 
     // 初始化：提取簇内的**近邻边**（不是所有粒子对，只取距离小于阈值的）
-    void init(const std::vector<Cluster>& clusters, const Particles& particles) {
+    // tet_neighbors (optional, TetMesh::vertex_neighbors, sorted): every TET edge is a cutting
+    //   edge regardless of its length. The connectivity BFS (cpu_bfs_split) walks tet edges, so a
+    //   tet edge missing from this list could never break and would bridge every cut through it
+    //   (tumor_uniform: 3.5% of tet edges were longer than the threshold below). Pairs that are
+    //   not tet edges still use the length threshold (unchanged).
+    void init(const std::vector<Cluster>& clusters, const Particles& particles,
+              const std::vector<std::vector<int>>* tet_neighbors = nullptr) {
         edges.clear();
         m_particle_edges.clear();
 
@@ -77,10 +85,12 @@ public:
             for (int i = 0; i < n; i++) {
                 for (int j = i + 1; j < n; j++) {
                     double dist = (particles[ids[i]].pos - particles[ids[j]].pos).norm();
-                    if (dist > max_edge_len) continue;  // 跳过太长的边
-
                     int a = std::min(ids[i], ids[j]);
                     int b = std::max(ids[i], ids[j]);
+                    bool is_tet_edge = tet_neighbors &&
+                        std::binary_search((*tet_neighbors)[a].begin(), (*tet_neighbors)[a].end(), b);
+                    if (dist > max_edge_len && !is_tet_edge) continue;  // 跳过太长的边（四面体边除外）
+
                     if (!edge_set.insert({a, b}).second) continue;  // 去重
 
                     int ei = (int)edges.size();
