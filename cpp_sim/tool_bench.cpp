@@ -34,6 +34,7 @@
 #include "core/particles.h"
 #include "core/cluster.h"
 #include "core/tet_mesh.h"
+#include <set>
 #include "core/cutting_manager.h"
 #include "core/pf_calculator.h"
 #include "core/rigid_mesh.h"
@@ -72,13 +73,14 @@ int main(int argc, char** argv) {
     std::string tool = "sphere";
     int n_frames = 80, grid_res = 64, n_settle = 60, n_approach = 30;
     bool timing = false, replay_allow_mismatch = false, gpu_only = false;
-    std::string replay_path, stats_path, write_traj_path;
+    std::string replay_path, stats_path, write_traj_path, pass_path;
     float depth = 0.0f;
     // --tool mesh orientation: "flat" = identity (old behaviour; the dissector lies flat, its
     // 71 mm length covers the whole tumour); "tipdown" = long axis vertical, blade width along
     // the sweep (x), thickness along z → the tip enters the tissue edge-first.
     std::string mesh_pose = "flat";
     int debulk_override = -1;   // --debulk on|off; -1 = use config
+    bool rigid_off = false;     // --rigid off: drop the rigid obstacle (bone)
     for (int i = 3; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--tool" && i + 1 < argc) tool = argv[++i];
@@ -92,8 +94,14 @@ int main(int argc, char** argv) {
         else if (a == "--gpu-only") gpu_only = true;
         else if (a == "--write-traj" && i + 1 < argc) write_traj_path = argv[++i];   // scripted pose → recording file   // replay without orphan cleanup / BFS (old behaviour)
         else if (a == "--stats" && i + 1 < argc) stats_path = argv[++i];
+        else if (a == "--pass-through" && i + 1 < argc) pass_path = argv[++i];   // replay + mesh tool: per-frame tool/edge crossing diagnostic
         else if (a == "--depth" && i + 1 < argc) depth = (float)std::atof(argv[++i]);
         else if (a == "--mesh-pose" && i + 1 < argc) mesh_pose = argv[++i];
+        else if (a == "--rigid" && i + 1 < argc) {
+            std::string v = argv[++i];
+            if (v != "off" && v != "on") { fprintf(stderr, "--rigid must be on|off\n"); return 1; }
+            rigid_off = (v == "off");
+        }
         else if (a == "--debulk" && i + 1 < argc) {
             bool on; if (!parse_debulk_flag(argv[++i], on)) return 1;
             debulk_override = on ? 1 : 0;
@@ -108,6 +116,10 @@ int main(int argc, char** argv) {
     SimConfigYAML cfg;
     if (!cfg.load(config_path)) return 1;
     if (debulk_override >= 0) cfg.set_debulking(debulk_override == 1);
+    if (rigid_off && !cfg.rigid_mesh_path.empty()) {
+        printf("[rigid] obstacle %s NOT loaded (--rigid off)\n", cfg.rigid_mesh_path.c_str());
+        cfg.rigid_mesh_path.clear();
+    }
     std::filesystem::create_directories(out_dir);
     if (cfg.per_particle_tau || cfg.per_particle_stiffness || cfg.per_edge_alpha)
         printf("[WARN] heterogeneous fields in config are IGNORED by tool_bench (uniform material)\n");
@@ -205,12 +217,16 @@ int main(int argc, char** argv) {
     printf("[tool_bench] debulking=%s (enable_aspiration=%d, damage_shape_weight=%.1f, sharp_edge=%d)\n",
            cfg.debulking ? "on" : "off", g.config.enable_aspiration, g.config.damage_shape_weight,
            g.config.use_sharp_edge_damage);
+    printf("[tool_bench] tool switches: tool_scale=%.3f sdf_normal=%s sdf_pf_edge_radius=%d aspiration_reach=%.6g\n",
+           cfg.tool_scale, g.config.sdf_normal_mode ? "trilinear" : "legacy", g.config.sdf_pf_edge_radius,
+           g.config.aspiration_reach);
     g.init(positions, velocities, removed, fixed_arr, cs, csz, pids, roff, rcm);
     g.init_edges(ea, eb, epf);
     RigidMesh rigid_mesh;                             // Step 1: rigid obstacle (bone) like the viewer
     setup_rigid_object(cfg, g, y_offset, rigid_mesh);
 
     const float R = cfg.knife_radius;
+    RigidMesh tool_rm;   // --tool mesh: the tool mesh in its local frame (centred, scaled), kept for touch_at
     std::vector<float> tool_sdf_host; int tool_res[3] = {0, 0, 0}; float tool_org[3] = {0, 0, 0}, tool_cell[3] = {0, 0, 0};
     if (tool == "gridsphere") {
         // exact sphere SDF on a cubic grid, same 20% padding convention as compute_sdf
@@ -226,12 +242,32 @@ int main(int argc, char** argv) {
         printf("[tool] gridsphere R=%.4f res=%d cell=%.5f (cell/R=%.3f)\n", R, grid_res, cell, cell / R);
     } else if (tool == "mesh") {
         if (cfg.tool_mesh_path.empty()) { fprintf(stderr, "--tool mesh needs knife.tool_mesh in yaml\n"); return 1; }
-        RigidMesh tm;
+        RigidMesh& tm = tool_rm;
         setup_tool_mesh(cfg, g, tm);                  // Step 1: same baking as the viewer
         if (g.config.tool_type != 1) { fprintf(stderr, "tool mesh failed to load\n"); return 1; }
         tool_sdf_host = tm.sdf_data;
         for (int k = 0; k < 3; k++) { tool_res[k] = tm.sdf_res[k]; tool_org[k] = (float)tm.sdf_origin[k]; tool_cell[k] = (float)tm.sdf_cell_size[k]; }
     }
+
+    // tool_phi(p): host trilinear phi of the baked tool SDF at world point p (same voxel-centre
+    // convention as the kernels: local = R^T (p - knife_pos)).
+    const float* KR = g.config.knife_rot;
+    auto tool_phi = [&](float px, float py, float pz, const float3& kp) -> float {
+        float wx = px - kp.x, wy = py - kp.y, wz = pz - kp.z;
+        float l[3] = {KR[0]*wx + KR[3]*wy + KR[6]*wz, KR[1]*wx + KR[4]*wy + KR[7]*wz, KR[2]*wx + KR[5]*wy + KR[8]*wz};
+        float gc[3]; int i0[3]; float fr[3];
+        for (int k = 0; k < 3; k++) {
+            gc[k] = (l[k] - tool_org[k]) / tool_cell[k] - 0.5f;
+            if (gc[k] < 0.0f || gc[k] >= tool_res[k] - 1) return 1e30f;   // outside the baked box
+            i0[k] = (int)floorf(gc[k]); fr[k] = gc[k] - i0[k];
+        }
+        auto at = [&](int x, int y, int z) { return tool_sdf_host[((size_t)z * tool_res[1] + y) * tool_res[0] + x]; };
+        float c00 = at(i0[0],i0[1],i0[2])*(1-fr[0]) + at(i0[0]+1,i0[1],i0[2])*fr[0];
+        float c10 = at(i0[0],i0[1]+1,i0[2])*(1-fr[0]) + at(i0[0]+1,i0[1]+1,i0[2])*fr[0];
+        float c01 = at(i0[0],i0[1],i0[2]+1)*(1-fr[0]) + at(i0[0]+1,i0[1],i0[2]+1)*fr[0];
+        float c11 = at(i0[0],i0[1]+1,i0[2]+1)*(1-fr[0]) + at(i0[0]+1,i0[1]+1,i0[2]+1)*fr[0];
+        return (c00*(1-fr[1]) + c10*fr[1])*(1-fr[2]) + (c01*(1-fr[1]) + c11*fr[1])*fr[2];
+    };
 
     // ---------------- Step 0.5c: replay a viewer recording (GPU-only pipeline) ----------------
     // Same tool poses, same per-frame stats format as the viewer (FrameStatsLogger), but WITHOUT
@@ -265,11 +301,100 @@ int main(int argc, char** argv) {
         std::vector<int> tet_broken(tet_mesh.num_tets(), 0);
         simrec_frame::FramePipeline pipe{g, cpu_solver, tet_mesh, ea, eb, epf,
                                          rpos, rrem, rdmg, tet_broken, true, cfg.cutting_mode, N};
-        int f = 0;
+        // --pass-through: after each active frame (end-of-frame positions, the tool pose of that
+        // frame) classify every edge whose two particles are alive by sampling phi along it every
+        // half of the smallest SDF cell:
+        //   in_unbroken    an endpoint is inside the tool (phi < -pass_tol), edge not broken
+        //   pass_unbroken  both endpoints outside, some interior sample inside, edge NOT broken
+        //                  → the tool body lies between the two particles and the edge survives
+        //   pass_broken    same geometry, edge broken
+        // plus the number of alive particles inside the tool and the deepest interior penetration
+        // (min phi) of pass_unbroken edges. Only meaningful for --tool mesh.
+        FILE* pass_f = nullptr;
+        std::vector<int> pbroken;
+        if (!pass_path.empty()) {
+            if (tool != "mesh") { fprintf(stderr, "--pass-through needs --tool mesh\n"); return 1; }
+            pass_f = fopen(pass_path.c_str(), "w");
+            if (!pass_f) { fprintf(stderr, "cannot open %s\n", pass_path.c_str()); return 1; }
+            fprintf(pass_f, "frame,particles_inside,in_unbroken,pass_unbroken,pass_broken,pass_unbroken_min_phi_mm\n");
+        }
+        float pass_h = 0.5f * std::min(tool_cell[0], std::min(tool_cell[1], tool_cell[2]));
+        // "inside" means phi < -pass_tol: the collision projects particles ONTO the surface, so a
+        // strict phi < 0 would count surface particles that are inside only by float rounding.
+        float pass_tol = 0.2f * pass_h;
+        float tool_rad = 0.0f;   // bounding radius of the baked box about the tool origin
+        for (int k = 0; k < 3; k++) {
+            float m = std::max(std::fabs(tool_org[k]), std::fabs(tool_org[k] + tool_res[k] * tool_cell[k]));
+            tool_rad += m * m;
+        }
+        tool_rad = std::sqrt(tool_rad);
+        // every 10th active frame also dump each crossing edge (pass_path + ".edges.csv"):
+        // blade-local position of its deepest sample, broken flag, damage, current length, and the
+        // distance from its midpoint to the sharp-edge segment (what sharp_edge_damage_kernel sees)
+        FILE* pass_e = nullptr; std::vector<float> pdmg;
+        if (pass_f) {
+            pass_e = fopen((pass_path + ".edges.csv").c_str(), "w");
+            fprintf(pass_e, "frame,edge,kind,lx,ly,lz,broken,damage,len_mm,mid_to_sharp_mm\n");
+        }
+        auto to_local = [&](float px, float py, float pz, const float3& kp, float l[3]) {
+            float wx = px - kp.x, wy = py - kp.y, wz = pz - kp.z;
+            l[0] = KR[0]*wx + KR[3]*wy + KR[6]*wz; l[1] = KR[1]*wx + KR[4]*wy + KR[7]*wz; l[2] = KR[2]*wx + KR[5]*wy + KR[8]*wz;
+        };
+        auto mid_to_sharp = [&](const float m[3]) {
+            float3 A = g.config.sharp_edge_a, B = g.config.sharp_edge_b;
+            float ab[3] = {B.x-A.x, B.y-A.y, B.z-A.z}, am[3] = {m[0]-A.x, m[1]-A.y, m[2]-A.z};
+            float t = (am[0]*ab[0]+am[1]*ab[1]+am[2]*ab[2]) / (ab[0]*ab[0]+ab[1]*ab[1]+ab[2]*ab[2]);
+            t = std::min(1.0f, std::max(0.0f, t));
+            float d[3] = {am[0]-t*ab[0], am[1]-t*ab[1], am[2]-t*ab[2]};
+            return std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]);
+        };
+        int pass_count = 0;
+        auto pass_through_frame = [&](int frame, const float3& kp) {
+            g.download_edge_broken(pbroken);
+            bool dump = pass_e && (pass_count++ % 10 == 0);
+            if (dump) g.download_edge_damage(pdmg);
+            int pin = 0, in_u = 0, pass_u = 0, pass_b = 0; float minphi = 0.0f;
+            for (int i = 0; i < N; i++)
+                if (!rrem[i] && tool_phi(rpos[i].x, rpos[i].y, rpos[i].z, kp) < -pass_tol) pin++;
+            for (int e = 0; e < E; e++) {
+                int a = ea[e], b = eb[e];
+                if (rrem[a] || rrem[b]) continue;
+                float3 pa = rpos[a], pb = rpos[b];
+                float mx = 0.5f*(pa.x+pb.x) - kp.x, my = 0.5f*(pa.y+pb.y) - kp.y, mz = 0.5f*(pa.z+pb.z) - kp.z;
+                float dx = pb.x-pa.x, dy = pb.y-pa.y, dz = pb.z-pa.z, len = std::sqrt(dx*dx+dy*dy+dz*dz);
+                if (std::sqrt(mx*mx+my*my+mz*mz) > tool_rad + 0.5f*len) continue;
+                float fa = tool_phi(pa.x, pa.y, pa.z, kp), fb = tool_phi(pb.x, pb.y, pb.z, kp);
+                if (fa < -pass_tol || fb < -pass_tol) { if (!pbroken[e]) in_u++; continue; }
+                int ns = std::max(2, (int)std::ceil(len / pass_h));
+                float mn = 1e30f, tmn = 0.5f;
+                for (int k = 1; k < ns; k++) {
+                    float t = (float)k / ns;
+                    float v = tool_phi(pa.x+t*dx, pa.y+t*dy, pa.z+t*dz, kp);
+                    if (v < mn) { mn = v; tmn = t; }
+                }
+                if (dump && mn < -pass_tol) {
+                    float l[3], m[3];
+                    to_local(pa.x+tmn*dx, pa.y+tmn*dy, pa.z+tmn*dz, kp, l);
+                    to_local(0.5f*(pa.x+pb.x), 0.5f*(pa.y+pb.y), 0.5f*(pa.z+pb.z), kp, m);
+                    fprintf(pass_e, "%d,%d,pass,%.4f,%.4f,%.4f,%d,%.3f,%.4f,%.4f\n", frame, e, l[0]*1e3f, l[1]*1e3f, l[2]*1e3f,
+                            pbroken[e], pdmg[e], len*1e3f, mid_to_sharp(m)*1e3f);
+                }
+                if (mn < -pass_tol) {
+                    if (pbroken[e]) pass_b++;
+                    else { pass_u++; minphi = std::min(minphi, mn); }
+                }
+            }
+            fprintf(pass_f, "%d,%d,%d,%d,%d,%.4f\n", frame, pin, in_u, pass_u, pass_b, minphi * 1e3f);
+        };
+        int f = 0; bool prev_active = false;
         for (const auto& fr : rp.frames()) {
             g.config.knife_pos = fr.kp;
             memcpy(g.config.knife_rot, fr.rot, sizeof(fr.rot));
             g.config.knife_active = fr.active;
+            // --pass-through: the state the tool meets when it switches on (previous frame's
+            // positions, this frame's pose), logged as frame -f
+            if (pass_f && fr.active && !prev_active && f > 0) pass_through_frame(-f, fr.kp);
+            prev_active = fr.active != 0;
             double ms;
             simrec::FrameSources src;   // GPU-only: orphan/BFS columns stay -1 (stage absent)
             if (gpu_only) {
@@ -291,8 +416,11 @@ int main(int argc, char** argv) {
             }
             stats.write(f, ms, fr.kp, g.config.knife_radius, fr.active, g.config.tool_type, rpos, rrem, fixed_arr,
                         0.0, src);
+            if (pass_f && fr.active) pass_through_frame(f, fr.kp);
             f++;
         }
+        if (pass_f) fclose(pass_f);
+        if (pass_e) fclose(pass_e);
         int rt = 0; for (int v : rrem) rt += v;
         printf("[replay] %d frames replayed (%s) | removed total %d / %d | stats -> %s\n", f,
                gpu_only ? "GPU-only" : "shared viewer pipeline", rt, N, sp.c_str());
@@ -311,25 +439,6 @@ int main(int argc, char** argv) {
     // Ls = length scale of the scripted motion: sphere → R (unchanged); mesh → half the tool's
     // smallest extent (dissector: half the blade thickness). knife_radius is NOT the tool size for
     // tool_type 1 (the GPU mesh-tool kernels never read it).
-    // tool_phi(p): host trilinear phi of the baked tool SDF at world point p (same voxel-centre
-    // convention as the kernels: local = R^T (p - knife_pos)).
-    const float* KR = g.config.knife_rot;
-    auto tool_phi = [&](float px, float py, float pz, const float3& kp) -> float {
-        float wx = px - kp.x, wy = py - kp.y, wz = pz - kp.z;
-        float l[3] = {KR[0]*wx + KR[3]*wy + KR[6]*wz, KR[1]*wx + KR[4]*wy + KR[7]*wz, KR[2]*wx + KR[5]*wy + KR[8]*wz};
-        float gc[3]; int i0[3]; float fr[3];
-        for (int k = 0; k < 3; k++) {
-            gc[k] = (l[k] - tool_org[k]) / tool_cell[k] - 0.5f;
-            if (gc[k] < 0.0f || gc[k] >= tool_res[k] - 1) return 1e30f;   // outside the baked box
-            i0[k] = (int)floorf(gc[k]); fr[k] = gc[k] - i0[k];
-        }
-        auto at = [&](int x, int y, int z) { return tool_sdf_host[((size_t)z * tool_res[1] + y) * tool_res[0] + x]; };
-        float c00 = at(i0[0],i0[1],i0[2])*(1-fr[0]) + at(i0[0]+1,i0[1],i0[2])*fr[0];
-        float c10 = at(i0[0],i0[1]+1,i0[2])*(1-fr[0]) + at(i0[0]+1,i0[1]+1,i0[2])*fr[0];
-        float c01 = at(i0[0],i0[1],i0[2]+1)*(1-fr[0]) + at(i0[0]+1,i0[1],i0[2]+1)*fr[0];
-        float c11 = at(i0[0],i0[1]+1,i0[2]+1)*(1-fr[0]) + at(i0[0]+1,i0[1]+1,i0[2]+1)*fr[0];
-        return (c00*(1-fr[1]) + c10*fr[1])*(1-fr[2]) + (c01*(1-fr[1]) + c11*fr[1])*fr[2];
-    };
     float Ls = R;
     // lower envelope of the (rotated) mesh tool: low_y[(ix,iz)] = lowest world-y offset (relative
     // to the tool centre) where phi <= 0 in the vertical column at horizontal offset (dx,dz).
@@ -389,19 +498,91 @@ int main(int argc, char** argv) {
     // with horizontal distance rho_i < R. Uses the whole footprint, so curved tops (tumor) are
     // handled; on a flat top it equals top + R, i.e. centre = touch - R is "half-embedded".
     (void)col;
+    // touch_mesh(x): tool-CENTRE height at which the tool mesh, lowered vertically at (x, zmid),
+    // first touches the settled tissue SURFACE (tet_mesh.surface_faces on settled_pos), computed
+    // exactly. Two polyhedral surfaces brought together along -y first meet at a vertex-face or an
+    // edge-edge pair, so the answer is the max over: tool vertex above a tissue face, tissue vertex
+    // below a tool face, and tool edge / tissue edge crossing in the xz projection.
+    // (The previous version tested only tissue PARTICLES inside the tool's xz footprint: a blade
+    //  thinner than the particle spacing slid between surface particles and the "touching" pose
+    //  was 2 mm inside the tissue for the scalpel.)
+    std::vector<float3> tool_w;                 // tool vertices as world offsets R*v
+    std::vector<std::array<int, 2>> tool_e;     // unique tool edges
+    float tw_lo[2] = {1e30f, 1e30f}, tw_hi[2] = {-1e30f, -1e30f};   // xz bbox of the offsets
+    if (tool == "mesh") {
+        for (auto& v : tool_rm.vertices) {
+            float3 w = make_float3(KR[0]*v.x() + KR[1]*v.y() + KR[2]*v.z(),
+                                   KR[3]*v.x() + KR[4]*v.y() + KR[5]*v.z(),
+                                   KR[6]*v.x() + KR[7]*v.y() + KR[8]*v.z());
+            tool_w.push_back(w);
+            tw_lo[0] = std::min(tw_lo[0], w.x); tw_hi[0] = std::max(tw_hi[0], w.x);
+            tw_lo[1] = std::min(tw_lo[1], w.z); tw_hi[1] = std::max(tw_hi[1], w.z);
+        }
+        std::set<std::pair<int,int>> es;
+        for (auto& f : tool_rm.faces)
+            for (int k = 0; k < 3; k++) es.insert({std::min(f[k], f[(k+1)%3]), std::max(f[k], f[(k+1)%3])});
+        for (auto& e : es) tool_e.push_back({e.first, e.second});
+    }
+    // y of the vertical line through (qx,qz) on triangle (a,b,c); false if it misses (or the
+    // triangle is vertical: its contacts are covered by the vertex and edge-edge tests)
+    auto vline_tri = [](float qx, float qz, const float3& a, const float3& b, const float3& c, float& y) {
+        float d = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+        if (fabsf(d) < 1e-14f) return false;
+        float u = ((qx - a.x) * (c.z - a.z) - (c.x - a.x) * (qz - a.z)) / d;
+        float v = ((b.x - a.x) * (qz - a.z) - (qx - a.x) * (b.z - a.z)) / d;
+        if (u < 0.0f || v < 0.0f || u + v > 1.0f) return false;
+        y = a.y + u * (b.y - a.y) + v * (c.y - a.y);
+        return true;
+    };
+    // xz-projection crossing of segments p0p1 and q0q1 → parameters s (on p), t (on q)
+    auto seg_xz = [](const float3& p0, const float3& p1, const float3& q0, const float3& q1, float& s, float& t) {
+        float rx = p1.x - p0.x, rz = p1.z - p0.z, ux = q1.x - q0.x, uz = q1.z - q0.z;
+        float den = rx * uz - rz * ux;
+        if (fabsf(den) < 1e-14f) return false;
+        float wx = q0.x - p0.x, wz = q0.z - p0.z;
+        s = (wx * uz - wz * ux) / den; t = (wx * rz - wz * rx) / den;
+        return s >= 0.0f && s <= 1.0f && t >= 0.0f && t <= 1.0f;
+    };
+    auto touch_mesh = [&](float x) {
+        const auto& SF = tet_mesh.surface_faces;
+        float lo[2] = {x + tw_lo[0], zmid + tw_lo[1]}, hi[2] = {x + tw_hi[0], zmid + tw_hi[1]};
+        std::vector<int> cand;                   // surface faces whose xz bbox overlaps the tool's
+        for (int fi = 0; fi < (int)SF.size(); fi++) {
+            const float3 &a = settled_pos[SF[fi][0]], &b = settled_pos[SF[fi][1]], &c = settled_pos[SF[fi][2]];
+            if (std::max({a.x, b.x, c.x}) < lo[0] || std::min({a.x, b.x, c.x}) > hi[0] ||
+                std::max({a.z, b.z, c.z}) < lo[1] || std::min({a.z, b.z, c.z}) > hi[1]) continue;
+            cand.push_back(fi);
+        }
+        float h = -1e30f, y;
+        const float3 kc = make_float3(x, 0.0f, zmid);
+        auto tw = [&](int i) { return make_float3(kc.x + tool_w[i].x, tool_w[i].y, kc.z + tool_w[i].z); };
+        // tool vertex above a tissue face
+        for (int i = 0; i < (int)tool_w.size(); i++) {
+            float3 w = tw(i);
+            for (int fi : cand)
+                if (vline_tri(w.x, w.z, settled_pos[SF[fi][0]], settled_pos[SF[fi][1]], settled_pos[SF[fi][2]], y))
+                    h = std::max(h, y - w.y);
+        }
+        // tissue vertex below a tool face
+        for (int fi : cand) for (int k = 0; k < 3; k++) {
+            const float3& p = settled_pos[SF[fi][k]];
+            for (auto& tf : tool_rm.faces)
+                if (vline_tri(p.x, p.z, tw(tf[0]), tw(tf[1]), tw(tf[2]), y)) h = std::max(h, p.y - y);
+        }
+        // tool edge vs tissue edge
+        for (int fi : cand) for (int k = 0; k < 3; k++) {
+            const float3 &q0 = settled_pos[SF[fi][k]], &q1 = settled_pos[SF[fi][(k+1)%3]];
+            for (auto& te : tool_e) {
+                float3 p0 = tw(te[0]), p1 = tw(te[1]); float sp, tq;
+                if (seg_xz(p0, p1, q0, q1, sp, tq))
+                    h = std::max(h, (q0.y + tq * (q1.y - q0.y)) - (p0.y + sp * (p1.y - p0.y)));
+            }
+        }
+        return (h > -1e29f) ? h : bmx[1] - y_lo;
+    };
     auto touch_at = [&](float x) {
         float h = -1e30f;
-        if (tool == "mesh") {
-            // centre height at which the tool's lower envelope first touches a settled particle
-            for (int i = 0; i < N; i++) {
-                const float3& p = settled_pos[i];
-                int ix = (int)floorf((p.x - x - fp_lo[0]) / fp_h), iz = (int)floorf((p.z - zmid - fp_lo[1]) / fp_h);
-                if (ix < 0 || iz < 0 || ix >= fp_n[0] || iz >= fp_n[1]) continue;
-                float ly = low_y[(size_t)ix * fp_n[1] + iz];
-                if (ly < 1e29f) h = std::max(h, p.y - ly);
-            }
-            return (h > -1e29f) ? h : bmx[1] - y_lo;
-        }
+        if (tool == "mesh") return touch_mesh(x);
         for (int i = 0; i < N; i++) {
             const float3& p = settled_pos[i];
             float dx = p.x - x, dz = p.z - zmid, rho2 = dx*dx + dz*dz;
@@ -409,7 +590,7 @@ int main(int argc, char** argv) {
         }
         return (h > -1e29f) ? h : bmx[1] + R;
     };
-    // Phases: [0,S) settle (knife inactive, far) | [S,S+A) approach: knife active, starts 1.2R
+    // Phases: [0,S) settle (knife inactive, far) | [S,S+A) approach: knife active, starts 0.2R
     // ABOVE the settled surface at x0 and descends linearly to (surface - depth) | [S+A, S+A+W)
     // sweep along x at fixed (surface(x) - depth).
     const int S = n_settle, A = n_approach, W = n_frames, F_total = S + A + W;
@@ -478,7 +659,11 @@ int main(int argc, char** argv) {
         float kx, ky;
         if (phase < 0)      { kx = 100.0f; ky = 100.0f; }
         // approach: centre from touch+0.2R (clear of the body) down to touch-R-depth (half-embedded + depth)
-        else if (phase == 0) { float t = (float)(f - S + 1) / A; kx = x0; ky = (h0 + 0.2f * Ls) + t * (-1.2f * Ls - depth); }
+        // t runs 0..1 over the A approach frames: the FIRST active frame is at touch+0.2R (clear of
+        // the body, as intended), the last at the target. (Was (f-S+1)/A: the first active frame
+        // was already one step down, which for the scalpel, step 0.083 mm > 0.2R = 0.08 mm, put
+        // the edge inside the tissue at switch-on.)
+        else if (phase == 0) { float t = (float)(f - S) / std::max(A - 1, 1); kx = x0; ky = (h0 + 0.2f * Ls) + t * (-1.2f * Ls - depth); }
         else                 { float t = (float)(f - S - A) / std::max(W - 1, 1); kx = x0 + t * (x1 - x0); ky = touch_at(kx) - Ls - depth; }
         float3 kp = make_float3(kx, ky, zmid);
         g.config.knife_pos = kp;

@@ -99,6 +99,12 @@ struct SimConfigYAML {
     float stiff_inclusion_radius_frac = 0.25f;  // fraction of bbox half-extent
     std::string tool_mesh_path;     // empty = sphere tool, non-empty = mesh SDF tool
     int tool_sdf_resolution = 64;   // SDF grid resolution for tool
+    // Step 2 (all default to legacy behaviour):
+    float tool_scale = 1.0f;        // uniform scale of the tool OBJ about its bbox centre (also
+                                    // scales sharp_edge_a/b, which live in the centred tool frame)
+    std::string sdf_normal = "legacy";   // "legacy" | "trilinear"  (mesh-SDF tool push normal)
+    bool sdf_pf_edge_radius = false;     // mesh-SDF P(F): subtract edge radius (phi - r_e)
+    float aspiration_reach = 0.0f;       // [m] 0 = legacy contains test; >0 = phi <= reach
 
     // Sharp-edge damage (overrides SDF damage when set).
     // Real-physics cutting: only the sharp edge cuts; blade body just pushes.
@@ -251,6 +257,17 @@ struct SimConfigYAML {
             if (k["aspiration_threshold"]) aspiration_threshold = k["aspiration_threshold"].as<float>();
             if (k["tool_mesh"]) tool_mesh_path = k["tool_mesh"].as<std::string>();
             if (k["tool_sdf_resolution"]) tool_sdf_resolution = k["tool_sdf_resolution"].as<int>();
+            if (k["tool_scale"]) tool_scale = k["tool_scale"].as<float>();
+            if (k["sdf_normal"]) {
+                sdf_normal = k["sdf_normal"].as<std::string>();
+                if (sdf_normal != "legacy" && sdf_normal != "trilinear") {
+                    std::cerr << "Config error: knife.sdf_normal='" << sdf_normal
+                              << "' (expected legacy | trilinear)" << std::endl;
+                    return false;
+                }
+            }
+            if (k["sdf_pf_edge_radius"]) sdf_pf_edge_radius = k["sdf_pf_edge_radius"].as<bool>();
+            if (k["aspiration_reach"]) aspiration_reach = k["aspiration_reach"].as<float>();
             if (k["sharp_edge_a"]) {
                 auto a = k["sharp_edge_a"];
                 sharp_edge_a[0] = a[0].as<float>();
@@ -417,6 +434,9 @@ struct SimConfigYAML {
 
     void print() const {
         std::cout << "=== Config: " << name << " ===" << std::endl;
+        std::cout << "  tool: scale=" << tool_scale << " sdf_normal=" << sdf_normal
+                  << " sdf_pf_edge_radius=" << (sdf_pf_edge_radius ? "on" : "off")
+                  << " aspiration_reach=" << aspiration_reach << std::endl;
         std::cout << "  debulking: " << (debulking ? "on" : "off") << "  cutting_mode: " << cutting_mode
                   << (cutting_mode == "cut_only"
                       ? " (NO particle removal — true topological cut)"

@@ -34,22 +34,29 @@ int main(int argc, char** argv) {
     //   --replay <file>  drive the tool from a recording instead of mouse/keyboard/Haply (0.5b)
     //   --replay-allow-mismatch  replay even if config/mesh/tool differ from the recording
     //   --debulk on|off  override the config's debulking switch (Step 1; default from yaml, else off)
+    //   --rigid off      drop the config's rigid obstacle (bone) for A/B runs (Step 2)
     std::string record_path, stats_path, replay_path;
     bool replay_allow_mismatch = false;
     int debulk_override = -1;   // -1 = use config
+    bool rigid_off = false;
     for (int ai = 2; ai < argc; ai++) {
         std::string a = argv[ai];
         if (a == "--record" && ai + 1 < argc) record_path = argv[++ai];
         else if (a == "--stats" && ai + 1 < argc) stats_path = argv[++ai];
         else if (a == "--replay" && ai + 1 < argc) replay_path = argv[++ai];
         else if (a == "--replay-allow-mismatch") replay_allow_mismatch = true;
+        else if (a == "--rigid" && ai + 1 < argc) {
+            std::string v = argv[++ai];
+            if (v != "off" && v != "on") { std::cerr << "--rigid must be on|off" << std::endl; return 1; }
+            rigid_off = (v == "off");
+        }
         else if (a == "--debulk" && ai + 1 < argc) {
             bool on; if (!parse_debulk_flag(argv[++ai], on)) return 1;
             debulk_override = on ? 1 : 0;
         }
         else {
             std::cerr << "unknown argument: " << a << "  (supported: --record <file> --stats <file> "
-                         "--replay <file> --replay-allow-mismatch --debulk on|off)" << std::endl;
+                         "--replay <file> --replay-allow-mismatch --debulk on|off --rigid on|off)" << std::endl;
             return 1;
         }
     }
@@ -63,6 +70,10 @@ int main(int argc, char** argv) {
         std::cout << "加载配置: " << input << std::endl;
     }
 
+    if (rigid_off && !cfg.rigid_mesh_path.empty()) {
+        std::cout << "[rigid] command-line override: obstacle " << cfg.rigid_mesh_path << " NOT loaded" << std::endl;
+        cfg.rigid_mesh_path.clear();
+    }
     if (debulk_override >= 0) {
         cfg.set_debulking(debulk_override == 1);
         std::cout << "[debulk] command-line override: " << (cfg.debulking ? "on" : "off") << std::endl;

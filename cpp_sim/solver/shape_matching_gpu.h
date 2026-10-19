@@ -70,6 +70,14 @@ struct SimConfigGPU {
     // sharp_edge_a → sharp_edge_b line segment (in tool LOCAL frame), not SDF.
     // Collision (tool_sdf_collision_kernel) remains full-SDF for non-penetration.
     int use_sharp_edge_damage = 0;
+
+    // Step 2 tool switches (defaults = legacy behaviour; see solver/tool_query.cuh):
+    //   sdf_normal_mode    0 legacy nearest-neighbour index-space normal | 1 trilinear world gradient
+    //   sdf_pf_edge_radius 0 legacy P(F) sdist = phi | 1 sdist = phi - r_e (sphere intruder model)
+    //   aspiration_reach   0 legacy contains test | >0 aspirate when phi <= reach (all tool types)
+    int sdf_normal_mode = 0;
+    int sdf_pf_edge_radius = 0;
+    float aspiration_reach = 0.0f;
     float3 sharp_edge_a;   // endpoint A in tool local frame (only read if use_sharp_edge_damage=1)
     float3 sharp_edge_b;   // endpoint B
 

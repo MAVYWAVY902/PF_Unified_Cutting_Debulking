@@ -47,8 +47,14 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     //   the full SDF volume. Fixes "horizontal blade motion deletes faces" — only
     //   sharp edge cuts, blade body just collides (push-out).
     s.config.use_sharp_edge_damage = cfg.use_sharp_edge_damage ? 1 : 0;
-    s.config.sharp_edge_a = make_float3(cfg.sharp_edge_a[0], cfg.sharp_edge_a[1], cfg.sharp_edge_a[2]);
-    s.config.sharp_edge_b = make_float3(cfg.sharp_edge_b[0], cfg.sharp_edge_b[1], cfg.sharp_edge_b[2]);
+    // sharp edge lives in the centred tool frame → scaled with the tool (tool_scale, Step 2)
+    const float ts = cfg.tool_scale;
+    s.config.sharp_edge_a = make_float3(ts * cfg.sharp_edge_a[0], ts * cfg.sharp_edge_a[1], ts * cfg.sharp_edge_a[2]);
+    s.config.sharp_edge_b = make_float3(ts * cfg.sharp_edge_b[0], ts * cfg.sharp_edge_b[1], ts * cfg.sharp_edge_b[2]);
+    // Step 2 tool switches (defaults = legacy)
+    s.config.sdf_normal_mode = (cfg.sdf_normal == "trilinear") ? 1 : 0;
+    s.config.sdf_pf_edge_radius = cfg.sdf_pf_edge_radius ? 1 : 0;
+    s.config.aspiration_reach = cfg.aspiration_reach;
     s.config.damage_growth_rate = cfg.damage_growth_rate;
     if (cfg.use_sharp_edge_damage) {
         printf("[CUT] sharp_edge: A=(%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f) growth_rate=%.3f\n",
@@ -113,6 +119,10 @@ inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s,
             tool_mesh.translate(-center);
             std::cout << "Tool centered at origin, original center: ("
                       << center.x() << ", " << center.y() << ", " << center.z() << ")" << std::endl;
+            if (cfg.tool_scale != 1.0f) {          // Step 2: uniform scale about the bbox centre
+                for (auto& v : tool_mesh.vertices) v *= (double)cfg.tool_scale;
+                std::cout << "Tool scaled by " << cfg.tool_scale << std::endl;
+            }
 
             tool_mesh.compute_sdf(cfg.tool_sdf_resolution, 0.2);
 

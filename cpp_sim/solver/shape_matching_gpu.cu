@@ -442,7 +442,7 @@ __global__ void update_edge_damage_kernel(
     mid.z = (pred_pos[a].z + pred_pos[b].z) * 0.5f;
 
     // 只更新刀具附近的边 (Step 1: tool op; sphere = legacy 3R search radius)
-    if (tool_outside_damage_band(tool, mid)) return;
+    if (tool_outside_damage_band(tool, mid, 0.0f)) return;   // r_e unused for the sphere
 
     // 边半径（circumsphere）
     float ex = pred_pos[a].x - pred_pos[b].x;
@@ -557,6 +557,18 @@ __global__ void aspirate_kernel(
 }
 
 // ============== Host Functions ==============
+
+// Step 2: grid-SDF tool description for tool_query.cuh (built per launch on the host; the
+// rotation is copied by value — the same numbers the legacy kernels read from d_knife_rot).
+static ToolDesc grid_tool_desc(const SimConfigGPU& c, const SDFData& sdf) {
+    ToolDesc t = {};
+    t.type = 1; t.pos = c.knife_pos; t.radius = c.knife_radius; t.reach = c.aspiration_reach;
+    for (int k = 0; k < 9; k++) t.rot[k] = c.knife_rot[k];
+    t.sdf = sdf.d_sdf; t.res_x = sdf.res_x; t.res_y = sdf.res_y; t.res_z = sdf.res_z;
+    t.origin = sdf.origin; t.cell = sdf.cell_size;
+    t.normal_mode = c.sdf_normal_mode;
+    return t;
+}
 
 #define CUDA_CHECK(call) { \
     cudaError_t err = call; \
@@ -863,73 +875,21 @@ __device__ float3 apply_rot(const float* R, float3 v) {
 
 // Tool SDF collision: transform particle to tool local frame, query SDF
 __global__ void tool_sdf_collision_kernel(
-    float3* pred_pos, int* removed, int* fixed,
-    float* sdf, int res_x, int res_y, int res_z,
-    float3 sdf_origin, float3 sdf_cell_size,
-    float3 tool_pos, const float* tool_rot, int N)
+    float3* pred_pos, int* removed, int* fixed, ToolDesc tool, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i] || fixed[i]) return;
-
-    // Transform to tool local frame: p_local = R^T * (p_world - tool_pos)
-    float3 d = make_float3(
-        pred_pos[i].x - tool_pos.x,
-        pred_pos[i].y - tool_pos.y,
-        pred_pos[i].z - tool_pos.z);
-    float3 p_local = apply_rot_transpose(tool_rot, d);
-
-    // Map to grid coordinates
-    float gx = (p_local.x - sdf_origin.x) / sdf_cell_size.x - 0.5f;
-    float gy = (p_local.y - sdf_origin.y) / sdf_cell_size.y - 0.5f;
-    float gz = (p_local.z - sdf_origin.z) / sdf_cell_size.z - 0.5f;
-
-    if (gx < 0 || gx >= res_x-1 || gy < 0 || gy >= res_y-1 || gz < 0 || gz >= res_z-1)
-        return;
-
-    int ix = (int)floorf(gx), iy = (int)floorf(gy), iz = (int)floorf(gz);
-    float fx = gx - ix, fy = gy - iy, fz = gz - iz;
-
-    #define SDF_IDX(x,y,z) sdf[(z)*res_x*res_y + (y)*res_x + (x)]
-    float c00 = SDF_IDX(ix,iy,iz)*(1-fx) + SDF_IDX(ix+1,iy,iz)*fx;
-    float c10 = SDF_IDX(ix,iy+1,iz)*(1-fx) + SDF_IDX(ix+1,iy+1,iz)*fx;
-    float c01 = SDF_IDX(ix,iy,iz+1)*(1-fx) + SDF_IDX(ix+1,iy,iz+1)*fx;
-    float c11 = SDF_IDX(ix,iy+1,iz+1)*(1-fx) + SDF_IDX(ix+1,iy+1,iz+1)*fx;
-    float dist = (c00*(1-fy)+c10*fy)*(1-fz) + (c01*(1-fy)+c11*fy)*fz;
-
-    if (dist >= 0.0f) return;
-
-    // Gradient in local frame
-    #define SDF_SAMPLE(gx_, gy_, gz_) SDF_IDX( \
-        min(max((int)(gx_), 0), res_x-1), \
-        min(max((int)(gy_), 0), res_y-1), \
-        min(max((int)(gz_), 0), res_z-1))
-    float nx = SDF_SAMPLE(gx+1, gy, gz) - SDF_SAMPLE(gx-1, gy, gz);
-    float ny = SDF_SAMPLE(gx, gy+1, gz) - SDF_SAMPLE(gx, gy-1, gz);
-    float nz = SDF_SAMPLE(gx, gy, gz+1) - SDF_SAMPLE(gx, gy, gz-1);
-    #undef SDF_SAMPLE
-    #undef SDF_IDX
-
-    float len = sqrtf(nx*nx + ny*ny + nz*nz);
-    if (len < 1e-10f) return;
-    nx /= len; ny /= len; nz /= len;
-
-    // Transform gradient from local frame to world frame: n_world = R * n_local
-    float3 n_local = make_float3(nx, ny, nz);
-    float3 n_world = apply_rot(tool_rot, n_local);
-
-    float push = -dist;
-    pred_pos[i].x += push * n_world.x;
-    pred_pos[i].y += push * n_world.y;
-    pred_pos[i].z += push * n_world.z;
+    // Step 2: via tool_query.cuh (legacy push arithmetic; normal per tool.normal_mode)
+    float3 p = pred_pos[i];
+    if (tool_project_out(tool, p)) pred_pos[i] = p;
 }
 
 // Tool SDF damage: compute distance from edge midpoint to tool surface
 __global__ void tool_sdf_damage_kernel(
     float3* pred_pos, int* removed,
     int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
-    float* sdf, int res_x, int res_y, int res_z,
-    float3 sdf_origin, float3 sdf_cell_size,
-    float3 tool_pos, const float* tool_rot,
+    ToolDesc tool,
+    int pf_edge_radius,                 // Step 2 switch: 1 = intruder distance phi - r_e (sphere form)
     float alpha_min, float damage_growth_rate, int num_edges)
 {
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -938,31 +898,10 @@ __global__ void tool_sdf_damage_kernel(
     int a = edge_a[eid], b = edge_b[eid];
     if (removed[a] || removed[b]) return;
 
-    // Edge midpoint in world → local frame: R^T * (mid_world - tool_pos)
-    float3 mid_world = make_float3(
-        (pred_pos[a].x + pred_pos[b].x) * 0.5f - tool_pos.x,
-        (pred_pos[a].y + pred_pos[b].y) * 0.5f - tool_pos.y,
-        (pred_pos[a].z + pred_pos[b].z) * 0.5f - tool_pos.z);
-    float3 mid = apply_rot_transpose(tool_rot, mid_world);
-
-    // Map to grid
-    float gx = (mid.x - sdf_origin.x) / sdf_cell_size.x - 0.5f;
-    float gy = (mid.y - sdf_origin.y) / sdf_cell_size.y - 0.5f;
-    float gz = (mid.z - sdf_origin.z) / sdf_cell_size.z - 0.5f;
-
-    if (gx < 0 || gx >= res_x-1 || gy < 0 || gy >= res_y-1 || gz < 0 || gz >= res_z-1)
-        return;
-
-    int ix = (int)floorf(gx), iy = (int)floorf(gy), iz = (int)floorf(gz);
-    float fx = gx - ix, fy = gy - iy, fz = gz - iz;
-
-    #define SDF_IDX(x,y,z) sdf[(z)*res_x*res_y + (y)*res_x + (x)]
-    float c00 = SDF_IDX(ix,iy,iz)*(1-fx) + SDF_IDX(ix+1,iy,iz)*fx;
-    float c10 = SDF_IDX(ix,iy+1,iz)*(1-fx) + SDF_IDX(ix+1,iy+1,iz)*fx;
-    float c01 = SDF_IDX(ix,iy,iz+1)*(1-fx) + SDF_IDX(ix+1,iy,iz+1)*fx;
-    float c11 = SDF_IDX(ix,iy+1,iz+1)*(1-fx) + SDF_IDX(ix+1,iy+1,iz+1)*fx;
-    float sdist = (c00*(1-fy)+c10*fy)*(1-fz) + (c01*(1-fy)+c11*fy)*fz;
-    #undef SDF_IDX
+    float3 mid = make_float3(
+        (pred_pos[a].x + pred_pos[b].x) * 0.5f,
+        (pred_pos[a].y + pred_pos[b].y) * 0.5f,
+        (pred_pos[a].z + pred_pos[b].z) * 0.5f);
 
     // Edge circumradius
     float ex = pred_pos[a].x - pred_pos[b].x;
@@ -971,10 +910,16 @@ __global__ void tool_sdf_damage_kernel(
     float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
     if (radius < 1e-10f) return;
 
-    // Only process edges near tool surface (|sdf| < 3 * radius)
-    if (fabsf(sdist) > radius * 3.0f) return;
+    // Only process edges near tool surface (|phi| < 3 * radius); outside the grid → skip
+    if (tool_outside_damage_band(tool, mid, radius)) return;
+    float phi = tool_query(tool, mid, false).phi;
 
-    // P(F) from signed distance (same formula as sphere version)
+    // P(F) from the signed distance.
+    //   legacy (pf_edge_radius=0): sdist = phi            — the edge radius is NOT subtracted
+    //   fixed  (pf_edge_radius=1): sdist = phi - r_e      — same intruder model as the sphere
+    //     kernel (sdist = |mid-c| - R - r_e). For a true SDF phi this is exact for a sphere and a
+    //     conservative (1-Lipschitz) lower bound of the edge-sphere clearance for any tool shape.
+    float sdist = pf_edge_radius ? (phi - radius) : phi;
     float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
 
     float rest = pf_rest[eid];
@@ -1079,38 +1024,12 @@ __global__ void sharp_edge_damage_kernel(
 // Tool SDF aspiration: remove high-damage particles inside tool
 __global__ void tool_sdf_aspirate_kernel(
     float3* pred_pos, float* particle_damage, int* removed,
-    float* sdf, int res_x, int res_y, int res_z,
-    float3 sdf_origin, float3 sdf_cell_size,
-    float3 tool_pos, const float* tool_rot, float threshold, int N)
+    ToolDesc tool, float threshold, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i]) return;
-
-    float3 d = make_float3(
-        pred_pos[i].x - tool_pos.x,
-        pred_pos[i].y - tool_pos.y,
-        pred_pos[i].z - tool_pos.z);
-    float3 p_local = apply_rot_transpose(tool_rot, d);
-
-    float gx = (p_local.x - sdf_origin.x) / sdf_cell_size.x - 0.5f;
-    float gy = (p_local.y - sdf_origin.y) / sdf_cell_size.y - 0.5f;
-    float gz = (p_local.z - sdf_origin.z) / sdf_cell_size.z - 0.5f;
-
-    if (gx < 0 || gx >= res_x-1 || gy < 0 || gy >= res_y-1 || gz < 0 || gz >= res_z-1)
-        return;
-
-    int ix = (int)floorf(gx), iy = (int)floorf(gy), iz = (int)floorf(gz);
-    float fx = gx - ix, fy = gy - iy, fz = gz - iz;
-
-    #define SDF_IDX(x,y,z) sdf[(z)*res_x*res_y + (y)*res_x + (x)]
-    float c00 = SDF_IDX(ix,iy,iz)*(1-fx) + SDF_IDX(ix+1,iy,iz)*fx;
-    float c10 = SDF_IDX(ix,iy+1,iz)*(1-fx) + SDF_IDX(ix+1,iy+1,iz)*fx;
-    float c01 = SDF_IDX(ix,iy,iz+1)*(1-fx) + SDF_IDX(ix+1,iy,iz+1)*fx;
-    float c11 = SDF_IDX(ix,iy+1,iz+1)*(1-fx) + SDF_IDX(ix+1,iy+1,iz+1)*fx;
-    float dist = (c00*(1-fy)+c10*fy)*(1-fz) + (c01*(1-fy)+c11*fy)*fz;
-    #undef SDF_IDX
-
-    if (dist < 0.0f && particle_damage[i] > threshold) {
+    // Step 2: via tool_query.cuh (reach = 0 → legacy strict phi < 0)
+    if (tool_contains(tool, pred_pos[i]) && particle_damage[i] > threshold) {
         removed[i] = 1;
     }
 }
@@ -1195,9 +1114,8 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
             d_particles.predicted_pos, d_particles.removed,
             d_edges.particle_a, d_edges.particle_b,
             d_edges.pf_rest, d_edges.damage, d_edges.broken,
-            d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
-            d_tool_sdf.origin, d_tool_sdf.cell_size,
-            config.knife_pos, d_knife_rot, alpha_min, config.damage_growth_rate, E);
+            grid_tool_desc(config, d_tool_sdf), config.sdf_pf_edge_radius,
+            alpha_min, config.damage_growth_rate, E);
     } else {
         // Per-edge α dispatch: if per_edge_alpha enabled AND array allocated,
         // pass the array pointer; kernel branches inside.
@@ -1247,15 +1165,13 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
     if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
         tool_sdf_aspirate_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_particles.damage, d_particles.removed,
-            d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
-            d_tool_sdf.origin, d_tool_sdf.cell_size,
-            config.knife_pos, d_knife_rot, aspiration_threshold, N);
+            grid_tool_desc(config, d_tool_sdf), aspiration_threshold, N);
     } else {
         const float* tau_arr = (per_particle_tau && d_tau_per_particle != nullptr)
                                 ? d_tau_per_particle : nullptr;
         aspirate_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_particles.damage, d_particles.removed,
-            make_sphere_tool(config.knife_pos, config.knife_radius),
+            make_sphere_tool(config.knife_pos, config.knife_radius, config.aspiration_reach),
             aspiration_threshold, tau_arr, N);
     }
 }
@@ -1292,8 +1208,7 @@ void ShapeMatchingGPUSolver::step() {
     if (config.tool_type == 1 && config.knife_active && d_tool_sdf.active && d_tool_sdf.d_sdf) {
         tool_sdf_collision_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
-            d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
-            d_tool_sdf.origin, d_tool_sdf.cell_size, config.knife_pos, d_knife_rot, N);
+            grid_tool_desc(config, d_tool_sdf), N);
     }
 
     // 2b. Rigid SDF collision
@@ -1370,8 +1285,7 @@ void ShapeMatchingGPUSolver::step() {
         if (config.tool_type == 1 && config.knife_active && d_tool_sdf.active && d_tool_sdf.d_sdf) {
             tool_sdf_collision_kernel<<<blocks_n, 256>>>(
                 d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
-                d_tool_sdf.d_sdf, d_tool_sdf.res_x, d_tool_sdf.res_y, d_tool_sdf.res_z,
-                d_tool_sdf.origin, d_tool_sdf.cell_size, config.knife_pos, d_knife_rot, N);
+                grid_tool_desc(config, d_tool_sdf), N);
         }
 
         // Rigid SDF collision (每次迭代)
