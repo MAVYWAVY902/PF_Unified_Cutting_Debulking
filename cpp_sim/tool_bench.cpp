@@ -79,6 +79,10 @@ int main(int argc, char** argv) {
     // 71 mm length covers the whole tumour); "tipdown" = long axis vertical, blade width along
     // the sweep (x), thickness along z → the tip enters the tissue edge-first.
     std::string mesh_pose = "flat";
+    // R1 retraction test: fix particles within fix_x_ends * width of both x ends, and start from the
+    // rest shape stretched by prestretch_x along x about the bbox centre (clusters and edges are
+    // built from the UNSTRETCHED rest shape, so the body starts under uniform tension).
+    float fix_x_ends = 0.0f, prestretch_x = 1.0f;
     int debulk_override = -1;   // --debulk on|off; -1 = use config
     bool rigid_off = false;     // --rigid off: drop the rigid obstacle (bone)
     for (int i = 3; i < argc; i++) {
@@ -98,6 +102,8 @@ int main(int argc, char** argv) {
         else if (a == "--dump-topology" && i + 1 < argc) topo_path = argv[++i];   // replay: final positions + cutting edges (a,b,broken)   // replay + mesh tool: per-frame tool/edge crossing diagnostic
         else if (a == "--depth" && i + 1 < argc) depth = (float)std::atof(argv[++i]);
         else if (a == "--mesh-pose" && i + 1 < argc) mesh_pose = argv[++i];
+        else if (a == "--fix-x-ends" && i + 1 < argc) fix_x_ends = (float)std::atof(argv[++i]);
+        else if (a == "--prestretch-x" && i + 1 < argc) prestretch_x = (float)std::atof(argv[++i]);
         else if (a == "--rigid" && i + 1 < argc) {
             std::string v = argv[++i];
             if (v != "off" && v != "on") { fprintf(stderr, "--rigid must be on|off\n"); return 1; }
@@ -141,6 +147,16 @@ int main(int argc, char** argv) {
         positions[i] = make_float3((float)p.x(), (float)p.y(), (float)p.z());
     }
     int n_fixed = 0;
+    if (fix_x_ends > 0.0f) {
+        double xmin = 1e30, xmax = -1e30;
+        for (int i = 0; i < N; i++) { xmin = std::min(xmin, cpu_solver.particles[i].pos.x()); xmax = std::max(xmax, cpu_solver.particles[i].pos.x()); }
+        double w = fix_x_ends * (xmax - xmin);
+        for (int i = 0; i < N; i++) {
+            double x = cpu_solver.particles[i].pos.x();
+            if (x < xmin + w || x > xmax - w) { cpu_solver.particles[i].fixed = true; fixed_arr[i] = 1; n_fixed++; }
+        }
+        printf("[test] fixed both x ends (%.0f%% of the width each): %d particles\n", 100.0 * fix_x_ends, n_fixed);
+    }
     if (cfg.fix_bottom) {
         double thr = 0.001 + mesh_height * cfg.fixed_ratio;
         for (int i = 0; i < N; i++)
@@ -216,12 +232,23 @@ int main(int argc, char** argv) {
     printf("[tool_bench] debulking=%s (enable_aspiration=%d, damage_shape_weight=%.1f, sharp_edge=%d)\n",
            cfg.debulking ? "on" : "off", g.config.enable_aspiration, g.config.damage_shape_weight,
            g.config.use_sharp_edge_damage);
-    printf("[tool_bench] tool switches: tool_scale=%.3f sdf_normal=%s sdf_pf_edge_radius=%d aspiration_reach=%.6g\n",
+    printf("[tool_bench] tool switches: tool_scale=%.3f sdf_normal=%s sdf_pf_edge_radius=%d aspiration_reach=%.6g edge_contact=%d\n",
            cfg.tool_scale, g.config.sdf_normal_mode ? "trilinear" : "legacy", g.config.sdf_pf_edge_radius,
-           g.config.aspiration_reach);
+           g.config.aspiration_reach, g.config.edge_contact);
+    if (prestretch_x != 1.0f) {            // after clusters / edges were built from the rest shape
+        double xmin = 1e30, xmax = -1e30;
+        for (auto& p : positions) { xmin = std::min(xmin, (double)p.x); xmax = std::max(xmax, (double)p.x); }
+        double xc = 0.5 * (xmin + xmax);
+        for (int i = 0; i < N; i++) {
+            positions[i].x = (float)(xc + prestretch_x * (positions[i].x - xc));
+            cpu_solver.particles[i].pos.x() = positions[i].x;
+        }
+        printf("[test] initial state stretched x%.3f along x about x=%.4f\n", prestretch_x, xc);
+    }
     g.init(positions, velocities, removed, fixed_arr, cs, csz, pids, roff, rcm);
     g.init_edges(ea, eb, epf);
     setup_material_fields(cfg, g, positions, ea, eb);   // 3a′: same heterogeneous fields as the viewer
+    if (cfg.local_split) g.setup_local_split(cs, csz, pids, ea, eb);   // R1: same as the viewer
     RigidMesh rigid_mesh;                             // Step 1: rigid obstacle (bone) like the viewer
     setup_rigid_object(cfg, g, y_offset, rigid_mesh);
 
@@ -300,7 +327,7 @@ int main(int argc, char** argv) {
         std::vector<float3> rpos(N); std::vector<int> rrem(N, 0); std::vector<float> rdmg(N, 0.0f);
         std::vector<int> tet_broken(tet_mesh.num_tets(), 0);
         simrec_frame::FramePipeline pipe{g, cpu_solver, tet_mesh, ea, eb, epf,
-                                         rpos, rrem, rdmg, tet_broken, true, cfg.cutting_mode, N};
+                                         rpos, rrem, rdmg, tet_broken, true, cfg.cutting_mode, N, cfg.local_split};
         // --pass-through: after each active frame (end-of-frame positions, the tool pose of that
         // frame) classify every edge whose two particles are alive by sampling phi along it every
         // half of the smallest SDF cell:
@@ -316,7 +343,7 @@ int main(int argc, char** argv) {
             if (tool != "mesh") { fprintf(stderr, "--pass-through needs --tool mesh\n"); return 1; }
             pass_f = fopen(pass_path.c_str(), "w");
             if (!pass_f) { fprintf(stderr, "cannot open %s\n", pass_path.c_str()); return 1; }
-            fprintf(pass_f, "frame,particles_inside,in_unbroken,pass_unbroken,pass_broken,pass_unbroken_min_phi_mm\n");
+            fprintf(pass_f, "frame,particles_inside,in_unbroken,pass_unbroken,pass_broken,pass_unbroken_min_phi_mm,pass_unbroken_straddle\n");
         }
         float pass_h = 0.5f * std::min(tool_cell[0], std::min(tool_cell[1], tool_cell[2]));
         // "inside" means phi < -pass_tol: the collision projects particles ONTO the surface, so a
@@ -334,8 +361,27 @@ int main(int argc, char** argv) {
         FILE* pass_e = nullptr; std::vector<float> pdmg;
         if (pass_f) {
             pass_e = fopen((pass_path + ".edges.csv").c_str(), "w");
-            fprintf(pass_e, "frame,edge,kind,lx,ly,lz,broken,damage,len_mm,mid_to_sharp_mm\n");
+            fprintf(pass_e, "frame,edge,kind,lx,ly,lz,broken,damage,len_mm,mid_to_sharp_mm,straddle,phi_a_mm,phi_b_mm,t\n");
         }
+        // outward normal of the baked tool SDF at p (central differences, half a cell)
+        auto tool_n = [&](const float3& p, const float3& kp, float n[3]) {
+            float hh = pass_h;
+            for (int k = 0; k < 3; k++) {
+                float3 q1 = p, q2 = p;
+                (k == 0 ? q1.x : k == 1 ? q1.y : q1.z) += hh;
+                (k == 0 ? q2.x : k == 1 ? q2.y : q2.z) -= hh;
+                n[k] = tool_phi(q1.x, q1.y, q1.z, kp) - tool_phi(q2.x, q2.y, q2.z, kp);
+            }
+        };
+        // straddling = endpoints on opposite sides of the tangent plane at the deepest point x(t)
+        // (same test as tool_edge_contact_kernel)
+        auto straddles = [&](const float3& pa, const float3& pb, float tt, const float3& kp) {
+            float3 x = make_float3(pa.x + tt*(pb.x-pa.x), pa.y + tt*(pb.y-pa.y), pa.z + tt*(pb.z-pa.z));
+            float n[3]; tool_n(x, kp, n);
+            float sa = (pa.x-x.x)*n[0] + (pa.y-x.y)*n[1] + (pa.z-x.z)*n[2];
+            float sb = (pb.x-x.x)*n[0] + (pb.y-x.y)*n[1] + (pb.z-x.z)*n[2];
+            return sa * sb < 0.0f;
+        };
         auto to_local = [&](float px, float py, float pz, const float3& kp, float l[3]) {
             float wx = px - kp.x, wy = py - kp.y, wz = pz - kp.z;
             l[0] = KR[0]*wx + KR[3]*wy + KR[6]*wz; l[1] = KR[1]*wx + KR[4]*wy + KR[7]*wz; l[2] = KR[2]*wx + KR[5]*wy + KR[8]*wz;
@@ -359,7 +405,7 @@ int main(int argc, char** argv) {
             g.download_edge_broken(pbroken);
             bool dump = pass_e && (pass_count++ % 10 == 0);
             if (dump) g.download_edge_damage(pdmg);
-            int pin = 0, in_u = 0, pass_u = 0, pass_b = 0; float minphi = 0.0f;
+            int pin = 0, in_u = 0, pass_u = 0, pass_b = 0, pass_us = 0; float minphi = 0.0f;
             for (int i = 0; i < N; i++)
                 if (!rrem[i] && tool_phi(rpos[i].x, rpos[i].y, rpos[i].z, kp) < -pass_tol) pin++;
             for (int e = 0; e < E; e++) {
@@ -382,15 +428,19 @@ int main(int argc, char** argv) {
                     float l[3], m[3];
                     to_local(pa.x+tmn*dx, pa.y+tmn*dy, pa.z+tmn*dz, kp, l);
                     to_local(0.5f*(pa.x+pb.x), 0.5f*(pa.y+pb.y), 0.5f*(pa.z+pb.z), kp, m);
-                    fprintf(pass_e, "%d,%d,pass,%.4f,%.4f,%.4f,%d,%.3f,%.4f,%.4f\n", frame, e, l[0]*1e3f, l[1]*1e3f, l[2]*1e3f,
-                            pbroken[e], pdmg[e], len*1e3f, mid_to_sharp(m)*1e3f);
+                    int strad = straddles(pa, pb, tmn, kp) ? 1 : 0;
+                    fprintf(pass_e, "%d,%d,pass,%.4f,%.4f,%.4f,%d,%.3f,%.4f,%.4f,%d,%.4f,%.4f,%.3f\n", frame, e, l[0]*1e3f, l[1]*1e3f, l[2]*1e3f,
+                            pbroken[e], pdmg[e], len*1e3f, mid_to_sharp(m)*1e3f, strad, fa*1e3f, fb*1e3f, tmn);
                 }
                 if (mn < -pass_tol) {
                     if (pbroken[e]) pass_b++;
-                    else { pass_u++; minphi = std::min(minphi, mn); }
+                    else {
+                        pass_u++; minphi = std::min(minphi, mn);
+                        if (straddles(pa, pb, tmn, kp)) pass_us++;
+                    }
                 }
             }
-            fprintf(pass_f, "%d,%d,%d,%d,%d,%.4f\n", frame, pin, in_u, pass_u, pass_b, minphi * 1e3f);
+            fprintf(pass_f, "%d,%d,%d,%d,%d,%.4f,%d\n", frame, pin, in_u, pass_u, pass_b, minphi * 1e3f, pass_us);
         };
         int f = 0; bool prev_active = false;
         for (const auto& fr : rp.frames()) {
@@ -440,6 +490,17 @@ int main(int argc, char** argv) {
             fprintf(fe, "a,b,broken\n");
             for (int e = 0; e < E; e++) fprintf(fe, "%d,%d,%d\n", ea[e], eb[e], brk[e]);
             fclose(fe);
+            if (g.local_split) {            // R1: GPU sub-cluster labels, same order as the clusters file
+                g.update_cluster_labels_public();
+                std::vector<int> lab; g.download_labels(lab);
+                FILE* fl = fopen((topo_path + ".labels.txt").c_str(), "w");
+                size_t k = 0;
+                for (const auto& c : cpu_solver.clusters) {
+                    for (size_t j = 0; j < c.particle_ids.size(); j++) fprintf(fl, j ? " %d" : "%d", lab[k++]);
+                    fprintf(fl, "\n");
+                }
+                fclose(fl);
+            }
             FILE* fc = fopen((topo_path + ".clusters.txt").c_str(), "w");   // one cluster per line
             for (const auto& c : cpu_solver.clusters) {
                 for (size_t k = 0; k < c.particle_ids.size(); k++) fprintf(fc, k ? " %d" : "%d", c.particle_ids[k]);

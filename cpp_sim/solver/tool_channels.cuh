@@ -4,7 +4,7 @@
 //   contact channel   the whole tool solid pushes tissue out          (collision kernels)
 //   cut channel       an INTRUDER SET with a distance function d(x);  (tool_damage_kernel)
 //                     every cut channel uses the same P(F) model
-//                         pf = sigmoid(-alpha * sdist / r_e),  sdist = d(mid) - r_e
+//                         pf = sigmoid(alpha * sdist / r_e),  sdist = d(mid) - r_e  (sdist < 0 → pf < 1/2)
 //                     (mid / r_e = edge midpoint / half-length)
 //   aspirate channel  removes damaged particles the tool contains     (aspirate_kernel)
 //

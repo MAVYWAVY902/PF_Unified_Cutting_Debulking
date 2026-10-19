@@ -185,3 +185,54 @@ __device__ inline bool tool_outside_damage_band(const ToolDesc& t, float3 p, flo
     }
     return fabsf(tool_query(t, p, false).phi) > r_e * 3.0f;
 }
+
+// Step 3c — deepest point of a tissue EDGE inside the tool (edge contact).
+// A tool thinner than the particle spacing can sit between the two particles of an edge, where
+// the particle collision never sees it. Returns true if an interior point x(t) = a + t (b - a),
+// 0 < t < 1, lies inside the tool, with t, phi(x(t)) < 0 and the outward normal there.
+//   sphere: exact closest point of the segment to the centre
+//   grid:   samples every h along the edge, then a ternary refinement around the best sample;
+//           skipped when phi(mid) > |b - a| / 2 (phi is 1-Lipschitz: the whole edge is outside);
+//           a midpoint outside the baked box carries no bound, so the edge is sampled
+// Edges whose deepest point is an endpoint are left to the particle collision.
+__device__ inline bool tool_edge_deepest(const ToolDesc& t, float3 a, float3 b, float h,
+                                         float& t_out, float& phi_out, float3& n_out) {
+    float3 d = make_float3(b.x - a.x, b.y - a.y, b.z - a.z);
+    float L2 = d.x*d.x + d.y*d.y + d.z*d.z;
+    if (L2 < 1e-20f) return false;
+    if (t.type == 0) {
+        float s = ((t.pos.x - a.x)*d.x + (t.pos.y - a.y)*d.y + (t.pos.z - a.z)*d.z) / L2;
+        if (s <= 0.0f || s >= 1.0f) return false;
+        float3 x = make_float3(a.x + s*d.x, a.y + s*d.y, a.z + s*d.z);
+        ToolSample q = tool_query(t, x, true);
+        if (q.phi >= 0.0f || (q.n.x == 0.0f && q.n.y == 0.0f && q.n.z == 0.0f)) return false;
+        t_out = s; phi_out = q.phi; n_out = q.n;
+        return true;
+    }
+    float L = sqrtf(L2);
+    float3 mid = make_float3(a.x + 0.5f*d.x, a.y + 0.5f*d.y, a.z + 0.5f*d.z);
+    float phi_mid = tool_query(t, mid, false).phi;
+    if (phi_mid < 1e29f && phi_mid > 0.5f * L) return false;   // 1e30 = outside the baked box: no bound, sample
+    int ns = (int)ceilf(L / h);
+    ns = ns < 2 ? 2 : (ns > 64 ? 64 : ns);
+    float best = 1e30f, bt = 0.5f;
+    for (int k = 1; k < ns; k++) {
+        float s = (float)k / ns;
+        float v = tool_query(t, make_float3(a.x + s*d.x, a.y + s*d.y, a.z + s*d.z), false).phi;
+        if (v < best) { best = v; bt = s; }
+    }
+    if (best >= 0.0f) return false;
+    float lo = fmaxf(bt - 1.0f / ns, 0.0f), hi = fminf(bt + 1.0f / ns, 1.0f);
+    for (int it = 0; it < 8; it++) {
+        float m1 = lo + (hi - lo) / 3.0f, m2 = hi - (hi - lo) / 3.0f;
+        float v1 = tool_query(t, make_float3(a.x + m1*d.x, a.y + m1*d.y, a.z + m1*d.z), false).phi;
+        float v2 = tool_query(t, make_float3(a.x + m2*d.x, a.y + m2*d.y, a.z + m2*d.z), false).phi;
+        if (v1 < v2) hi = m2; else lo = m1;
+    }
+    float s = 0.5f * (lo + hi);
+    if (s <= 0.0f || s >= 1.0f) return false;
+    ToolSample q = tool_query(t, make_float3(a.x + s*d.x, a.y + s*d.y, a.z + s*d.z), true);
+    if (q.phi >= 0.0f || (q.n.x == 0.0f && q.n.y == 0.0f && q.n.z == 0.0f)) return false;
+    t_out = s; phi_out = q.phi; n_out = q.n;
+    return true;
+}

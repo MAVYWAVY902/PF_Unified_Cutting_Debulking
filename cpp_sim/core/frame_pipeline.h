@@ -36,7 +36,9 @@ inline bool cpu_bfs_split(
     int min_fragment_size = 5,
     bool enable_fragment_drop = true,    // false in cut_only mode
     int* out_components = nullptr,       // OUT (optional): connected components of alive particles
-    int* out_broken_edges = nullptr)     // OUT (optional): edges with broken flag set
+    int* out_broken_edges = nullptr,     // OUT (optional): edges with broken flag set
+    bool recluster = true)               // false with R1 local_split: clusters are split per
+                                         //   sub-cluster on the GPU; no global re-clustering
 {
     int N = cpu_solver.particles.size();
     int E = (int)edge_a.size();
@@ -175,7 +177,7 @@ inline bool cpu_bfs_split(
     // 等价于切口两侧每 cluster 一根弹簧把碎片拉回主体。
     // 只有 components > 1 才需要做（单连通图没有跨切口的 cluster）。
     bool clusters_changed = false;
-    if ((int)components.size() > 1) {
+    if (recluster && (int)components.size() > 1) {
         std::vector<Cluster> new_clusters;
         new_clusters.reserve(cpu_solver.clusters.size() + 32);
         int split_count = 0;
@@ -309,6 +311,7 @@ struct FramePipeline {
     bool use_tet;
     std::string cutting_mode;
     int N;
+    bool local_split = false;         // R1: GPU sub-clusters; skip cpu_bfs_split re-clustering
 };
 
 struct FrameResult {
@@ -431,7 +434,7 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
                 P.edge_a, P.edge_b, P.edge_pf_rest,
                 P.positions, P.removed,
                 P.tet_broken,
-                P.tet_mesh, 5, enable_drop, &res.components, &res.broken_edges);
+                P.tet_mesh, 5, enable_drop, &res.components, &res.broken_edges, !P.local_split);
             res.bfs_ms = std::chrono::duration<double, std::milli>(
                              std::chrono::high_resolution_clock::now() - t_bfs0).count();
             // Scheme B: 即使 `changed`=false (无 fragment 删除/cluster split),

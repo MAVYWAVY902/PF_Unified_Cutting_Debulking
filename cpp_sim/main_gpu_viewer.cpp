@@ -282,6 +282,9 @@ int main(int argc, char** argv) {
         // Heterogeneous material fields (per-edge α, per-particle τ / stiffness) — shared with
         // tool_bench (core/solver_setup.h, 3a′). The τ and stiffness fields were not applied here before.
         setup_material_fields(cfg, gpu_solver, positions, edge_a, edge_b);
+        // R1: per-cluster local connectivity (shape matching per sub-cluster)
+        if (cfg.local_split)
+            gpu_solver.setup_local_split(cluster_starts, cluster_sizes, all_particle_ids, edge_a, edge_b);
     }
 
     // --- Rigid mesh collision + tool mesh SDF --- (Step 1: shared with tool_bench, core/solver_setup.h)
@@ -357,7 +360,7 @@ int main(int argc, char** argv) {
     simrec_frame::FramePipeline pipeline{gpu_solver, cpu_solver, tet_mesh,
                                          edge_a, edge_b, edge_pf_rest,
                                          cpu_positions, cpu_removed, cpu_damage, tet_broken,
-                                         use_tet, cfg.cutting_mode, N};
+                                         use_tet, cfg.cutting_mode, N, cfg.local_split};
 
     // --- Step 0.5a: recorder / per-frame stats (observation only) ---
     simrec::TrajectoryRecorder recorder;

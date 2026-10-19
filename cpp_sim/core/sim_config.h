@@ -46,6 +46,7 @@ struct SimConfigYAML {
 
     // Clusters
     int cluster_rings = 2;
+    bool local_split = false;   // R1: shape matching per sub-cluster (cluster's own intact edges)
 
     // Knife / Tool
     float knife_radius = 0.1f;
@@ -105,6 +106,7 @@ struct SimConfigYAML {
     std::string sdf_normal = "legacy";   // "legacy" | "trilinear"  (mesh-SDF tool push normal)
     bool sdf_pf_edge_radius = false;     // mesh-SDF P(F): subtract edge radius (phi - r_e)
     float aspiration_reach = 0.0f;       // [m] 0 = legacy contains test; >0 = phi <= reach
+    bool edge_contact = false;           // Step 3c: intact edges collide with the tool body too
 
     // Sharp-edge damage (overrides SDF damage when set).
     // Real-physics cutting: only the sharp edge cuts; blade body just pushes.
@@ -245,6 +247,7 @@ struct SimConfigYAML {
         if (config["clusters"]) {
             auto c = config["clusters"];
             if (c["rings"]) cluster_rings = c["rings"].as<int>();
+            if (c["local_split"]) local_split = c["local_split"].as<bool>();
         }
 
         // Knife
@@ -273,6 +276,7 @@ struct SimConfigYAML {
             }
             if (k["sdf_pf_edge_radius"]) sdf_pf_edge_radius = k["sdf_pf_edge_radius"].as<bool>();
             if (k["aspiration_reach"]) aspiration_reach = k["aspiration_reach"].as<float>();
+            if (k["edge_contact"]) edge_contact = k["edge_contact"].as<bool>();
             if (k["sharp_edge_a"]) {
                 auto a = k["sharp_edge_a"];
                 sharp_edge_a[0] = a[0].as<float>();
@@ -461,7 +465,8 @@ struct SimConfigYAML {
                   << (cut_features == "auto" ? " (sharp_angle_deg=" + std::to_string(sharp_angle_deg) + ")" : "") << std::endl;
         std::cout << "  tool: scale=" << tool_scale << " sdf_normal=" << sdf_normal
                   << " sdf_pf_edge_radius=" << (sdf_pf_edge_radius ? "on" : "off")
-                  << " aspiration_reach=" << aspiration_reach << std::endl;
+                  << " aspiration_reach=" << aspiration_reach
+                  << " edge_contact=" << (edge_contact ? "on" : "off") << std::endl;
         std::cout << "  debulking: " << (debulking ? "on" : "off") << "  cutting_mode: " << cutting_mode
                   << (cutting_mode == "cut_only"
                       ? " (NO particle removal — true topological cut)"
@@ -475,6 +480,7 @@ struct SimConfigYAML {
         std::cout << "  knife_radius=" << knife_radius
                   << ", self_collision_radius=" << self_collision_radius << std::endl;
         std::cout << "  fixed_ratio=" << fixed_ratio
-                  << ", cluster_rings=" << cluster_rings << std::endl;
+                  << ", cluster_rings=" << cluster_rings
+                  << ", local_split=" << (local_split ? "on" : "off") << std::endl;
     }
 };

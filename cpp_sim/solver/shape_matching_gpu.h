@@ -78,6 +78,8 @@ struct SimConfigGPU {
     int sdf_normal_mode = 0;
     int sdf_pf_edge_radius = 0;
     float aspiration_reach = 0.0f;
+    // Step 3c: 1 = intact tissue edges also collide with the tool body (thin tools between particles)
+    int edge_contact = 0;
     float3 sharp_edge_a;   // endpoint A in tool local frame (only read if use_sharp_edge_damage=1)
     float3 sharp_edge_b;   // endpoint B
 
@@ -212,6 +214,22 @@ public:
     // Populated by upload_per_edge_alpha.
     std::vector<float> alpha_per_edge_cpu;
 
+    // R1 — per-cluster local connectivity: shape matching is solved per sub-cluster (members still
+    // connected through intact cutting edges INSIDE the cluster). Call after init() and
+    // init_edges() with the same cluster CSR that was uploaded; the cluster CSR must not change
+    // afterwards (cpu_bfs_split skips its global re-clustering when local_split is on).
+    void setup_local_split(const std::vector<int>& cluster_starts, const std::vector<int>& cluster_sizes,
+                           const std::vector<int>& particle_ids,
+                           const std::vector<int>& edge_a, const std::vector<int>& edge_b);
+    bool local_split = false;
+    // diagnostic: sub-cluster label per cluster entry (empty when local_split is off)
+    void download_labels(std::vector<int>& labels);
+    void update_cluster_labels_public() {
+        if (!local_split) return;
+        int one = 1; cudaMemcpy(d_topo_dirty, &one, sizeof(int), cudaMemcpyHostToDevice);
+        update_cluster_labels();
+    }
+
     // Sharp features of the CUT_CURVE channel (used when config.use_sharp_edge_damage = 1).
     void set_cut_segments(const std::vector<float3>& segs) { h_cut_segments = segs; cut_segments_dirty = true; }
     const std::vector<float3>& cut_segments() const { return h_cut_segments; }
@@ -233,6 +251,18 @@ private:
     // → self_collision → apply_sc → tool/floor/bone collision.
     float3* d_deltas_sc = nullptr;
     int* d_delta_counts_sc = nullptr;
+    // Step 3c edge contact: its own delta buffer (same constraint-group pattern)
+    float3* d_deltas_ec = nullptr;
+    int* d_delta_counts_ec = nullptr;
+    // R1 sub-cluster data: internal edges per cluster (CSR) with member-local endpoints, labels
+    int* d_cl_edge_start = nullptr;   // [C+1]
+    int* d_cl_edge_eid = nullptr;     // [M] cutting-edge index
+    int2* d_cl_edge_uv = nullptr;     // [M] local member indices of the two endpoints
+    int* d_labels = nullptr;          // [total_entries]
+    int* d_topo_dirty = nullptr;      // set by a new break / removal → labels recomputed next step
+    int* d_cluster_multi = nullptr;   // [C] 1 = cluster split into >= 2 sub-clusters
+    int max_cluster_size = 0;
+    void update_cluster_labels();
 
     // GPU cutting kernels
     void gpu_update_damage();

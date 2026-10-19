@@ -72,6 +72,14 @@ __global__ void collision_kernel(
     }
 }
 
+__device__ __forceinline__ void cluster_solve_body(
+    int cid,
+    float3* positions, int* removed, float* damage,
+    int* cluster_starts, int* cluster_sizes,
+    int* particle_ids, float3* rest_offsets,
+    float3* deltas, int* delta_counts,
+    float damage_shape_weight);
+
 __global__ void cluster_solve_kernel(
     float3* positions, int* removed, float* damage,
     int* cluster_starts, int* cluster_sizes,
@@ -82,6 +90,19 @@ __global__ void cluster_solve_kernel(
 {
     int cid = blockIdx.x;
     if (cid >= num_clusters) return;
+    cluster_solve_body(cid, positions, removed, damage, cluster_starts, cluster_sizes, particle_ids,
+                       rest_offsets, deltas, delta_counts, damage_shape_weight);
+}
+
+// Body of the legacy whole-cluster shape match (also used by R1 for clusters that are not split).
+__device__ __forceinline__ void cluster_solve_body(
+    int cid,
+    float3* positions, int* removed, float* damage,
+    int* cluster_starts, int* cluster_sizes,
+    int* particle_ids, float3* rest_offsets,
+    float3* deltas, int* delta_counts,
+    float damage_shape_weight)
+{
     int tid = threadIdx.x;
 
     int start = cluster_starts[cid];
@@ -223,6 +244,204 @@ __global__ void cluster_solve_kernel(
         atomicAdd(&deltas[pid].y, gy - positions[pid].y);
         atomicAdd(&deltas[pid].z, gz - positions[pid].z);
         atomicAdd(&delta_counts[pid], 1);
+    }
+}
+
+// ============== R1: per-cluster local connectivity (sub-clusters) ==============
+// A cluster is split by a cut when its OWN members are no longer connected through intact
+// cutting edges that lie inside the cluster — whether or not the whole body has separated.
+// cluster_label_kernel: one warp per cluster, label propagation (min) + pointer jumping over the
+// cluster's internal intact edges; labels[entry] = local index of the sub-cluster representative,
+// -1 for removed members. Recomputed every step from broken[] / removed[].
+__global__ void cluster_label_kernel(
+    const int* cluster_starts, const int* cluster_sizes, const int* particle_ids, const int* removed,
+    const int* cl_edge_start, const int* cl_edge_eid, const int2* cl_edge_uv, const int* broken,
+    int* labels, int num_clusters, const int* topo_dirty, int* cluster_multi)
+{
+    extern __shared__ int lab[];
+    int cid = blockIdx.x, tid = threadIdx.x;
+    if (cid >= num_clusters || *topo_dirty == 0) return;   // topology unchanged since last labelling
+    int start = cluster_starts[cid], size = cluster_sizes[cid];
+    for (int j = tid; j < size; j += 32) lab[j] = removed[particle_ids[start + j]] ? -1 : j;
+    __syncwarp();
+    int e0 = cl_edge_start[cid], e1 = cl_edge_start[cid + 1];
+    bool changed = true;
+    while (__any_sync(0xFFFFFFFF, changed)) {
+        changed = false;
+        for (int k = e0 + tid; k < e1; k += 32) {
+            if (broken[cl_edge_eid[k]]) continue;
+            int2 uv = cl_edge_uv[k];
+            int lu = lab[uv.x], lv = lab[uv.y];
+            if (lu < 0 || lv < 0 || lu == lv) continue;
+            int m = min(lu, lv);
+            atomicMin(&lab[uv.x], m); atomicMin(&lab[uv.y], m);
+            changed = true;
+        }
+        __syncwarp();
+        for (int j = tid; j < size; j += 32) {           // pointer jumping
+            int l = lab[j];
+            if (l >= 0) { int ll = lab[l]; if (ll < l) { lab[j] = ll; changed = true; } }
+        }
+        __syncwarp();
+    }
+    bool multi = false;
+    int first = -1;
+    for (int j = 0; j < size; j++) { if (lab[j] >= 0) { first = lab[j]; break; } }
+    for (int j = tid; j < size; j += 32) {
+        labels[start + j] = lab[j];
+        if (lab[j] >= 0 && lab[j] != first) multi = true;
+    }
+    multi = __any_sync(0xFFFFFFFF, multi);
+    if (tid == 0) cluster_multi[cid] = multi ? 1 : 0;
+}
+
+__global__ void clear_flag_kernel(int* flag) { *flag = 0; }
+
+// Shape matching per sub-cluster (R1). Same arithmetic as cluster_solve_kernel restricted to the
+// members of one label; the rest shape of a sub-cluster is its members' ORIGINAL rest offsets
+// (re-centred), i.e. the reference configuration. A cluster with a single label uses the legacy
+// threshold (total weight >= 1.5) and therefore reproduces cluster_solve_kernel bit for bit;
+// in a split cluster, sub-clusters with fewer than min_sub members get no goal from it (their
+// particles keep their other memberships).
+__global__ void cluster_solve_sub_kernel(
+    float3* positions, int* removed, float* damage,
+    int* cluster_starts, int* cluster_sizes,
+    int* particle_ids, float3* rest_offsets, const int* labels,
+    float3* deltas, int* delta_counts,
+    float damage_shape_weight, int min_sub,
+    int num_clusters, const int* cluster_multi)
+{
+    int cid = blockIdx.x;
+    if (cid >= num_clusters) return;
+    if (!cluster_multi[cid]) {          // not split: the legacy whole-cluster shape match
+        cluster_solve_body(cid, positions, removed, damage, cluster_starts, cluster_sizes, particle_ids,
+                           rest_offsets, deltas, delta_counts, damage_shape_weight);
+        return;
+    }
+    int tid = threadIdx.x;
+    int start = cluster_starts[cid];
+    int size  = cluster_sizes[cid];
+    if (size < 2) return;
+
+    // number of labels: 1 → legacy path
+    int l0 = 0x7fffffff;
+    for (int j = tid; j < size; j += 32) { int l = labels[start + j]; if (l >= 0 && l < l0) l0 = l; }
+    for (int o = 16; o > 0; o >>= 1) l0 = min(l0, __shfl_down_sync(0xFFFFFFFF, l0, o));
+    l0 = __shfl_sync(0xFFFFFFFF, l0, 0);
+    if (l0 == 0x7fffffff) return;
+    bool multi = false;
+    for (int j = tid; j < size; j += 32) { int l = labels[start + j]; if (l >= 0 && l != l0) multi = true; }
+    multi = __any_sync(0xFFFFFFFF, multi);
+
+    int prev = -1;
+    while (true) {
+        int L = 0x7fffffff;
+        for (int j = tid; j < size; j += 32) { int l = labels[start + j]; if (l > prev && l < L) L = l; }
+        for (int o = 16; o > 0; o >>= 1) L = min(L, __shfl_down_sync(0xFFFFFFFF, L, o));
+        L = __shfl_sync(0xFFFFFFFF, L, 0);
+        if (L == 0x7fffffff) break;
+        prev = L;
+
+        int cnt = 0;
+        float cx = 0, cy = 0, cz = 0, tw = 0;
+        for (int j = tid; j < size; j += 32) {
+            int pid = particle_ids[start + j];
+            if (removed[pid] || labels[start + j] != L) continue;
+            float w = 1.0f - damage_shape_weight * damage[pid];
+            if (w < 0.05f) w = 0.05f;
+            cx += w * positions[pid].x; cy += w * positions[pid].y; cz += w * positions[pid].z;
+            tw += w; cnt++;
+        }
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            cx += __shfl_down_sync(0xFFFFFFFF, cx, offset);
+            cy += __shfl_down_sync(0xFFFFFFFF, cy, offset);
+            cz += __shfl_down_sync(0xFFFFFFFF, cz, offset);
+            tw += __shfl_down_sync(0xFFFFFFFF, tw, offset);
+            cnt += __shfl_down_sync(0xFFFFFFFF, cnt, offset);
+        }
+        float total_w = __shfl_sync(0xFFFFFFFF, tw, 0);
+        cnt = __shfl_sync(0xFFFFFFFF, cnt, 0);
+        if (multi ? (cnt < min_sub) : (total_w < 1.5f)) continue;
+        cx = __shfl_sync(0xFFFFFFFF, cx, 0) / total_w;
+        cy = __shfl_sync(0xFFFFFFFF, cy, 0) / total_w;
+        cz = __shfl_sync(0xFFFFFFFF, cz, 0) / total_w;
+
+        float qcx = 0, qcy = 0, qcz = 0;
+        for (int j = tid; j < size; j += 32) {
+            int pid = particle_ids[start + j];
+            if (removed[pid] || labels[start + j] != L) continue;
+            float w = 1.0f - damage_shape_weight * damage[pid];
+            if (w < 0.05f) w = 0.05f;
+            qcx += w * rest_offsets[start + j].x; qcy += w * rest_offsets[start + j].y; qcz += w * rest_offsets[start + j].z;
+        }
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            qcx += __shfl_down_sync(0xFFFFFFFF, qcx, offset);
+            qcy += __shfl_down_sync(0xFFFFFFFF, qcy, offset);
+            qcz += __shfl_down_sync(0xFFFFFFFF, qcz, offset);
+        }
+        qcx = __shfl_sync(0xFFFFFFFF, qcx, 0) / total_w;
+        qcy = __shfl_sync(0xFFFFFFFF, qcy, 0) / total_w;
+        qcz = __shfl_sync(0xFFFFFFFF, qcz, 0) / total_w;
+
+        float a11=0,a12=0,a13=0,a21=0,a22=0,a23=0,a31=0,a32=0,a33=0;
+        for (int j = tid; j < size; j += 32) {
+            int pid = particle_ids[start + j];
+            if (removed[pid] || labels[start + j] != L) continue;
+            float w = 1.0f - damage_shape_weight * damage[pid];
+            if (w < 0.05f) w = 0.05f;
+            float px = positions[pid].x - cx, py = positions[pid].y - cy, pz = positions[pid].z - cz;
+            float qx = rest_offsets[start + j].x - qcx, qy = rest_offsets[start + j].y - qcy, qz = rest_offsets[start + j].z - qcz;
+            a11 += w*px*qx; a12 += w*px*qy; a13 += w*px*qz;
+            a21 += w*py*qx; a22 += w*py*qy; a23 += w*py*qz;
+            a31 += w*pz*qx; a32 += w*pz*qy; a33 += w*pz*qz;
+        }
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            a11 += __shfl_down_sync(0xFFFFFFFF, a11, offset);
+            a12 += __shfl_down_sync(0xFFFFFFFF, a12, offset);
+            a13 += __shfl_down_sync(0xFFFFFFFF, a13, offset);
+            a21 += __shfl_down_sync(0xFFFFFFFF, a21, offset);
+            a22 += __shfl_down_sync(0xFFFFFFFF, a22, offset);
+            a23 += __shfl_down_sync(0xFFFFFFFF, a23, offset);
+            a31 += __shfl_down_sync(0xFFFFFFFF, a31, offset);
+            a32 += __shfl_down_sync(0xFFFFFFFF, a32, offset);
+            a33 += __shfl_down_sync(0xFFFFFFFF, a33, offset);
+        }
+        float u11,u12,u13,u21,u22,u23,u31,u32,u33;
+        float s11,s12,s13,s21,s22,s23,s31,s32,s33;
+        float v11,v12,v13,v21,v22,v23,v31,v32,v33;
+        float r11,r12,r13,r21,r22,r23,r31,r32,r33;
+        if (tid == 0) {
+            svd(a11,a12,a13,a21,a22,a23,a31,a32,a33,
+                u11,u12,u13,u21,u22,u23,u31,u32,u33,
+                s11,s12,s13,s21,s22,s23,s31,s32,s33,
+                v11,v12,v13,v21,v22,v23,v31,v32,v33);
+            multAB(u11,u12,u13,u21,u22,u23,u31,u32,u33,
+                   v11,v21,v31,v12,v22,v32,v13,v23,v33,
+                   r11,r12,r13,r21,r22,r23,r31,r32,r33);
+            float det = r11*(r22*r33-r23*r32) - r12*(r21*r33-r23*r31) + r13*(r21*r32-r22*r31);
+            if (det < 0) {
+                u13 = -u13; u23 = -u23; u33 = -u33;
+                multAB(u11,u12,u13,u21,u22,u23,u31,u32,u33,
+                       v11,v21,v31,v12,v22,v32,v13,v23,v33,
+                       r11,r12,r13,r21,r22,r23,r31,r32,r33);
+            }
+        }
+        r11 = __shfl_sync(0xFFFFFFFF, r11, 0); r12 = __shfl_sync(0xFFFFFFFF, r12, 0); r13 = __shfl_sync(0xFFFFFFFF, r13, 0);
+        r21 = __shfl_sync(0xFFFFFFFF, r21, 0); r22 = __shfl_sync(0xFFFFFFFF, r22, 0); r23 = __shfl_sync(0xFFFFFFFF, r23, 0);
+        r31 = __shfl_sync(0xFFFFFFFF, r31, 0); r32 = __shfl_sync(0xFFFFFFFF, r32, 0); r33 = __shfl_sync(0xFFFFFFFF, r33, 0);
+
+        for (int j = tid; j < size; j += 32) {
+            int pid = particle_ids[start + j];
+            if (removed[pid] || labels[start + j] != L) continue;
+            float qx = rest_offsets[start + j].x - qcx, qy = rest_offsets[start + j].y - qcy, qz = rest_offsets[start + j].z - qcz;
+            float gx = r11*qx + r12*qy + r13*qz + cx;
+            float gy = r21*qx + r22*qy + r23*qz + cy;
+            float gz = r31*qx + r32*qy + r33*qz + cz;
+            atomicAdd(&deltas[pid].x, gx - positions[pid].x);
+            atomicAdd(&deltas[pid].y, gy - positions[pid].y);
+            atomicAdd(&deltas[pid].z, gz - positions[pid].z);
+            atomicAdd(&delta_counts[pid], 1);
+        }
     }
 }
 
@@ -426,7 +645,7 @@ __global__ void tool_damage_kernel(
     float alpha_min_scalar,
     const float* alpha_min_per_edge,
     float damage_growth_rate, int num_edges,
-    int damage_model)
+    int damage_model, int* topo_dirty)
 {
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
     if (eid >= num_edges || broken[eid]) return;
@@ -475,6 +694,7 @@ __global__ void tool_damage_kernel(
     // 断裂检查
     if (damage[eid] > 0.5f) {
         broken[eid] = 1;
+        if (topo_dirty) *topo_dirty = 1;     // R1: sub-cluster labels must be recomputed
     }
 }
 
@@ -540,7 +760,7 @@ __global__ void aspirate_kernel(
     ToolDesc tool,
     float threshold_scalar,
     const float* tau_per_particle,    // nullable: nullptr → use scalar
-    int N)
+    int N, int* topo_dirty)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i]) return;
@@ -551,6 +771,7 @@ __global__ void aspirate_kernel(
                                                     : threshold_scalar;
     if (particle_damage[i] > threshold) {
         removed[i] = 1;
+        if (topo_dirty) *topo_dirty = 1;
     }
 }
 
@@ -632,6 +853,9 @@ void ShapeMatchingGPUSolver::init(
     // Separate delta buffers for self-collision (FleX constraint groups, Macklin 2014 Sec 4)
     CUDA_CHECK(cudaMalloc(&d_deltas_sc, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_delta_counts_sc, N * sizeof(int)));
+    // Edge-contact delta buffers (Step 3c, used only when config.edge_contact)
+    CUDA_CHECK(cudaMalloc(&d_deltas_ec, N * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_delta_counts_ec, N * sizeof(int)));
 
     // Self-collision hash grid buffers
     if (config.self_collision_enabled) {
@@ -866,6 +1090,44 @@ __global__ void tool_sdf_collision_kernel(
     if (tool_project_out(tool, p)) pred_pos[i] = p;
 }
 
+// Step 3c — edge contact (FleX-style constraint group with its own delta buffer).
+// For every intact material edge whose interior dips into the tool (tool_edge_deepest) with both
+// particles on the same side of it,
+// push the deepest point x(t) out along the tool normal by -phi. The correction is shared by the
+// two particles with the point-on-edge weights wa = 1 - t, wb = t, scaled by s = 1/(wa^2 + wb^2)
+// so that x(t) itself moves by exactly -phi * n (minimal-norm distribution, equal masses).
+// Edges with a fixed / removed particle and broken edges are skipped.
+__global__ void tool_edge_contact_kernel(
+    float3* pred_pos, int* removed, int* fixed,
+    int* edge_a, int* edge_b, int* broken,
+    ToolDesc tool, float sample_h,
+    float3* deltas, int* counts, int num_edges)
+{
+    int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= num_edges || broken[e]) return;
+    int a = edge_a[e], b = edge_b[e];
+    if (removed[a] || removed[b] || fixed[a] || fixed[b]) return;
+    float t, phi; float3 n;
+    if (!tool_edge_deepest(tool, pred_pos[a], pred_pos[b], sample_h, t, phi, n)) return;
+    // Straddling edge: the tool lies BETWEEN the two particles — the endpoints are on opposite
+    // sides of the tangent plane at the deepest point. No non-penetrating state is reachable by
+    // moving the edge locally; pushing it out drags the far particle through the tool against the
+    // particle collision. Such an edge can only be resolved by fracture (sharp feature: cut
+    // channel; blunt body: strain tearing), so contact leaves it alone. (Uses only the normal at
+    // the deepest point, which is inside the baked box; endpoint normals are undefined outside it.)
+    float3 pa = pred_pos[a], pb = pred_pos[b];
+    float3 x = make_float3(pa.x + t*(pb.x - pa.x), pa.y + t*(pb.y - pa.y), pa.z + t*(pb.z - pa.z));
+    float sa = (pa.x - x.x)*n.x + (pa.y - x.y)*n.y + (pa.z - x.z)*n.z;
+    float sb = (pb.x - x.x)*n.x + (pb.y - x.y)*n.y + (pb.z - x.z)*n.z;
+    if (sa * sb < 0.0f) return;
+    float wa = 1.0f - t, wb = t;
+    float sc = -phi / (wa * wa + wb * wb);
+    atomicAdd(&deltas[a].x, wa * sc * n.x); atomicAdd(&deltas[a].y, wa * sc * n.y); atomicAdd(&deltas[a].z, wa * sc * n.z);
+    atomicAdd(&counts[a], 1);
+    atomicAdd(&deltas[b].x, wb * sc * n.x); atomicAdd(&deltas[b].y, wb * sc * n.y); atomicAdd(&deltas[b].z, wb * sc * n.z);
+    atomicAdd(&counts[b], 1);
+}
+
 // SDF debug: count particles inside rigid body
 __global__ void sdf_debug_kernel(
     float3* positions, int* removed, int* fixed,
@@ -960,7 +1222,7 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
         d_edges.pf_rest, d_edges.damage, d_edges.broken,
         ch, alpha_min, alpha_arr,
         config.damage_growth_rate, E,
-        damage_model_mode);
+        damage_model_mode, local_split ? d_topo_dirty : nullptr);
 }
 
 // Upload the CUT_CURVE features when set_cut_segments changed them.
@@ -1015,7 +1277,71 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
                             ? d_tau_per_particle : nullptr;
     aspirate_kernel<<<blocks_n, 256>>>(
         d_particles.predicted_pos, d_particles.damage, d_particles.removed,
-        tool, aspiration_threshold, tau_arr, N);
+        tool, aspiration_threshold, tau_arr, N, local_split ? d_topo_dirty : nullptr);
+}
+
+// ============== R1: sub-cluster setup ==============
+void ShapeMatchingGPUSolver::setup_local_split(
+    const std::vector<int>& cluster_starts, const std::vector<int>& cluster_sizes,
+    const std::vector<int>& particle_ids,
+    const std::vector<int>& edge_a, const std::vector<int>& edge_b)
+{
+    int C = (int)cluster_starts.size(), N = d_particles.N, E = (int)edge_a.size();
+    std::vector<std::vector<int>> inc(N);                 // particle -> incident cutting edges
+    for (int e = 0; e < E; e++) { inc[edge_a[e]].push_back(e); inc[edge_b[e]].push_back(e); }
+    std::vector<int> local(N, -1);                         // particle -> member index in current cluster
+    std::vector<int> start(C + 1, 0), eid; std::vector<int2> uv;
+    max_cluster_size = 0;
+    for (int c = 0; c < C; c++) {
+        start[c] = (int)eid.size();
+        int s0 = cluster_starts[c], n = cluster_sizes[c];
+        max_cluster_size = std::max(max_cluster_size, n);
+        for (int j = 0; j < n; j++) local[particle_ids[s0 + j]] = j;
+        for (int j = 0; j < n; j++) {
+            int p = particle_ids[s0 + j];
+            for (int e : inc[p]) {
+                if (edge_a[e] != p) continue;              // each edge once (from its a-end)
+                int q = edge_b[e];
+                if (local[q] < 0) continue;                // other end not in this cluster
+                eid.push_back(e); uv.push_back(make_int2(j, local[q]));
+            }
+        }
+        for (int j = 0; j < n; j++) local[particle_ids[s0 + j]] = -1;
+    }
+    start[C] = (int)eid.size();
+    CUDA_CHECK(cudaMalloc(&d_cl_edge_start, (C + 1) * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_cl_edge_eid, std::max<size_t>(1, eid.size()) * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_cl_edge_uv, std::max<size_t>(1, uv.size()) * sizeof(int2)));
+    CUDA_CHECK(cudaMalloc(&d_labels, d_clusters.total_entries * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_topo_dirty, sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_cluster_multi, C * sizeof(int)));
+    CUDA_CHECK(cudaMemset(d_cluster_multi, 0, C * sizeof(int)));
+    int one = 1;
+    CUDA_CHECK(cudaMemcpy(d_topo_dirty, &one, sizeof(int), cudaMemcpyHostToDevice));   // first labelling
+    CUDA_CHECK(cudaMemcpy(d_cl_edge_start, start.data(), (C + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    if (!eid.empty()) {
+        CUDA_CHECK(cudaMemcpy(d_cl_edge_eid, eid.data(), eid.size() * sizeof(int), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_cl_edge_uv, uv.data(), uv.size() * sizeof(int2), cudaMemcpyHostToDevice));
+    }
+    local_split = true;
+    update_cluster_labels();
+    printf("[R1] local cluster split ON: %d clusters, %zu internal cluster edges (%.1f / cluster), max cluster size %d\n",
+           C, eid.size(), (double)eid.size() / std::max(C, 1), max_cluster_size);
+}
+
+void ShapeMatchingGPUSolver::download_labels(std::vector<int>& labels) {
+    labels.clear();
+    if (!local_split) return;
+    labels.resize(d_clusters.total_entries);
+    CUDA_CHECK(cudaMemcpy(labels.data(), d_labels, labels.size() * sizeof(int), cudaMemcpyDeviceToHost));
+}
+
+void ShapeMatchingGPUSolver::update_cluster_labels() {
+    int C = d_clusters.num_clusters;
+    cluster_label_kernel<<<C, 32, max_cluster_size * sizeof(int)>>>(
+        d_clusters.cluster_starts, d_clusters.cluster_sizes, d_clusters.particle_ids, d_particles.removed,
+        d_cl_edge_start, d_cl_edge_eid, d_cl_edge_uv, d_edges.broken, d_labels, C, d_topo_dirty, d_cluster_multi);
+    clear_flag_kernel<<<1, 1>>>(d_topo_dirty);
 }
 
 // ============== Simulation Step ==============
@@ -1057,6 +1383,9 @@ void ShapeMatchingGPUSolver::step() {
             config.friction_s, config.friction_k, N);
     }
 
+    // R1: sub-cluster labels from the current broken edges / removed particles
+    if (local_split) update_cluster_labels();
+
     // 3. Jacobi 迭代 — FleX constraint groups (Macklin 2014 Sec 4):
     //    Group 1: shape-matching (cluster_solve → apply) — soft constraint, Jacobi-averaged
     //    Group 2: self-collision (self_collision_kernel → apply_sc) — separate delta buffer
@@ -1066,14 +1395,24 @@ void ShapeMatchingGPUSolver::step() {
         // ---- Group 1: shape matching ----
         clear_deltas_kernel<<<blocks_n, 256>>>(d_deltas, d_delta_counts, N);
 
-        // Solve all clusters（每簇一个 block，32 线程/warp）
-        cluster_solve_kernel<<<C, 32>>>(
-            d_particles.predicted_pos, d_particles.removed, d_particles.damage,
-            d_clusters.cluster_starts, d_clusters.cluster_sizes,
-            d_clusters.particle_ids, d_clusters.rest_offsets,
-            d_deltas, d_delta_counts,
-            config.damage_shape_weight,
-            C);
+        // Solve all clusters（每簇一个 block，32 线程/warp）; R1: per sub-cluster
+        if (local_split) {
+            cluster_solve_sub_kernel<<<C, 32>>>(
+                d_particles.predicted_pos, d_particles.removed, d_particles.damage,
+                d_clusters.cluster_starts, d_clusters.cluster_sizes,
+                d_clusters.particle_ids, d_clusters.rest_offsets, d_labels,
+                d_deltas, d_delta_counts,
+                config.damage_shape_weight, 4,
+                C, d_cluster_multi);
+        } else {
+            cluster_solve_kernel<<<C, 32>>>(
+                d_particles.predicted_pos, d_particles.removed, d_particles.damage,
+                d_clusters.cluster_starts, d_clusters.cluster_sizes,
+                d_clusters.particle_ids, d_clusters.rest_offsets,
+                d_deltas, d_delta_counts,
+                config.damage_shape_weight,
+                C);
+        }
 
         // Apply shape-match delta (avg over ~60 cluster memberships)
         // Day (2026-05-24): dispatch to per-particle stiffness variant when enabled.
@@ -1122,6 +1461,27 @@ void ShapeMatchingGPUSolver::step() {
             tool_sdf_collision_kernel<<<blocks_n, 256>>>(
                 d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
                 grid_tool_desc(config, d_tool_sdf), N);
+        }
+
+        // Edge contact (Step 3c, 每次迭代): intact edges passing through the tool body
+        if (config.edge_contact && config.knife_active && d_edges.num_edges > 0) {
+            ToolDesc tool;
+            float h = 0.0f;
+            if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
+                tool = grid_tool_desc(config, d_tool_sdf);
+                h = 0.5f * fminf(tool.cell.x, fminf(tool.cell.y, tool.cell.z));
+            } else {
+                tool = make_sphere_tool(config.knife_pos, config.knife_radius);
+            }
+            int blocks_e = (d_edges.num_edges + 255) / 256;
+            clear_deltas_kernel<<<blocks_n, 256>>>(d_deltas_ec, d_delta_counts_ec, N);
+            tool_edge_contact_kernel<<<blocks_e, 256>>>(
+                d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
+                d_edges.particle_a, d_edges.particle_b, d_edges.broken,
+                tool, h, d_deltas_ec, d_delta_counts_ec, d_edges.num_edges);
+            apply_self_collision_kernel<<<blocks_n, 256>>>(      // same averaged apply, no stiffness
+                d_particles.predicted_pos, d_deltas_ec, d_delta_counts_ec,
+                d_particles.removed, d_particles.fixed, N);
         }
 
         // Rigid SDF collision (每次迭代)
@@ -1211,6 +1571,7 @@ void ShapeMatchingGPUSolver::download_edge_damage(std::vector<float>& damage) {
 void ShapeMatchingGPUSolver::upload_removed(const std::vector<int>& removed) {
     int N = d_particles.N;
     CUDA_CHECK(cudaMemcpy(d_particles.removed, removed.data(), N * sizeof(int), cudaMemcpyHostToDevice));
+    if (local_split) { int one = 1; CUDA_CHECK(cudaMemcpy(d_topo_dirty, &one, sizeof(int), cudaMemcpyHostToDevice)); }
 }
 
 void ShapeMatchingGPUSolver::reupload_clusters(
@@ -1220,6 +1581,10 @@ void ShapeMatchingGPUSolver::reupload_clusters(
     const std::vector<float3>& rest_offsets,
     const std::vector<float3>& rest_cm)
 {
+    if (local_split) {   // R1 labels / internal-edge lists index the fixed cluster CSR
+        fprintf(stderr, "[R1] reupload_clusters refused: the cluster CSR is fixed while local_split is on\n");
+        return;
+    }
     // 释放旧 buffers
     cudaFree(d_clusters.cluster_starts);
     cudaFree(d_clusters.cluster_sizes);
@@ -1305,6 +1670,7 @@ void ShapeMatchingGPUSolver::build_hash_grid() {
 
 void ShapeMatchingGPUSolver::cleanup() {
     if (d_cut_segments) { cudaFree(d_cut_segments); d_cut_segments = nullptr; }
+    if (d_cl_edge_start) { cudaFree(d_cl_edge_start); cudaFree(d_cl_edge_eid); cudaFree(d_cl_edge_uv); cudaFree(d_labels); cudaFree(d_topo_dirty); cudaFree(d_cluster_multi); }
     cudaFree(d_particles.pos);
     cudaFree(d_particles.vel);
     cudaFree(d_particles.predicted_pos);
@@ -1323,6 +1689,8 @@ void ShapeMatchingGPUSolver::cleanup() {
     cudaFree(d_delta_counts);
     cudaFree(d_deltas_sc);
     cudaFree(d_delta_counts_sc);
+    cudaFree(d_deltas_ec);
+    cudaFree(d_delta_counts_ec);
     if (d_edges.particle_a) {
         cudaFree(d_edges.particle_a);
         cudaFree(d_edges.particle_b);

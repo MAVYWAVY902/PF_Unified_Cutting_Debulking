@@ -62,6 +62,7 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     s.config.sdf_normal_mode = (cfg.sdf_normal == "trilinear") ? 1 : 0;
     s.config.sdf_pf_edge_radius = cfg.sdf_pf_edge_radius ? 1 : 0;
     s.config.aspiration_reach = cfg.aspiration_reach;
+    s.config.edge_contact = cfg.edge_contact ? 1 : 0;
     s.config.damage_growth_rate = cfg.damage_growth_rate;
     if (cfg.use_sharp_edge_damage) {
         printf("[CUT] sharp_edge: A=(%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f) growth_rate=%.3f\n",
