@@ -5,6 +5,7 @@
 ## between uniform and heterogeneous stiffness fields?
 
 name: "Cube Per-Particle Stiffness (Elasticity Gradient)"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 mesh: "../../resources/cube/cube_tet.msh"
 

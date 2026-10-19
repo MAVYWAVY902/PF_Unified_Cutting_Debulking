@@ -4,6 +4,7 @@
 ## This is the CORRECT toughness modeling — τ directly controls yield threshold
 
 name: "Cube Per-Particle τ (Toughness Gradient)"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 mesh: "../../resources/cube/cube_tet.msh"
 

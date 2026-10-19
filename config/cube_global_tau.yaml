@@ -1,6 +1,7 @@
 ## Baseline: uniform global τ (midpoint of 0.1 and 0.8 ≈ 0.45)
 
 name: "Cube Global τ (Uniform Baseline)"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 mesh: "../../resources/cube/cube_tet.msh"
 

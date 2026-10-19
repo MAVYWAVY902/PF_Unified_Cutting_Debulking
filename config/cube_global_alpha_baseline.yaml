@@ -1,6 +1,7 @@
 ## Stage 1 control: global α baseline (TUNED for visible deform)
 
 name: "Cube Global Alpha (Deformable Baseline)"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 mesh: "../../resources/cube/cube_tet.msh"
 

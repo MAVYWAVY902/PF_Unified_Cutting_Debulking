@@ -1,5 +1,6 @@
 #include "shape_matching_gpu.h"
 #include "svd3_cuda.h"
+#include "tool_query.cuh"   // Step 1: unified tool query (sphere)
 #include <cub/cub.cuh>
 #include <cstdio>
 #include <iostream>
@@ -29,7 +30,7 @@ __global__ void predict_kernel(
 
 __global__ void collision_kernel(
     float3* pred_pos, float3* old_pos, int* removed, int* fixed,
-    float floor_y, float3 knife_pos, float knife_radius, int knife_active,
+    float floor_y, ToolDesc tool, int knife_active,
     float mu_s, float mu_k, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -64,18 +65,10 @@ __global__ void collision_kernel(
         }
     }
 
-    // 刀具（球形 SDF）
+    // 刀具（球形 SDF）— Step 1: via tool_query.cuh (same closed-form projection)
     if (knife_active) {
-        float dx = pred_pos[i].x - knife_pos.x;
-        float dy = pred_pos[i].y - knife_pos.y;
-        float dz = pred_pos[i].z - knife_pos.z;
-        float dist = sqrtf(dx*dx + dy*dy + dz*dz);
-        if (dist < knife_radius && dist > 1e-10f) {
-            float inv = knife_radius / dist;
-            pred_pos[i].x = knife_pos.x + dx * inv;
-            pred_pos[i].y = knife_pos.y + dy * inv;
-            pred_pos[i].z = knife_pos.z + dz * inv;
-        }
+        float3 p = pred_pos[i];
+        if (tool_project_out(tool, p)) pred_pos[i] = p;
     }
 }
 
@@ -427,7 +420,7 @@ __global__ void self_collision_kernel(
 __global__ void update_edge_damage_kernel(
     float3* pred_pos, int* removed,
     int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
-    float3 knife_pos, float knife_radius,
+    ToolDesc tool,
     float alpha_min_scalar,
     const float* alpha_min_per_edge,   // nullable: nullptr → use scalar
     float damage_growth_rate, int num_edges,
@@ -448,14 +441,8 @@ __global__ void update_edge_damage_kernel(
     mid.y = (pred_pos[a].y + pred_pos[b].y) * 0.5f;
     mid.z = (pred_pos[a].z + pred_pos[b].z) * 0.5f;
 
-    float dx = mid.x - knife_pos.x;
-    float dy = mid.y - knife_pos.y;
-    float dz = mid.z - knife_pos.z;
-    float dist_to_knife_center = sqrtf(dx*dx + dy*dy + dz*dz);
-
-    // 只更新刀具附近的边
-    float search_r = knife_radius * 3.0f;
-    if (dist_to_knife_center > search_r) return;
+    // 只更新刀具附近的边 (Step 1: tool op; sphere = legacy 3R search radius)
+    if (tool_outside_damage_band(tool, mid)) return;
 
     // 边半径（circumsphere）
     float ex = pred_pos[a].x - pred_pos[b].x;
@@ -464,9 +451,9 @@ __global__ void update_edge_damage_kernel(
     float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
     if (radius < 1e-10f) return;
 
-    // 用刀具**表面**（非中心）作为闯入者
-    // 刀具表面到边中点的距离 = dist_to_knife_center - knife_radius
-    float intruder_dist = dist_to_knife_center - knife_radius;
+    // 用刀具**表面**（非中心）作为闯入者: intruder distance = signed distance phi to the tool
+    // surface (sphere: |mid-c| - R, same expression as before Step 1)
+    float intruder_dist = tool_query(tool, mid).phi;
     float sdist = intruder_dist - radius;
     float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
 
@@ -552,7 +539,7 @@ __global__ void finalize_particle_damage_kernel(
 // else use scalar threshold (legacy, byte-identical).
 __global__ void aspirate_kernel(
     float3* pred_pos, float* particle_damage, int* removed,
-    float3 knife_pos, float knife_radius,
+    ToolDesc tool,
     float threshold_scalar,
     const float* tau_per_particle,    // nullable: nullptr → use scalar
     int N)
@@ -560,10 +547,7 @@ __global__ void aspirate_kernel(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i]) return;
 
-    float dx = pred_pos[i].x - knife_pos.x;
-    float dy = pred_pos[i].y - knife_pos.y;
-    float dz = pred_pos[i].z - knife_pos.z;
-    if (dx*dx + dy*dy + dz*dz > knife_radius * knife_radius) return;
+    if (!tool_contains(tool, pred_pos[i])) return;   // Step 1: tool op (sphere: |d|^2 <= R^2)
 
     float threshold = (tau_per_particle != nullptr) ? tau_per_particle[i]
                                                     : threshold_scalar;
@@ -1223,7 +1207,7 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
             d_particles.predicted_pos, d_particles.removed,
             d_edges.particle_a, d_edges.particle_b,
             d_edges.pf_rest, d_edges.damage, d_edges.broken,
-            config.knife_pos, config.knife_radius,
+            make_sphere_tool(config.knife_pos, config.knife_radius),
             alpha_min, alpha_arr,
             config.damage_growth_rate, E,
             damage_model_mode);
@@ -1271,7 +1255,7 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
                                 ? d_tau_per_particle : nullptr;
         aspirate_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_particles.damage, d_particles.removed,
-            config.knife_pos, config.knife_radius,
+            make_sphere_tool(config.knife_pos, config.knife_radius),
             aspiration_threshold, tau_arr, N);
     }
 }
@@ -1300,7 +1284,7 @@ void ShapeMatchingGPUSolver::step() {
     collision_kernel<<<blocks_n, 256>>>(
         d_particles.predicted_pos, d_particles.old_pos,
         d_particles.removed, d_particles.fixed,
-        config.floor_y, config.knife_pos, config.knife_radius,
+        config.floor_y, make_sphere_tool(config.knife_pos, config.knife_radius),
         (config.tool_type == 0) ? config.knife_active : 0,     // sphere only if tool_type==0
         config.friction_s, config.friction_k, N);              // Coulomb 摩擦（复用 bone SDF 的 μ_s/μ_k）
 
@@ -1378,7 +1362,7 @@ void ShapeMatchingGPUSolver::step() {
         collision_kernel<<<blocks_n, 256>>>(
             d_particles.predicted_pos, d_particles.old_pos,
             d_particles.removed, d_particles.fixed,
-            config.floor_y, config.knife_pos, config.knife_radius,
+            config.floor_y, make_sphere_tool(config.knife_pos, config.knife_radius),
             (config.tool_type == 0) ? config.knife_active : 0,
             config.friction_s, config.friction_k, N);
 

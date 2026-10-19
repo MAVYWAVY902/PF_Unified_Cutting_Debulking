@@ -3,6 +3,7 @@
 ## Use this to compare cavity shape: heterogeneous vs uniform.
 
 name: "Cube Global Stiffness (Uniform Baseline)"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 mesh: "../../resources/cube/cube_tet.msh"
 

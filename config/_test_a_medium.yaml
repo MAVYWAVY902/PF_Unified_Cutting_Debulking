@@ -1,5 +1,6 @@
 ## Auto-generated for Test α/β
 name: "test_a_medium"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 mesh: "../../resources/cube/cube_tet.msh"
 
 simulation:

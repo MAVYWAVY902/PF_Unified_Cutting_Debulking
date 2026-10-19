@@ -1,6 +1,7 @@
 ## P(F) Shape Matching - Tumor Debulking with Haptic Device
 
 name: "Tumor Debulking (Haptics)"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 mesh: "../../resources/tumor/tumor_7800.msh"
 

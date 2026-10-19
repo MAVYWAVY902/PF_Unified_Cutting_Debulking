@@ -2,6 +2,7 @@
 ## Cube with linear-gradient α from left (weak, easy to cut) to right (strong, hard to cut)
 
 name: "Cube Per-Edge Alpha (Deformable)"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 mesh: "../../resources/cube/cube_tet.msh"
 

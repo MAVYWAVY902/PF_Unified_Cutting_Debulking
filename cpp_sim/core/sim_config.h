@@ -9,12 +9,18 @@
 struct SimConfigYAML {
     std::string name = "Unnamed";
 
-    // Cutting mode:
-    //   "debulk"   — current behavior: edges break + clusters split + particles ASPIRATED
-    //                (CUSA-style fragment removal, particles disappear)
-    //   "cut_only" — edges break + clusters split, but NO particle removal
-    //                (true topological cut; two halves stay alive, fall under gravity)
-    std::string cutting_mode = "debulk";
+    // Debulking switch (yaml `debulking: true|false`, DEFAULT false):
+    //   true  ("debulk")   — edges break + clusters split + particles ASPIRATED
+    //                        (CUSA-style removal, orphan cleanup, small-fragment drop)
+    //   false ("cut_only") — edges break + clusters split, but NO particle removal
+    //                        (true topological cut; two halves stay alive, fall under gravity)
+    // Legacy key `cutting_mode: debulk|cut_only` is still accepted as an alias; giving both
+    // keys with different meanings, or an unknown cutting_mode, is a load error.
+    // cutting_mode is kept as the derived string the pipeline reads ("debulk" | "cut_only").
+    // NOTE: only the yaml-level default is "off"; ShapeMatchingGPUSolver::config.enable_aspiration
+    // keeps its own default (1) for programs that build the solver without a config.
+    bool debulking = false;
+    std::string cutting_mode = "cut_only";
 
     // Mesh or particle grid
     std::string mesh_path;
@@ -149,13 +155,25 @@ struct SimConfigYAML {
         }
 
         if (config["name"]) name = config["name"].as<std::string>();
-        if (config["cutting_mode"]) {
-            cutting_mode = config["cutting_mode"].as<std::string>();
-            if (cutting_mode != "debulk" && cutting_mode != "cut_only") {
-                std::cerr << "WARNING: unknown cutting_mode='" << cutting_mode
-                          << "', falling back to 'debulk'" << std::endl;
-                cutting_mode = "debulk";
+        {
+            int from_mode = -1, from_flag = -1;          // -1 = key absent
+            if (config["cutting_mode"]) {
+                std::string m = config["cutting_mode"].as<std::string>();
+                if (m != "debulk" && m != "cut_only") {
+                    std::cerr << "Config error: unknown cutting_mode='" << m
+                              << "' (expected debulk | cut_only)" << std::endl;
+                    return false;
+                }
+                from_mode = (m == "debulk") ? 1 : 0;
             }
+            if (config["debulking"]) from_flag = config["debulking"].as<bool>() ? 1 : 0;
+            if (from_mode >= 0 && from_flag >= 0 && from_mode != from_flag) {
+                std::cerr << "Config error: debulking=" << (from_flag ? "true" : "false")
+                          << " contradicts cutting_mode=" << (from_mode ? "debulk" : "cut_only") << std::endl;
+                return false;
+            }
+            debulking = (from_flag >= 0) ? (from_flag == 1) : (from_mode >= 0) ? (from_mode == 1) : false;
+            cutting_mode = debulking ? "debulk" : "cut_only";
         }
 
         // Mesh or particle grid
@@ -394,9 +412,12 @@ struct SimConfigYAML {
         }
     }
 
+    // Command-line override (--debulk on|off): applied after load(), before solver setup.
+    void set_debulking(bool on) { debulking = on; cutting_mode = on ? "debulk" : "cut_only"; }
+
     void print() const {
         std::cout << "=== Config: " << name << " ===" << std::endl;
-        std::cout << "  cutting_mode: " << cutting_mode
+        std::cout << "  debulking: " << (debulking ? "on" : "off") << "  cutting_mode: " << cutting_mode
                   << (cutting_mode == "cut_only"
                       ? " (NO particle removal — true topological cut)"
                       : " (CUSA-style fragment aspiration)") << std::endl;

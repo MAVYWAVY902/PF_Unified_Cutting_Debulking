@@ -1,6 +1,7 @@
 ## P(F) Shape Matching - Tumor Debulking Configuration
 
 name: "Tumor Debulking"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 ## Mesh
 mesh: "../../resources/tumor/tumor_uniform.msh"  # 10911 verts, 52735 tets; ~22 fps on RTX 2070

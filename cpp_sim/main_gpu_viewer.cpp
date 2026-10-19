@@ -11,6 +11,7 @@
 #include "core/rigid_mesh.h"
 #include "core/sim_recorder.h"   // Step 0.5a: --record / --stats (observation only)
 #include "core/frame_pipeline.h" // Step 0.5d: shared per-frame pipeline (viewer + tool_bench)
+#include "core/solver_setup.h"  // Step 1: shared config → solver mapping (viewer + tool_bench)
 #include <filesystem>
 #ifdef HAPTICS_ENABLED
 #include "core/haply_device.h"
@@ -32,17 +33,23 @@ int main(int argc, char** argv) {
     //   --stats  <file>  per-frame state after the full pipeline (removed, contact, artifacts)
     //   --replay <file>  drive the tool from a recording instead of mouse/keyboard/Haply (0.5b)
     //   --replay-allow-mismatch  replay even if config/mesh/tool differ from the recording
+    //   --debulk on|off  override the config's debulking switch (Step 1; default from yaml, else off)
     std::string record_path, stats_path, replay_path;
     bool replay_allow_mismatch = false;
+    int debulk_override = -1;   // -1 = use config
     for (int ai = 2; ai < argc; ai++) {
         std::string a = argv[ai];
         if (a == "--record" && ai + 1 < argc) record_path = argv[++ai];
         else if (a == "--stats" && ai + 1 < argc) stats_path = argv[++ai];
         else if (a == "--replay" && ai + 1 < argc) replay_path = argv[++ai];
         else if (a == "--replay-allow-mismatch") replay_allow_mismatch = true;
+        else if (a == "--debulk" && ai + 1 < argc) {
+            bool on; if (!parse_debulk_flag(argv[++ai], on)) return 1;
+            debulk_override = on ? 1 : 0;
+        }
         else {
             std::cerr << "unknown argument: " << a << "  (supported: --record <file> --stats <file> "
-                         "--replay <file> --replay-allow-mismatch)" << std::endl;
+                         "--replay <file> --replay-allow-mismatch --debulk on|off)" << std::endl;
             return 1;
         }
     }
@@ -54,6 +61,11 @@ int main(int argc, char** argv) {
         if (!cfg.load(input)) return 1;
         config_loaded = true;
         std::cout << "加载配置: " << input << std::endl;
+    }
+
+    if (debulk_override >= 0) {
+        cfg.set_debulking(debulk_override == 1);
+        std::cout << "[debulk] command-line override: " << (cfg.debulking ? "on" : "off") << std::endl;
     }
 
     // 判断输入类型
@@ -242,55 +254,10 @@ int main(int argc, char** argv) {
 
     // --- 初始化 GPU solver ---
     ShapeMatchingGPUSolver gpu_solver;
-    gpu_solver.config.dt = cfg.dt;
-    gpu_solver.config.gravity = make_float3(cfg.gravity[0], cfg.gravity[1], cfg.gravity[2]);
-    gpu_solver.config.num_iterations = cfg.num_iterations;
-    gpu_solver.config.stiffness = cfg.stiffness;
-    gpu_solver.config.damping = cfg.damping;
-    gpu_solver.config.floor_y = cfg.floor_y;
-    gpu_solver.config.knife_pos = make_float3(100, 100, 100);
-    // Identity rotation
-    float identity_rot[9] = {1,0,0, 0,1,0, 0,0,1};
-    memcpy(gpu_solver.config.knife_rot, identity_rot, 9 * sizeof(float));
-    gpu_solver.config.knife_radius = cfg.knife_radius;
-    gpu_solver.config.knife_active = 0;
-    gpu_solver.config.self_collision_radius = cfg.self_collision_radius;
-    gpu_solver.config.self_collision_stiffness = cfg.self_collision_stiffness;
-    gpu_solver.config.self_collision_enabled = cfg.self_collision_enabled ? 1 : 0;
-    gpu_solver.config.friction_s = cfg.friction_s;
-    gpu_solver.config.friction_k = cfg.friction_k;
-    gpu_solver.config.tool_type = cfg.tool_mesh_path.empty() ? 0 : 1;
-    // cut_only 模式: 关闭 CUSA aspirate (gpu_aspirate 跳过),粒子不被吸走。
-    gpu_solver.config.enable_aspiration = (cfg.cutting_mode == "debulk") ? 1 : 0;
-    // Damage-weighted shape matching: α=1 in cut_only enables Müller 2005 effective-mass
-    //   shape matching with P(F) as mass — damaged particles contribute less to cluster
-    //   shape but stay in cluster (SVD stays stable, healthy particles still pulled).
-    //   α=0 in debulk reproduces original unweighted behavior exactly.
-    gpu_solver.config.damage_shape_weight =
-        (cfg.cutting_mode == "cut_only") ? 1.0f : 0.0f;
-
-    // Sharp-edge damage: limits damage to a line segment (the blade edge) instead of
-    //   the full SDF volume. Fixes "horizontal blade motion deletes faces" — only
-    //   sharp edge cuts, blade body just collides (push-out).
-    gpu_solver.config.use_sharp_edge_damage = cfg.use_sharp_edge_damage ? 1 : 0;
-    gpu_solver.config.sharp_edge_a = make_float3(
-        cfg.sharp_edge_a[0], cfg.sharp_edge_a[1], cfg.sharp_edge_a[2]);
-    gpu_solver.config.sharp_edge_b = make_float3(
-        cfg.sharp_edge_b[0], cfg.sharp_edge_b[1], cfg.sharp_edge_b[2]);
-    gpu_solver.config.damage_growth_rate = cfg.damage_growth_rate;
-    if (cfg.use_sharp_edge_damage) {
-        printf("[CUT] sharp_edge: A=(%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f) growth_rate=%.3f\n",
-               cfg.sharp_edge_a[0], cfg.sharp_edge_a[1], cfg.sharp_edge_a[2],
-               cfg.sharp_edge_b[0], cfg.sharp_edge_b[1], cfg.sharp_edge_b[2],
-               cfg.damage_growth_rate);
-    }
+    // Step 1: config → solver scalars, shared with tool_bench (core/solver_setup.h)
+    apply_config_to_solver(cfg, gpu_solver);
 
     int substeps = cfg.substeps;
-
-    gpu_solver.cutting_update_interval = cfg.cutting_interval;
-    gpu_solver.alpha_min = cfg.alpha_min;
-    gpu_solver.aspiration_threshold = cfg.aspiration_threshold;
-    gpu_solver.damage_model_mode = (cfg.damage_model == "toughness") ? 1 : 0;
 
     cfg.print();
 
@@ -343,66 +310,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    // --- Rigid mesh collision ---
+    // --- Rigid mesh collision + tool mesh SDF --- (Step 1: shared with tool_bench, core/solver_setup.h)
     RigidMesh rigid_mesh;
-    if (!cfg.rigid_mesh_path.empty()) {
-        if (!rigid_mesh.load_obj(cfg.rigid_mesh_path)) {
-            std::cerr << "Rigid mesh加载失败: " << cfg.rigid_mesh_path << std::endl;
-        } else {
-            // 和deformable mesh做同样的y_offset，保持相对坐标
-            if (deformable_y_offset != 0.0) {
-                rigid_mesh.translate(Vec3(0, deformable_y_offset, 0));
-                std::cout << "Rigid mesh y_offset: " << deformable_y_offset << std::endl;
-            }
-
-            // 生成SDF (CPU, 128分辨率)
-            rigid_mesh.compute_sdf(128, 0.1);
-
-            // 上传到GPU
-            float3 origin = make_float3(
-                (float)rigid_mesh.sdf_origin.x(),
-                (float)rigid_mesh.sdf_origin.y(),
-                (float)rigid_mesh.sdf_origin.z());
-            float3 cs = make_float3(
-                (float)rigid_mesh.sdf_cell_size.x(),
-                (float)rigid_mesh.sdf_cell_size.y(),
-                (float)rigid_mesh.sdf_cell_size.z());
-            gpu_solver.init_sdf(gpu_solver.d_rigid_sdf, rigid_mesh.sdf_data,
-                rigid_mesh.sdf_res[0], rigid_mesh.sdf_res[1], rigid_mesh.sdf_res[2],
-                origin, cs, "Bone");
-        }
-    }
-
-    // --- Tool mesh SDF (optional) ---
+    setup_rigid_object(cfg, gpu_solver, deformable_y_offset, rigid_mesh);
     RigidMesh tool_mesh;
-    if (!cfg.tool_mesh_path.empty()) {
-        if (!tool_mesh.load_obj(cfg.tool_mesh_path)) {
-            std::cerr << "Tool mesh加载失败: " << cfg.tool_mesh_path << std::endl;
-            gpu_solver.config.tool_type = 0;  // fallback to sphere
-        } else {
-            // Center tool at origin for local frame SDF
-            Vec3 bmin, bmax;
-            tool_mesh.get_bounds(bmin, bmax);
-            Vec3 center = (bmin + bmax) * 0.5;
-            tool_mesh.translate(-center);
-            std::cout << "Tool centered at origin, original center: ("
-                      << center.x() << ", " << center.y() << ", " << center.z() << ")" << std::endl;
-
-            tool_mesh.compute_sdf(cfg.tool_sdf_resolution, 0.2);
-
-            float3 origin = make_float3(
-                (float)tool_mesh.sdf_origin.x(),
-                (float)tool_mesh.sdf_origin.y(),
-                (float)tool_mesh.sdf_origin.z());
-            float3 cs = make_float3(
-                (float)tool_mesh.sdf_cell_size.x(),
-                (float)tool_mesh.sdf_cell_size.y(),
-                (float)tool_mesh.sdf_cell_size.z());
-            gpu_solver.init_sdf(gpu_solver.d_tool_sdf, tool_mesh.sdf_data,
-                tool_mesh.sdf_res[0], tool_mesh.sdf_res[1], tool_mesh.sdf_res[2],
-                origin, cs, "Tool");
-        }
-    }
+    setup_tool_mesh(cfg, gpu_solver, tool_mesh);
 
     // --- CPU 端 buffers（GPU → CPU 下载用）---
     std::vector<float3> cpu_positions(N);
@@ -571,7 +483,9 @@ int main(int argc, char** argv) {
                           gpu_solver.config.knife_active, gpu_solver.config.tool_type,
                           cpu_positions, cpu_removed, fixed, rec_us,
                           simrec::FrameSources{fr_res.gpu_new, fr_res.orphan_new, fr_res.bfs_new,
-                                               fr_res.orphan_ms, fr_res.bfs_ms});
+                                               fr_res.orphan_ms, fr_res.bfs_ms,
+                                               fr_res.components, fr_res.broken_edges,
+                                               fr_res.bfs_ran ? fr_res.tet_broken_count : -1});
 
         timing_frame++;
 

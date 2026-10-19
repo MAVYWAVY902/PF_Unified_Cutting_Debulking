@@ -86,7 +86,9 @@ private:
 
 // Per-source removal attribution + CPU stage times from simrec_frame::advance_frame.
 // -1 in a count column = that stage does not exist on this path (tool_bench --gpu-only).
-struct FrameSources { int gpu_new = -1, orphan_new = -1, bfs_new = -1; double orphan_ms = 0, bfs_ms = 0; };
+// components/broken_edges/tet_broken: topology after the last BFS (-1 = never measured yet).
+struct FrameSources { int gpu_new = -1, orphan_new = -1, bfs_new = -1; double orphan_ms = 0, bfs_ms = 0;
+                      int components = -1, broken_edges = -1, tet_broken = -1; };
 
 class FrameStatsLogger {
 public:
@@ -105,11 +107,12 @@ public:
             lo_[k] = mn[k] - pad; hi_[k] = mx[k] + pad;
         }
         prev_ = rest_pos;
-        std::fprintf(f_, "# pfsm-frame-stats v2\n# avg_spacing %.9g\n# bbox_lo %.6g %.6g %.6g\n# bbox_hi %.6g %.6g %.6g\n",
+        std::fprintf(f_, "# pfsm-frame-stats v3\n# avg_spacing %.9g\n# bbox_lo %.6g %.6g %.6g\n# bbox_hi %.6g %.6g %.6g\n",
                      spacing_, lo_[0], lo_[1], lo_[2], hi_[0], hi_[1], hi_[2]);
         if (!provenance.empty()) std::fprintf(f_, "%s", provenance.c_str());   // e.g. "# replay <file>\n"
         std::fprintf(f_, "frame,t_wall,frame_ms,gpu_ms,knife_active,knife_step,active,removed,new_removed,"
-                         "contact,max_disp_sp,n_fast,n_out,obs_us,gpu_new,orphan_new,bfs_new,orphan_ms,bfs_ms\n");
+                         "contact,max_disp_sp,n_fast,n_out,obs_us,gpu_new,orphan_new,bfs_new,orphan_ms,bfs_ms,"
+                         "components,broken_edges,tet_broken\n");
         t0_ = last_ = std::chrono::steady_clock::now();
         std::printf("[stats] writing per-frame stats to %s\n", path.c_str());
         return true;
@@ -155,10 +158,15 @@ public:
 
         // obs_us = this stats pass + the recorder write of the same frame (extra_us)
         double obs_us = extra_us + std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - tb).count();
-        std::fprintf(f_, "%d,%.6f,%.3f,%.3f,%d,%.6g,%d,%d,%d,%d,%.4f,%d,%d,%.1f,%d,%d,%d,%.3f,%.3f\n",
+        // topology columns carry the last measured value forward (BFS runs every 5th frame)
+        if (src.components >= 0) last_comp_ = src.components;
+        if (src.broken_edges >= 0) last_broken_ = src.broken_edges;
+        if (src.tet_broken >= 0) last_tetb_ = src.tet_broken;
+        std::fprintf(f_, "%d,%.6f,%.3f,%.3f,%d,%.6g,%d,%d,%d,%d,%.4f,%d,%d,%.1f,%d,%d,%d,%.3f,%.3f,%d,%d,%d\n",
                      frame, t, frame_ms, gpu_ms, knife_active, step, active, rem, new_rem, contact,
                      spacing_ > 0 ? max_disp / spacing_ : 0.0f, n_fast, n_out, obs_us,
-                     src.gpu_new, src.orphan_new, src.bfs_new, src.orphan_ms, src.bfs_ms);
+                     src.gpu_new, src.orphan_new, src.bfs_new, src.orphan_ms, src.bfs_ms,
+                     last_comp_, last_broken_, last_tetb_);
         ++n_; std::fflush(f_);   // every frame: survives Ctrl+C (no destructor), cost ~us
     }
     ~FrameStatsLogger() {
@@ -167,7 +175,7 @@ public:
     bool active() const { return f_ != nullptr; }
 private:
     FILE* f_ = nullptr;
-    int n_ = 0, rem_prev_ = -1;
+    int n_ = 0, rem_prev_ = -1, last_comp_ = -1, last_broken_ = -1, last_tetb_ = -1;
     float spacing_ = 0, lo_[3], hi_[3];
     std::vector<float3> prev_;
     float3 kp_prev_; bool have_kp_ = false;

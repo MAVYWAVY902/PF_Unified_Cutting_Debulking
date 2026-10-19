@@ -2,6 +2,7 @@
 ## = cube_test.yaml 的物理参数 + 针对 0.3m cube 重新标定的 haptics 映射。
 
 name: "Cube (Haptics)"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 ## cube_tet.msh: 0.3m x 0.3m x 0.3m, 21745 顶点, 109967 四面体
 ## (viewer 会把 mesh 抬到 y∈[0.001, 0.301]，顶面中心 = (0.15, 0.301, 0.15))

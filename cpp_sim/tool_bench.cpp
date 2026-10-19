@@ -39,6 +39,7 @@
 #include "core/rigid_mesh.h"
 #include "core/sim_recorder.h"
 #include "core/frame_pipeline.h"
+#include "core/solver_setup.h"
 #include "solver/shape_matching_gpu.h"
 #include "solver/shape_matching_cpu.h"
 
@@ -77,6 +78,7 @@ int main(int argc, char** argv) {
     // 71 mm length covers the whole tumour); "tipdown" = long axis vertical, blade width along
     // the sweep (x), thickness along z → the tip enters the tissue edge-first.
     std::string mesh_pose = "flat";
+    int debulk_override = -1;   // --debulk on|off; -1 = use config
     for (int i = 3; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--tool" && i + 1 < argc) tool = argv[++i];
@@ -92,6 +94,10 @@ int main(int argc, char** argv) {
         else if (a == "--stats" && i + 1 < argc) stats_path = argv[++i];
         else if (a == "--depth" && i + 1 < argc) depth = (float)std::atof(argv[++i]);
         else if (a == "--mesh-pose" && i + 1 < argc) mesh_pose = argv[++i];
+        else if (a == "--debulk" && i + 1 < argc) {
+            bool on; if (!parse_debulk_flag(argv[++i], on)) return 1;
+            debulk_override = on ? 1 : 0;
+        }
         else { fprintf(stderr, "unknown arg %s\n", a.c_str()); return 1; }
     }
     if (tool != "sphere" && tool != "gridsphere" && tool != "mesh") {
@@ -101,6 +107,7 @@ int main(int argc, char** argv) {
 
     SimConfigYAML cfg;
     if (!cfg.load(config_path)) return 1;
+    if (debulk_override >= 0) cfg.set_debulking(debulk_override == 1);
     std::filesystem::create_directories(out_dir);
     if (cfg.per_particle_tau || cfg.per_particle_stiffness || cfg.per_edge_alpha)
         printf("[WARN] heterogeneous fields in config are IGNORED by tool_bench (uniform material)\n");
@@ -185,36 +192,23 @@ int main(int argc, char** argv) {
 
     // ---------------- GPU solver ----------------
     ShapeMatchingGPUSolver g;
-    g.config.dt = cfg.dt;
-    g.config.gravity = make_float3(cfg.gravity[0], cfg.gravity[1], cfg.gravity[2]);
-    g.config.num_iterations = cfg.num_iterations;
-    g.config.stiffness = cfg.stiffness;
-    g.config.damping = cfg.damping;
-    g.config.floor_y = cfg.floor_y;
-    g.config.knife_pos = make_float3(100, 100, 100);
+    // Step 1: same config → solver mapping as the viewer (core/solver_setup.h). Before this,
+    // tool_bench forced aspiration ON, damage weighting OFF and sharp-edge damage OFF.
+    apply_config_to_solver(cfg, g);
+    // tool_bench-specific overrides: --tool picks the tool code path, --mesh-pose the rotation
     float I3[9] = {1,0,0, 0,1,0, 0,0,1};
     // tipdown (row-major, local→world): local x (length) → world y, local y (thickness) → world z,
     // local z (width) → world x
     float TIPDOWN[9] = {0,0,1, 1,0,0, 0,1,0};
     memcpy(g.config.knife_rot, (tool == "mesh" && mesh_pose == "tipdown") ? TIPDOWN : I3, sizeof(I3));
-    g.config.knife_radius = cfg.knife_radius;
-    g.config.knife_active = 0;
-    g.config.self_collision_radius = cfg.self_collision_radius;
-    g.config.self_collision_stiffness = cfg.self_collision_stiffness;
-    g.config.self_collision_enabled = cfg.self_collision_enabled ? 1 : 0;
-    g.config.friction_s = cfg.friction_s;
-    g.config.friction_k = cfg.friction_k;
     g.config.tool_type = (tool == "sphere") ? 0 : 1;
-    g.config.enable_aspiration = 1;
-    g.config.damage_shape_weight = 0.0f;
-    g.config.use_sharp_edge_damage = 0;
-    g.config.damage_growth_rate = cfg.damage_growth_rate;
-    g.cutting_update_interval = cfg.cutting_interval;
-    g.alpha_min = cfg.alpha_min;
-    g.aspiration_threshold = cfg.aspiration_threshold;
-    g.damage_model_mode = (cfg.damage_model == "toughness") ? 1 : 0;
+    printf("[tool_bench] debulking=%s (enable_aspiration=%d, damage_shape_weight=%.1f, sharp_edge=%d)\n",
+           cfg.debulking ? "on" : "off", g.config.enable_aspiration, g.config.damage_shape_weight,
+           g.config.use_sharp_edge_damage);
     g.init(positions, velocities, removed, fixed_arr, cs, csz, pids, roff, rcm);
     g.init_edges(ea, eb, epf);
+    RigidMesh rigid_mesh;                             // Step 1: rigid obstacle (bone) like the viewer
+    setup_rigid_object(cfg, g, y_offset, rigid_mesh);
 
     const float R = cfg.knife_radius;
     std::vector<float> tool_sdf_host; int tool_res[3] = {0, 0, 0}; float tool_org[3] = {0, 0, 0}, tool_cell[3] = {0, 0, 0};
@@ -233,13 +227,8 @@ int main(int argc, char** argv) {
     } else if (tool == "mesh") {
         if (cfg.tool_mesh_path.empty()) { fprintf(stderr, "--tool mesh needs knife.tool_mesh in yaml\n"); return 1; }
         RigidMesh tm;
-        if (!tm.load_obj(cfg.tool_mesh_path)) return 1;
-        Vec3 bmin, bmax; tm.get_bounds(bmin, bmax); tm.translate(-(bmin + bmax) * 0.5);
-        tm.compute_sdf(cfg.tool_sdf_resolution, 0.2);
-        g.init_sdf(g.d_tool_sdf, tm.sdf_data, tm.sdf_res[0], tm.sdf_res[1], tm.sdf_res[2],
-                   make_float3((float)tm.sdf_origin.x(), (float)tm.sdf_origin.y(), (float)tm.sdf_origin.z()),
-                   make_float3((float)tm.sdf_cell_size.x(), (float)tm.sdf_cell_size.y(), (float)tm.sdf_cell_size.z()),
-                   "Tool(mesh)");
+        setup_tool_mesh(cfg, g, tm);                  // Step 1: same baking as the viewer
+        if (g.config.tool_type != 1) { fprintf(stderr, "tool mesh failed to load\n"); return 1; }
         tool_sdf_host = tm.sdf_data;
         for (int k = 0; k < 3; k++) { tool_res[k] = tm.sdf_res[k]; tool_org[k] = (float)tm.sdf_origin[k]; tool_cell[k] = (float)tm.sdf_cell_size[k]; }
     }
@@ -296,7 +285,9 @@ int main(int argc, char** argv) {
             } else {
                 simrec_frame::FrameResult fres = simrec_frame::advance_frame(pipe, fr.substeps, f, fr.active != 0);
                 ms = fres.gpu_ms;
-                src = simrec::FrameSources{fres.gpu_new, fres.orphan_new, fres.bfs_new, fres.orphan_ms, fres.bfs_ms};
+                src = simrec::FrameSources{fres.gpu_new, fres.orphan_new, fres.bfs_new, fres.orphan_ms, fres.bfs_ms,
+                                               fres.components, fres.broken_edges,
+                                               fres.bfs_ran ? fres.tet_broken_count : -1};
             }
             stats.write(f, ms, fr.kp, g.config.knife_radius, fr.active, g.config.tool_type, rpos, rrem, fixed_arr,
                         0.0, src);

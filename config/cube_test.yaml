@@ -2,6 +2,7 @@
 ## Matches parameters from cube32.msh direct run
 
 name: "Cube Test"
+debulking: true   # explicit: this config relied on the old implicit default (debulk) — 2026-10-19
 
 ## Dense cube (1m x 1m x 1m, ~31k vertices, 158k tets)
 mesh: "../../resources/cube/cube_tet.msh"

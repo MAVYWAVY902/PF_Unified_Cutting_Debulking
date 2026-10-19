@@ -34,7 +34,9 @@ inline bool cpu_bfs_split(
     std::vector<int>& tet_broken,        // OUT: per-tet flag, ≥1 broken edge → 1 (monotonic)
     const TetMesh& tet_mesh,
     int min_fragment_size = 5,
-    bool enable_fragment_drop = true)    // false in cut_only mode
+    bool enable_fragment_drop = true,    // false in cut_only mode
+    int* out_components = nullptr,       // OUT (optional): connected components of alive particles
+    int* out_broken_edges = nullptr)     // OUT (optional): edges with broken flag set
 {
     int N = cpu_solver.particles.size();
     int E = (int)edge_a.size();
@@ -90,6 +92,9 @@ inline bool cpu_bfs_split(
             }
         }
     }
+
+    if (out_components) *out_components = (int)components.size();
+    if (out_broken_edges) *out_broken_edges = (int)std::count(edge_broken.begin(), edge_broken.end(), 1);
 
     // 找最大分量
     int largest_idx = 0;
@@ -299,6 +304,9 @@ struct FrameResult {
     int bfs_new = 0;                  // BFS small-fragment drop (only on frames where BFS runs)
     double orphan_ms = 0.0;           // CPU time of the orphan cleanup loop (0 when skipped)
     double bfs_ms = 0.0;              // CPU time of cpu_bfs_split (0 when not run this frame)
+    // Topology (Step 1, needed when debulking is off and removal stays 0). Only measured on
+    // frames where BFS runs; -1 on other frames (the stats writer carries the last value).
+    int components = -1, broken_edges = -1;
 };
 
 // knife_active: same flag the viewer previously read from viewer.knife_active (gates BFS).
@@ -405,7 +413,7 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
                 P.edge_a, P.edge_b, P.edge_pf_rest,
                 P.positions, P.removed,
                 P.tet_broken,
-                P.tet_mesh, 5, enable_drop);
+                P.tet_mesh, 5, enable_drop, &res.components, &res.broken_edges);
             res.bfs_ms = std::chrono::duration<double, std::milli>(
                              std::chrono::high_resolution_clock::now() - t_bfs0).count();
             // Scheme B: 即使 `changed`=false (无 fragment 删除/cluster split),
