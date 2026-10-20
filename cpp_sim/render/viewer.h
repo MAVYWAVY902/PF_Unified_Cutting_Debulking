@@ -43,6 +43,11 @@ public:
     // 刀具状态
     Vec3 knife_pos = Vec3(0, 0.3, 0.09);
     Eigen::Matrix3d knife_rot = Eigen::Matrix3d::Identity();  // tool rotation
+    // B (tool proxy): knife_pos/knife_rot are the INPUT target; the tool is drawn at the pose the
+    // simulation used when draw_tool_pose is set
+    bool draw_tool_pose = false;
+    Vec3 tool_draw_pos = Vec3(0, 0, 0);
+    Eigen::Matrix3d tool_draw_rot = Eigen::Matrix3d::Identity();
     double knife_radius = 0.03;
     bool knife_active = false;
 
@@ -83,6 +88,7 @@ public:
     //   nullptr → debulk 模式不启用,完全沿用旧逻辑(基于 removed 粒子重建)。
     const std::vector<int>* tet_broken_ptr = nullptr;
     int tet_broken_count = 0;
+    int broken_edge_count = 0;     // render.split_tets: a new broken edge inside an already cut tet changes its pieces
 
     bool init(int width = 1280, int height = 720, const char* title = "P(F) Shape Matching") {
         m_width = width;
@@ -181,11 +187,14 @@ public:
                         int curr_broken = tet_broken_count;
                         static int prev_removed_gpu = 0;
                         static int prev_broken_gpu = 0;
-                        if (curr_removed > prev_removed_gpu || curr_broken > prev_broken_gpu) {
+                        static int prev_bedges_gpu = 0;
+                        if (curr_removed > prev_removed_gpu || curr_broken > prev_broken_gpu ||
+                            (tet_mesh->split_render && broken_edge_count > prev_bedges_gpu)) {
                             tet_mesh->rebuild_surface_faces(solver->particles, tet_broken_ptr);
                         }
                         prev_removed_gpu = curr_removed;
                         prev_broken_gpu = curr_broken;
+                        prev_bedges_gpu = broken_edge_count;
                     }
 
                     // debug info
@@ -534,7 +543,9 @@ private:
     void _upload_surface_mesh() {
         if (!tet_mesh || tet_mesh->num_surface_faces() == 0) return;
 
-        int N = solver->particles.size();
+        // render.split_tets: vertices = particles + cut points (TetMesh::render_pos)
+        const bool split = tet_mesh->split_render;
+        int N = split ? tet_mesh->num_render_vertices() : (int)solver->particles.size();
         int F = tet_mesh->num_surface_faces();
 
         // 更新法线
@@ -545,10 +556,12 @@ private:
         std::vector<float> normals(N * 3, 0.0f);
 
         for (int i = 0; i < N; i++) {
-            positions[i*3+0] = (float)solver->particles[i].pos.x();
-            positions[i*3+1] = (float)solver->particles[i].pos.y();
-            positions[i*3+2] = (float)solver->particles[i].pos.z();
+            const Vec3& p = split ? tet_mesh->render_pos[i] : solver->particles[i].pos;
+            positions[i*3+0] = (float)p.x();
+            positions[i*3+1] = (float)p.y();
+            positions[i*3+2] = (float)p.z();
         }
+        auto gone = [&](int v) { return solver->particles[split ? tet_mesh->render_owner(v) : v].removed; };
 
         // 逐面法线 → 逐顶点法线（累加后归一化）
         std::vector<int> normal_count(N, 0);
@@ -583,9 +596,7 @@ private:
             int b = tet_mesh->surface_faces[i][1];
             int c = tet_mesh->surface_faces[i][2];
             // 任何一个顶点被移除 → 跳过这个面
-            if (solver->particles[a].removed ||
-                solver->particles[b].removed ||
-                solver->particles[c].removed) continue;
+            if (gone(a) || gone(b) || gone(c)) continue;
             indices.push_back(a);
             indices.push_back(b);
             indices.push_back(c);
@@ -615,9 +626,7 @@ private:
         std::vector<unsigned int> wire_indices;
         for (int i = 0; i < F; i++) {
             const auto& f = tet_mesh->surface_faces[i];
-            if (solver->particles[f[0]].removed ||
-                solver->particles[f[1]].removed ||
-                solver->particles[f[2]].removed) continue;
+            if (gone(f[0]) || gone(f[1]) || gone(f[2])) continue;
             for (int j = 0; j < 3; j++) {
                 int a = f[j], b = f[(j+1)%3];
                 int64_t key = (int64_t)std::min(a,b) * 1000000LL + std::max(a,b);
@@ -780,11 +789,12 @@ private:
         // Fill rotation block
         for (int r = 0; r < 3; r++)
             for (int c = 0; c < 3; c++)
-                model(r, c) = (float)knife_rot(r, c);
+                model(r, c) = (float)(draw_tool_pose ? tool_draw_rot(r, c) : knife_rot(r, c));
         // Translation
-        model(0, 3) = (float)knife_pos.x();
-        model(1, 3) = (float)knife_pos.y();
-        model(2, 3) = (float)knife_pos.z();
+        const Vec3& tp = draw_tool_pose ? tool_draw_pos : knife_pos;
+        model(0, 3) = (float)tp.x();
+        model(1, 3) = (float)tp.y();
+        model(2, 3) = (float)tp.z();
 
         Eigen::Matrix4f mvp = proj * view * model;
 

@@ -349,6 +349,7 @@ int main(int argc, char** argv) {
 
     if (use_tet) {
         viewer.tet_mesh = &tet_mesh;
+        tet_mesh.split_render = cfg.render_split_tets;
         viewer.draw_surface = cfg.draw_surface;
         viewer.draw_wireframe = cfg.draw_wireframe;
         viewer.draw_points = cfg.draw_points;
@@ -361,6 +362,7 @@ int main(int argc, char** argv) {
                                          edge_a, edge_b, edge_pf_rest,
                                          cpu_positions, cpu_removed, cpu_damage, tet_broken,
                                          use_tet, cfg.cutting_mode, N, cfg.local_split, cfg.tool_substep_interp};
+    setup_tool_proxy(cfg, gpu_solver, tool_mesh, avg_spacing, pipeline.tool_proxy, pipeline.proxy_max_step, pipeline.tool_reach);
 
     // --- Step 0.5a: recorder / per-frame stats (observation only) ---
     simrec::TrajectoryRecorder recorder;
@@ -444,10 +446,14 @@ int main(int argc, char** argv) {
                                                                        viewer.knife_active);
         auto t1 = t_gpu0 + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
                                std::chrono::duration<double, std::milli>(fr_res.gpu_ms));
+        // B: draw the tool where the simulation has it (the proxy), not at the input target
+        viewer.draw_tool_pose = pipeline.tool_proxy;
+        viewer.tool_draw_pos = Vec3(gpu_solver.config.knife_pos.x, gpu_solver.config.knife_pos.y, gpu_solver.config.knife_pos.z);
+        for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) viewer.tool_draw_rot(r, c) = gpu_solver.config.knife_rot[r * 3 + c];
         int active = fr_res.active, rem = fr_res.removed;
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
-        if (fr_res.bfs_ran) viewer.tet_broken_count = fr_res.tet_broken_count;
+        if (fr_res.bfs_ran) { viewer.tet_broken_count = fr_res.tet_broken_count; viewer.broken_edge_count = fr_res.broken_edges; }
         if (fr_res.clusters_changed) {
             C = (int)cpu_solver.clusters.size();
             viewer.num_clusters_display = C;

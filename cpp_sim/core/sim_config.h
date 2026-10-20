@@ -39,6 +39,9 @@ struct SimConfigYAML {
     int substeps = 4;
     bool substeps_auto = false;
     bool tool_substep_interp = false;   // R4: tool pose interpolated across the substeps of a frame
+    bool render_split_tets = false;     // render.split_tets: a cut tet is drawn as one piece per side (TetMesh split rendering)
+    bool tool_proxy = false;            // B: the simulated tool follows the input pose at <= one particle
+                                        //    radius per substep (virtual coupling)
 
     // Boundary
     float floor_y = 0.0f;
@@ -109,6 +112,15 @@ struct SimConfigYAML {
     float aspiration_reach = 0.0f;       // [m] 0 = legacy contains test; >0 = phi <= reach
     bool edge_contact = false;           // Step 3c: intact edges collide with the tool body too
     bool straddle_fracture = false;      // R3: edges the tool body separates accumulate P(F) damage
+    bool entry_side_contact = false;     // A1: return particles to the side they entered the tool from
+    bool contact_iterate = false;        // F1: repeat the mesh-tool projection until the particle is out
+    bool selfcol_tool_block = false;     // F3: no self-collision between particles the tool separates
+    bool cut_curve_crossing = false;     // cut_curve: crossing — sharp features cut edges they pass between
+    bool cut_curve_leading = false;      // cut_curve: leading — crossing + the feature must lead (normal cone)
+    bool contact_ccd = false;            // CCD tool contact: paths that cross the tool are stopped at the entry face
+    bool straddle_detour = false;        // R3 only if the tool cuts the edge's element (no detour around the tool)
+    int straddle_detour_k = 32;           // sphere samples of the detour test (resolution)
+    std::string straddle_rule = "segment"; // R3: segment (legacy) | sheet (the tool's sheets cut the element in two, exact)
 
     // Sharp-edge damage (overrides SDF damage when set).
     // Real-physics cutting: only the sharp edge cuts; blade body just pushes.
@@ -236,6 +248,7 @@ struct SimConfigYAML {
                 }
             }
             if (sim["tool_substep_interp"]) tool_substep_interp = sim["tool_substep_interp"].as<bool>();
+            if (sim["tool_proxy"]) tool_proxy = sim["tool_proxy"].as<bool>();
         }
 
         // Boundary
@@ -281,6 +294,32 @@ struct SimConfigYAML {
             if (k["aspiration_reach"]) aspiration_reach = k["aspiration_reach"].as<float>();
             if (k["edge_contact"]) edge_contact = k["edge_contact"].as<bool>();
             if (k["straddle_fracture"]) straddle_fracture = k["straddle_fracture"].as<bool>();
+            if (k["entry_side_contact"]) entry_side_contact = k["entry_side_contact"].as<bool>();
+            if (k["contact_iterate"]) contact_iterate = k["contact_iterate"].as<bool>();
+            if (k["selfcol_tool_block"]) selfcol_tool_block = k["selfcol_tool_block"].as<bool>();
+            if (k["contact_ccd"]) contact_ccd = k["contact_ccd"].as<bool>();
+            if (k["straddle_detour"]) straddle_detour = k["straddle_detour"].as<bool>();
+            if (k["straddle_detour_k"]) straddle_detour_k = k["straddle_detour_k"].as<int>();
+            if (k["straddle_rule"]) {
+                straddle_rule = k["straddle_rule"].as<std::string>();
+                if (straddle_rule != "segment" && straddle_rule != "sheet") {
+                    std::cerr << "Config error: knife.straddle_rule must be segment|sheet (got " << straddle_rule << ")" << std::endl;
+                    return false;
+                }
+            }
+            if (k["cut_curve"]) {
+                std::string m = k["cut_curve"].as<std::string>();
+                if (m != "proximity" && m != "crossing" && m != "leading") {
+                    std::cerr << "Config error: knife.cut_curve must be proximity|crossing|leading (got " << m << ")" << std::endl;
+                    return false;
+                }
+                cut_curve_crossing = (m == "crossing" || m == "leading");
+                cut_curve_leading = (m == "leading");
+            }
+            if (entry_side_contact && !tool_mesh_path.empty() && sdf_normal == "legacy") {
+                std::cerr << "Config error: knife.entry_side_contact needs knife.sdf_normal: trilinear" << std::endl;
+                return false;
+            }
             if (straddle_fracture && !tool_mesh_path.empty() && sdf_normal == "legacy") {
                 std::cerr << "Config error: knife.straddle_fracture needs knife.sdf_normal: trilinear "
                              "(the straddle test uses the tool normal; legacy normals are wrong on "
@@ -316,6 +355,15 @@ struct SimConfigYAML {
                     std::cerr << "Config error: knife.cut_features: auto needs knife.tool_mesh" << std::endl;
                     return false;
                 }
+            }
+            if (straddle_rule == "sheet" && ( cut_features != "auto")) {
+                std::cerr << "Config error: knife.straddle_rule: sheet needs a tool mesh with cut_features: auto "
+                             "(the sheets are built on its sharp edges)" << std::endl;
+                return false;
+            }
+            if (cut_curve_leading && cut_features != "auto") {   // the normal cone comes from the mesh faces
+                std::cerr << "Config error: knife.cut_curve: leading needs knife.cut_features: auto" << std::endl;
+                return false;
             }
             if (k["sharp_angle_deg"]) sharp_angle_deg = k["sharp_angle_deg"].as<float>();
             if (k["damage_growth_rate"]) damage_growth_rate = k["damage_growth_rate"].as<float>();
@@ -368,6 +416,10 @@ struct SimConfigYAML {
         }
 
         // Self-collision
+        if (config["render"]) {
+            auto r = config["render"];
+            if (r["split_tets"]) render_split_tets = r["split_tets"].as<bool>();
+        }
         if (config["self_collision"]) {
             auto sc = config["self_collision"];
             if (sc["enabled"]) self_collision_enabled = sc["enabled"].as<bool>();
@@ -477,7 +529,14 @@ struct SimConfigYAML {
                   << " sdf_pf_edge_radius=" << (sdf_pf_edge_radius ? "on" : "off")
                   << " aspiration_reach=" << aspiration_reach
                   << " edge_contact=" << (edge_contact ? "on" : "off")
-                  << " straddle_fracture=" << (straddle_fracture ? "on" : "off") << std::endl;
+                  << " straddle_fracture=" << (straddle_fracture ? "on" : "off")
+                  << " entry_side_contact=" << (entry_side_contact ? "on" : "off")
+                  << " contact_iterate=" << (contact_iterate ? "on" : "off")
+                  << " selfcol_tool_block=" << (selfcol_tool_block ? "on" : "off")
+                  << " cut_curve=" << (cut_curve_leading ? "leading" : cut_curve_crossing ? "crossing" : "proximity")
+                  << " contact_ccd=" << (contact_ccd ? "on" : "off")
+                  << " straddle_detour=" << (straddle_detour ? std::to_string(straddle_detour_k) : std::string("off"))
+                  << " straddle_rule=" << straddle_rule << std::endl;
         std::cout << "  debulking: " << (debulking ? "on" : "off") << "  cutting_mode: " << cutting_mode
                   << (cutting_mode == "cut_only"
                       ? " (NO particle removal — true topological cut)"
@@ -488,7 +547,9 @@ struct SimConfigYAML {
             std::cout << "  particle_grid: " << grid_side << "^3, spacing=" << grid_spacing << std::endl;
         std::cout << "  dt=" << dt << ", iters=" << num_iterations
                   << ", stiffness=" << stiffness << ", substeps=" << substeps
-                  << ", tool_substep_interp=" << (tool_substep_interp ? "on" : "off") << std::endl;
+                  << ", tool_substep_interp=" << (tool_substep_interp ? "on" : "off")
+                  << ", tool_proxy=" << (tool_proxy ? "on" : "off")
+                  << ", render.split_tets=" << (render_split_tets ? "on" : "off") << std::endl;
         std::cout << "  knife_radius=" << knife_radius
                   << ", self_collision_radius=" << self_collision_radius << std::endl;
         std::cout << "  fixed_ratio=" << fixed_ratio

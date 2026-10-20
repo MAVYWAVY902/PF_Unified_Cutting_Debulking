@@ -568,7 +568,8 @@ __global__ void self_collision_kernel(
     unsigned int* cell_start, unsigned int* cell_end,
     float3* deltas, int* delta_counts,
     float radius, float stiffness, float cell_size,
-    int table_size, int N)
+    int table_size, int N,
+    ToolDesc tool, int tool_block, float tool_eps)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N) return;
@@ -579,6 +580,12 @@ __global__ void self_collision_kernel(
     if (sorted_hash[idx] >= (unsigned int)table_size) return;  // sentinel
 
     float3 pi = pred_pos[i];
+    // F3: particles the tool lies between do not touch (a blade 0.1-0.3 mm thick separates two
+    // particles closer than 2r; their repulsion pushed particles toward and across the blade's
+    // mid-plane). phi is 1-Lipschitz and a pair is at most 2r long, so the test is only needed
+    // when particle i is within 2r of the tool.
+    bool near_tool = false;
+    if (tool_block) near_tool = tool_query(tool, pi, false).phi < 2.0f * radius;
     int ix = (int)floorf(pi.x / cell_size);
     int iy = (int)floorf(pi.y / cell_size);
     int iz = (int)floorf(pi.z / cell_size);
@@ -607,6 +614,16 @@ __global__ void self_collision_kernel(
                     float dist2 = ex * ex + ey * ey + ez * ez;
 
                     if (dist2 < collision_dist * collision_dist && dist2 > 1e-16f) {
+                        if (near_tool) {                      // F3: tool between i and j?
+                            float3 pj = pred_pos[j];
+                            bool blocked = false;
+                            for (int k = 1; k <= 5 && !blocked; k++) {
+                                float t = k / 6.0f;
+                                blocked = tool_query(tool, make_float3(pi.x + t*(pj.x - pi.x), pi.y + t*(pj.y - pi.y),
+                                                                       pi.z + t*(pj.z - pi.z)), false).phi < -tool_eps;
+                            }
+                            if (blocked) continue;
+                        }
                         float dist = sqrtf(dist2);
                         float overlap = collision_dist - dist;
                         float inv_dist = 1.0f / dist;
@@ -671,15 +688,25 @@ __global__ void tool_damage_kernel(
 
     // intruder distance of the cut channel (also the search band: outside → no update)
     float sdist;
-    if (!cut_channel_sdist(channel, mid, radius, sdist)) return;
+    const bool crossing = channel.kind == CUT_CURVE && channel.prev_pos != nullptr;
+    if (crossing) {
+        if (damage[eid] >= 0.5f) return;      // already at the break threshold (logged once)
+        if (!cut_curve_crossing_sdist(channel, channel.prev_pos[a], channel.prev_pos[b], pred_pos[a], pred_pos[b],
+                                      radius, sdist, eid)) return;
+    } else if (!cut_channel_sdist(channel, mid, radius, sdist)) return;
     float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
 
     // Damage 更新 — capped growth (rate=1.0 → 原 max-update 行为, byte-identical debulk)
+    // Crossing mode: the growth cap models loading DURATION of an intrusion that persists; a
+    // crossing is a completed event (the sharp edge has passed between the particles), so the
+    // damage takes its target at once.
     float rest = pf_rest[eid];
     if (rest > 0.01f) {
         float target = fmaxf(0.0f, 1.0f - pf / rest);
         float gap = target - damage[eid];
-        if (gap > 0.0f) {
+        if (gap > 0.0f && crossing) {
+            damage[eid] = target;
+        } else if (gap > 0.0f) {
             // Toughness model (damage_model=1): high α slows damage growth.
             // Sharpness model (damage_model=0): unchanged (legacy).
             float effective_rate = damage_growth_rate;
@@ -710,7 +737,9 @@ __global__ void tool_straddle_damage_kernel(
     int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
     ToolDesc tool, float sample_h, float eps,
     float alpha_min_scalar, const float* alpha_min_per_edge,
-    float damage_growth_rate, int num_edges, int damage_model, int* topo_dirty)
+    float damage_growth_rate, int num_edges, int damage_model, int* topo_dirty,
+    const float3* prev_pos = nullptr, ToolDesc prev_pose = ToolDesc{}, CrossRec* log = nullptr, int* log_n = nullptr,
+    int log_cap = 0, int detour_k = 0, int sheet_rule = 0)
 {
     int eid = blockIdx.x * blockDim.x + threadIdx.x;
     if (eid >= num_edges || broken[eid]) return;
@@ -718,6 +747,37 @@ __global__ void tool_straddle_damage_kernel(
     if (removed[a] || removed[b]) return;
     float3 pa = pred_pos[a], pb = pred_pos[b];
     float t, phi; float3 n;
+    if (sheet_rule) {
+        // straddle_rule sheet: the tool's 2D intruders cut the element in two (tool_sheet_separates).
+        // Like a sharp-feature crossing this is a completed geometric event, so the damage takes its
+        // P(F) target at once; sdist = distance of the element centre to the sheet - r_e.
+        float sdist;
+        if (!tool_sheet_separates(tool, pa, pb, sdist)) return;
+        float ex = pa.x - pb.x, ey = pa.y - pb.y, ez = pa.z - pb.z;
+        float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
+        if (radius < 1e-10f) return;
+        float alpha_min = (alpha_min_per_edge != nullptr) ? alpha_min_per_edge[eid] : alpha_min_scalar;
+        float pf = 1.0f / (1.0f + expf(-alpha_min * sdist / radius));
+        float rest = pf_rest[eid];
+        const bool first_load = damage[eid] == 0.0f;
+        if (rest > 0.01f) damage[eid] = fmaxf(damage[eid], fmaxf(0.0f, 1.0f - pf / rest));
+        if (damage[eid] > 0.5f) {
+            broken[eid] = 1;
+            if (topo_dirty) *topo_dirty = 1;
+        }
+        if (first_load && damage[eid] > 0.0f && log && prev_pos) {
+            int i = atomicAdd(log_n, 1);
+            if (i < log_cap) {
+                float3 qa = prev_pos[a], qb = prev_pos[b];
+                log[i] = CrossRec{eid, -1, 0.0f, sdist,
+                    tq_rot_T(prev_pose.rot, make_float3(qa.x - prev_pose.pos.x, qa.y - prev_pose.pos.y, qa.z - prev_pose.pos.z)),
+                    tq_rot_T(prev_pose.rot, make_float3(qb.x - prev_pose.pos.x, qb.y - prev_pose.pos.y, qb.z - prev_pose.pos.z)),
+                    tq_rot_T(tool.rot, make_float3(pa.x - tool.pos.x, pa.y - tool.pos.y, pa.z - tool.pos.z)),
+                    tq_rot_T(tool.rot, make_float3(pb.x - tool.pos.x, pb.y - tool.pos.y, pb.z - tool.pos.z))};
+            }
+        }
+        return;
+    }
     if (!tool_edge_deepest(tool, pa, pb, sample_h, t, phi, n)) return;
     float3 x = make_float3(pa.x + t*(pb.x - pa.x), pa.y + t*(pb.y - pa.y), pa.z + t*(pb.z - pa.z));
     // Separation: the tool lies BETWEEN the particles when their outward tool normals point into
@@ -729,12 +789,15 @@ __global__ void tool_straddle_damage_kernel(
     if (phi > -eps) return;
     float3 na = tool_query(tool, pa, true).n, nb = tool_query(tool, pb, true).n;
     if (na.x*nb.x + na.y*nb.y + na.z*nb.z >= 0.0f) return;   // same side (or a normal undefined)
+    // straddle_detour: separated only if the tool cuts the edge's element (minimum ball) in two
+    if (detour_k > 0 && !tool_separates_element(tool, pa, pb, detour_k, sample_h, eps)) return;
     float ex = pa.x - pb.x, ey = pa.y - pb.y, ez = pa.z - pb.z;
     float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
     if (radius < 1e-10f) return;
     float alpha_min = (alpha_min_per_edge != nullptr) ? alpha_min_per_edge[eid] : alpha_min_scalar;
     float pf = 1.0f / (1.0f + expf(-alpha_min * phi / radius));
     float rest = pf_rest[eid];
+    const bool first_load = damage[eid] == 0.0f;   // diagnostics: the evaluation at which the tool first separates e
     if (rest > 0.01f) {
         float target = fmaxf(0.0f, 1.0f - pf / rest);
         float gap = target - damage[eid];
@@ -747,6 +810,19 @@ __global__ void tool_straddle_damage_kernel(
     if (damage[eid] > 0.5f) {
         broken[eid] = 1;
         if (topo_dirty) *topo_dirty = 1;
+    }
+    if (first_load) {
+        if (log && prev_pos) {                 // diagnostics: endpoints (tool frame) now and at the previous evaluation
+            int i = atomicAdd(log_n, 1);
+            if (i < log_cap) {
+                float3 qa = prev_pos[a], qb = prev_pos[b];
+                log[i] = CrossRec{eid, -1, t, phi,
+                    tq_rot_T(prev_pose.rot, make_float3(qa.x - prev_pose.pos.x, qa.y - prev_pose.pos.y, qa.z - prev_pose.pos.z)),
+                    tq_rot_T(prev_pose.rot, make_float3(qb.x - prev_pose.pos.x, qb.y - prev_pose.pos.y, qb.z - prev_pose.pos.z)),
+                    tq_rot_T(tool.rot, make_float3(pa.x - tool.pos.x, pa.y - tool.pos.y, pa.z - tool.pos.z)),
+                    tq_rot_T(tool.rot, make_float3(pb.x - tool.pos.x, pb.y - tool.pos.y, pb.z - tool.pos.z))};
+            }
+        }
     }
 }
 
@@ -838,6 +914,8 @@ static ToolDesc grid_tool_desc(const SimConfigGPU& c, const SDFData& sdf) {
     t.sdf = sdf.d_sdf; t.res_x = sdf.res_x; t.res_y = sdf.res_y; t.res_z = sdf.res_z;
     t.origin = sdf.origin; t.cell = sdf.cell_size;
     t.normal_mode = c.sdf_normal_mode;
+    t.tri = sdf.d_tri; t.n_tri = sdf.n_tri;
+    t.sheet = sdf.d_sheet; t.sheet_seg = sdf.d_sheet_seg; t.n_sheet = sdf.n_sheet;
     return t;
 }
 
@@ -871,6 +949,7 @@ void ShapeMatchingGPUSolver::init(
     CUDA_CHECK(cudaMalloc(&d_particles.pos, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_particles.vel, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_particles.predicted_pos, N * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_particles.pre_apply_pos, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_particles.old_pos, N * sizeof(float3)));
     CUDA_CHECK(cudaMalloc(&d_particles.damage, N * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_particles.damage_sum,   N * sizeof(float)));  // MEAN-aggregation accumulator
@@ -1131,15 +1210,23 @@ __global__ void sdf_collision_kernel(
     }
 }
 
-// Tool SDF collision: transform particle to tool local frame, query SDF
+// Tool SDF collision. mode: 0 = nearest surface (legacy; proj_iter > 1 = F1), 1 = A1 entry side,
+// 2 = CCD (contact_ccd). ref_pos / ref_tool: a position known to be outside the tool and the tool pose
+// it is expressed in — the start of the substep (old_pos, previous pose) for the contact after
+// predict, the position before this iteration's shape-matching apply (pre_apply_pos, current pose)
+// inside the solver loop (tool_query.cuh, tool_project_out_ccd).
 __global__ void tool_sdf_collision_kernel(
-    float3* pred_pos, int* removed, int* fixed, ToolDesc tool, int N)
+    float3* pred_pos, const float3* ref_pos, int* removed, int* fixed, ToolDesc tool,
+    ToolDesc ref_tool, int mode, int proj_iter, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N || removed[i] || fixed[i]) return;
-    // Step 2: via tool_query.cuh (legacy push arithmetic; normal per tool.normal_mode)
     float3 p = pred_pos[i];
-    if (tool_project_out(tool, p)) pred_pos[i] = p;
+    bool moved;
+    if (mode == 2)      moved = tool_project_out_ccd(tool, ref_tool, p, ref_pos[i], proj_iter);
+    else if (mode == 1) moved = tool_project_out_entry(tool, ref_tool, p, ref_pos[i], proj_iter);
+    else                moved = proj_iter > 1 ? tool_project_out_iter(tool, p, proj_iter) : tool_project_out(tool, p);
+    if (moved) pred_pos[i] = p;
 }
 
 // Step 3c — edge contact (FleX-style constraint group with its own delta buffer).
@@ -1239,6 +1326,7 @@ void ShapeMatchingGPUSolver::init_sdf(
 // ============== Cutting Host Functions ==============
 
 void ShapeMatchingGPUSolver::gpu_update_damage() {
+    if (!config.knife_active) cut_prev_valid = false;   // a new contact starts a new sweep
     if (d_edges.num_edges == 0 || !config.knife_active) return;
     int E = d_edges.num_edges;
     int blocks_e = (E + 255) / 256;
@@ -1256,6 +1344,20 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
         ch.seg = d_cut_segments;
         ch.num_seg = (int)h_cut_segments.size() / 2;
         if (ch.num_seg == 0) ch.kind = -1;    // blunt tool: no sharp feature → no feature cut
+        if (config.cut_curve_crossing) {      // crossing mode: sweep since the previous evaluation
+            if (!d_cut_prev_pos) CUDA_CHECK(cudaMalloc(&d_cut_prev_pos, d_particles.N * sizeof(float3)));
+            if (!cut_prev_valid) ch.kind = -1;  // first evaluation of this contact: nothing swept yet
+            ch.prev_tool.pos = cut_prev_pos_tool;
+            memcpy(ch.prev_tool.rot, cut_prev_rot_tool, sizeof(ch.prev_tool.rot));
+            ch.prev_pos = d_cut_prev_pos;
+            ch.nrm = config.cut_curve_leading ? d_cut_normals : nullptr;
+            if (cross_log_on) {
+                if (!d_cross_log) { CUDA_CHECK(cudaMalloc(&d_cross_log, cross_log_cap * sizeof(CrossRec)));
+                                    CUDA_CHECK(cudaMalloc(&d_cross_log_n, sizeof(int))); }
+                CUDA_CHECK(cudaMemset(d_cross_log_n, 0, sizeof(int)));
+                ch.log = d_cross_log; ch.log_n = d_cross_log_n; ch.log_cap = cross_log_cap;
+            }
+        }
     } else if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
         ch.kind = CUT_SURFACE;
         ch.tool = grid_tool_desc(config, d_tool_sdf);
@@ -1277,6 +1379,15 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
         config.damage_growth_rate, E,
         damage_model_mode, local_split ? d_topo_dirty : nullptr);
 
+    if (ch.log && ch.kind == CUT_CURVE) {   // diagnostics: append this evaluation's crossings
+        int n = 0; CUDA_CHECK(cudaMemcpy(&n, d_cross_log_n, sizeof(int), cudaMemcpyDeviceToHost));
+        n = n < cross_log_cap ? n : cross_log_cap;
+        if (n > 0) {
+            size_t o = cross_log.size(); cross_log.resize(o + n);
+            CUDA_CHECK(cudaMemcpy(cross_log.data() + o, d_cross_log, n * sizeof(CrossRec), cudaMemcpyDeviceToHost));
+            cross_log_step.resize(o + n, step_count);
+        }
+    }
     // R3: intact edges the tool body separates (straddle) are under fracture loading
     if (config.straddle_fracture) {
         ToolDesc tool;
@@ -1289,13 +1400,60 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
             tool = make_sphere_tool(config.knife_pos, config.knife_radius);
             eps = 1e-5f * config.knife_radius;  // analytic sphere: float precision only
         }
+        ToolDesc sl_prev = tool; sl_prev.pos = cut_prev_pos_tool;   // diagnostics: pose of the previous evaluation
+        memcpy(sl_prev.rot, cut_prev_rot_tool, sizeof(sl_prev.rot));
+        if (cross_log_on && !d_strad_log) { CUDA_CHECK(cudaMalloc(&d_strad_log, cross_log_cap * sizeof(CrossRec)));
+                                            CUDA_CHECK(cudaMalloc(&d_strad_log_n, sizeof(int))); }
+        if (cross_log_on) CUDA_CHECK(cudaMemset(d_strad_log_n, 0, sizeof(int)));
         tool_straddle_damage_kernel<<<blocks_e, 256>>>(
             d_particles.predicted_pos, d_particles.removed,
             d_edges.particle_a, d_edges.particle_b,
             d_edges.pf_rest, d_edges.damage, d_edges.broken,
             tool, h, eps, alpha_min, alpha_arr,
-            config.damage_growth_rate, E, damage_model_mode, local_split ? d_topo_dirty : nullptr);
+            config.damage_growth_rate, E, damage_model_mode, local_split ? d_topo_dirty : nullptr,
+            (cross_log_on && cut_prev_valid) ? d_cut_prev_pos : nullptr, sl_prev,
+            cross_log_on ? d_strad_log : nullptr, d_strad_log_n, cross_log_cap,
+            config.straddle_detour ? config.straddle_detour_k : 0, config.straddle_sheet);
+        if (cross_log_on && cut_prev_valid) {
+            int n = 0; CUDA_CHECK(cudaMemcpy(&n, d_strad_log_n, sizeof(int), cudaMemcpyDeviceToHost));
+            n = n < cross_log_cap ? n : cross_log_cap;
+            if (n > 0) {
+                size_t o = strad_log.size(); strad_log.resize(o + n);
+                CUDA_CHECK(cudaMemcpy(strad_log.data() + o, d_strad_log, n * sizeof(CrossRec), cudaMemcpyDeviceToHost));
+                strad_log_step.resize(o + n, step_count);
+            }
+        }
     }
+    // crossing mode: this evaluation's state is the next one's "previous"
+    if (config.use_sharp_edge_damage && config.cut_curve_crossing) {
+        CUDA_CHECK(cudaMemcpy(d_cut_prev_pos, d_particles.predicted_pos, d_particles.N * sizeof(float3),
+                              cudaMemcpyDeviceToDevice));
+        cut_prev_pos_tool = config.knife_pos;
+        memcpy(cut_prev_rot_tool, config.knife_rot, sizeof(cut_prev_rot_tool));
+        cut_prev_valid = true;
+    }
+
+}
+
+void ShapeMatchingGPUSolver::set_tool_sheets(const std::vector<ToolSheetGPU>& sheets, const std::vector<float4>& seg) {
+    if (d_tool_sdf.d_sheet) { cudaFree(d_tool_sdf.d_sheet); d_tool_sdf.d_sheet = nullptr; }
+    if (d_tool_sdf.d_sheet_seg) { cudaFree(d_tool_sdf.d_sheet_seg); d_tool_sdf.d_sheet_seg = nullptr; }
+    d_tool_sdf.n_sheet = (int)sheets.size();
+    if (sheets.empty()) return;
+    CUDA_CHECK(cudaMalloc(&d_tool_sdf.d_sheet, sheets.size() * sizeof(ToolSheetGPU)));
+    CUDA_CHECK(cudaMemcpy(d_tool_sdf.d_sheet, sheets.data(), sheets.size() * sizeof(ToolSheetGPU), cudaMemcpyHostToDevice));
+    if (!seg.empty()) {
+        CUDA_CHECK(cudaMalloc(&d_tool_sdf.d_sheet_seg, seg.size() * sizeof(float4)));
+        CUDA_CHECK(cudaMemcpy(d_tool_sdf.d_sheet_seg, seg.data(), seg.size() * sizeof(float4), cudaMemcpyHostToDevice));
+    }
+}
+
+void ShapeMatchingGPUSolver::set_tool_triangles(const std::vector<float3>& tri4) {
+    if (d_tool_sdf.d_tri) { cudaFree(d_tool_sdf.d_tri); d_tool_sdf.d_tri = nullptr; }
+    d_tool_sdf.n_tri = (int)tri4.size() / 4;
+    if (d_tool_sdf.n_tri == 0) return;
+    CUDA_CHECK(cudaMalloc(&d_tool_sdf.d_tri, tri4.size() * sizeof(float3)));
+    CUDA_CHECK(cudaMemcpy(d_tool_sdf.d_tri, tri4.data(), tri4.size() * sizeof(float3), cudaMemcpyHostToDevice));
 }
 
 // Upload the CUT_CURVE features when set_cut_segments changed them.
@@ -1308,6 +1466,11 @@ void ShapeMatchingGPUSolver::sync_cut_segments() {
         d_cut_segments_cap = n;
     }
     if (n > 0) CUDA_CHECK(cudaMemcpy(d_cut_segments, h_cut_segments.data(), n * sizeof(float3), cudaMemcpyHostToDevice));
+    if (d_cut_normals) { cudaFree(d_cut_normals); d_cut_normals = nullptr; }
+    if (n > 0 && has_cut_normals()) {
+        CUDA_CHECK(cudaMalloc(&d_cut_normals, n * sizeof(float3)));
+        CUDA_CHECK(cudaMemcpy(d_cut_normals, h_cut_normals.data(), n * sizeof(float3), cudaMemcpyHostToDevice));
+    }
     cut_segments_dirty = false;
 }
 
@@ -1351,6 +1514,44 @@ void ShapeMatchingGPUSolver::gpu_aspirate() {
     aspirate_kernel<<<blocks_n, 256>>>(
         d_particles.predicted_pos, d_particles.damage, d_particles.removed,
         tool, aspiration_threshold, tau_arr, N, local_split ? d_topo_dirty : nullptr);
+}
+
+__global__ void trace_copy_kernel(const float3* pos, const int* ids, float3* out, int n) {
+    int k = blockIdx.x * blockDim.x + threadIdx.x;
+    if (k < n) out[k] = pos[ids[k]];
+}
+void ShapeMatchingGPUSolver::set_trace(const std::vector<int>& ids) {
+    trace_ids = ids;
+    if (ids.empty()) return;
+    CUDA_CHECK(cudaMalloc(&d_trace_ids, ids.size() * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_trace_buf, ids.size() * sizeof(float3)));
+    CUDA_CHECK(cudaMemcpy(d_trace_ids, ids.data(), ids.size() * sizeof(int), cudaMemcpyHostToDevice));
+}
+void ShapeMatchingGPUSolver::trace_point(int stage, int iter) {
+    if (!trace_on || trace_ids.empty()) return;
+    int n = (int)trace_ids.size();
+    trace_copy_kernel<<<(n + 255) / 256, 256>>>(d_particles.predicted_pos, d_trace_ids, d_trace_buf, n);
+    TraceRec r; r.step = step_count; r.stage = stage; r.iter = iter; r.kpos = config.knife_pos;
+    for (int k = 0; k < 9; k++) r.krot[k] = config.knife_rot[k];
+    r.pos.resize(n);
+    CUDA_CHECK(cudaMemcpy(r.pos.data(), d_trace_buf, n * sizeof(float3), cudaMemcpyDeviceToHost));
+    trace_log.push_back(std::move(r));
+}
+
+// A1: tool pose at the start of the current substep (= the previous substep's pose)
+ToolDesc ShapeMatchingGPUSolver::prev_tool_desc() const {
+    SimConfigGPU c = config;
+    if (knife_prev_valid) { c.knife_pos = knife_pos_prev; for (int k = 0; k < 9; k++) c.knife_rot[k] = knife_rot_prev[k]; }
+    return grid_tool_desc(c, d_tool_sdf);
+}
+// 2 = CCD, 1 = A1 entry side (both need the previous pose: without it the reference is read in the
+// current pose), 0 = nearest surface
+int ShapeMatchingGPUSolver::tool_contact_mode() const {
+    if (config.contact_ccd) return 2;
+    return entry_side_active();
+}
+int ShapeMatchingGPUSolver::entry_side_active() const {
+    return (config.entry_side_contact && knife_prev_valid) ? 1 : 0;   // no previous pose → nearest face
 }
 
 // ============== R1: sub-cluster setup ==============
@@ -1430,6 +1631,7 @@ void ShapeMatchingGPUSolver::step() {
         d_particles.predicted_pos, d_particles.old_pos,
         d_particles.removed, d_particles.fixed,
         config.gravity, config.dt, config.damping, N);
+    trace_point(0, -1);
 
     // 2. Collision (predict 后) — floor + sphere tool
     collision_kernel<<<blocks_n, 256>>>(
@@ -1441,9 +1643,11 @@ void ShapeMatchingGPUSolver::step() {
 
     // 2a. Tool SDF collision (if mesh tool)
     if (config.tool_type == 1 && config.knife_active && d_tool_sdf.active && d_tool_sdf.d_sdf) {
+        // reference = start of the substep, expressed in the previous substep's tool pose
         tool_sdf_collision_kernel<<<blocks_n, 256>>>(
-            d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
-            grid_tool_desc(config, d_tool_sdf), N);
+            d_particles.predicted_pos, d_particles.old_pos, d_particles.removed, d_particles.fixed,
+            grid_tool_desc(config, d_tool_sdf), prev_tool_desc(), tool_contact_mode(),
+            config.contact_iterate ? 8 : 1, N);
     }
 
     // 2b. Rigid SDF collision
@@ -1455,6 +1659,7 @@ void ShapeMatchingGPUSolver::step() {
             d_rigid_sdf.origin, d_rigid_sdf.cell_size,
             config.friction_s, config.friction_k, N);
     }
+    trace_point(1, -1);
 
     // R1: sub-cluster labels from the current broken edges / removed particles
     if (local_split) update_cluster_labels();
@@ -1487,6 +1692,15 @@ void ShapeMatchingGPUSolver::step() {
                 C);
         }
 
+        // CCD (contact_ccd): the positions before this iteration's apply — just put outside the tool
+        // by the previous contact — are the reference of this iteration's tool contact. One apply
+        // carried particles up to 7.7 mm, clean over a 6.3 mm blade (measured), which a contact that
+        // only looks at the end position cannot see.
+        const bool ccd_on = tool_contact_mode() == 2;
+        if (ccd_on)
+            CUDA_CHECK(cudaMemcpyAsync(d_particles.pre_apply_pos, d_particles.predicted_pos, N * sizeof(float3),
+                                       cudaMemcpyDeviceToDevice));
+
         // Apply shape-match delta (avg over ~60 cluster memberships)
         // Day (2026-05-24): dispatch to per-particle stiffness variant when enabled.
         // Global path (else branch) is BYTE-IDENTICAL to original behavior.
@@ -1502,8 +1716,15 @@ void ShapeMatchingGPUSolver::step() {
                 config.stiffness, N);
         }
 
+        trace_point(2, iter);
         // ---- Group 2: self-collision (separate delta buffer, no shape-match dilution) ----
         if (config.self_collision_enabled && d_cell_hash) {
+            // F3: pairs separated by a mesh tool do not collide
+            ToolDesc sc_tool = {}; int sc_block = 0; float sc_eps = 0.0f;
+            if (config.selfcol_tool_block && config.knife_active && config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
+                sc_tool = grid_tool_desc(config, d_tool_sdf); sc_block = 1;
+                sc_eps = 0.5f * fminf(sc_tool.cell.x, fminf(sc_tool.cell.y, sc_tool.cell.z));
+            }
             clear_deltas_kernel<<<blocks_n, 256>>>(d_deltas_sc, d_delta_counts_sc, N);
             build_hash_grid();
             float cell_size = config.self_collision_radius * 2.0f;
@@ -1513,13 +1734,15 @@ void ShapeMatchingGPUSolver::step() {
                 d_cell_start, d_cell_end,
                 d_deltas_sc, d_delta_counts_sc,      // SEPARATE buffer (was d_deltas)
                 config.self_collision_radius, config.self_collision_stiffness,
-                cell_size, HASH_TABLE_SIZE, N);
+                cell_size, HASH_TABLE_SIZE, N,
+                sc_tool, sc_block, sc_eps);
             // Apply self-collision delta (avg over only the colliding pairs, ~2-8)
             apply_self_collision_kernel<<<blocks_n, 256>>>(
                 d_particles.predicted_pos, d_deltas_sc, d_delta_counts_sc,
                 d_particles.removed, d_particles.fixed, N);
         }
 
+        trace_point(3, iter);
         // ---- Group 3: hard contacts (direct write to pred_pos) ----
         // Collision (每次迭代) — floor (带 Coulomb 摩擦) + sphere tool
         collision_kernel<<<blocks_n, 256>>>(
@@ -1531,11 +1754,16 @@ void ShapeMatchingGPUSolver::step() {
 
         // Tool SDF collision (每次迭代)
         if (config.tool_type == 1 && config.knife_active && d_tool_sdf.active && d_tool_sdf.d_sdf) {
+            // CCD: reference = pre-apply positions in the CURRENT pose; A1 / legacy: as before
+            ToolDesc cur_tool = grid_tool_desc(config, d_tool_sdf);
             tool_sdf_collision_kernel<<<blocks_n, 256>>>(
-                d_particles.predicted_pos, d_particles.removed, d_particles.fixed,
-                grid_tool_desc(config, d_tool_sdf), N);
+                d_particles.predicted_pos, ccd_on ? d_particles.pre_apply_pos : d_particles.old_pos,
+                d_particles.removed, d_particles.fixed,
+                cur_tool, ccd_on ? cur_tool : prev_tool_desc(), tool_contact_mode(),
+                config.contact_iterate ? 8 : 1, N);
         }
 
+        trace_point(4, iter);
         // Edge contact (Step 3c, 每次迭代): intact edges passing through the tool body
         if (config.edge_contact && config.knife_active && d_edges.num_edges > 0) {
             ToolDesc tool;
@@ -1566,6 +1794,7 @@ void ShapeMatchingGPUSolver::step() {
                 d_rigid_sdf.origin, d_rigid_sdf.cell_size,
                 config.friction_s, config.friction_k, N);
         }
+        trace_point(5, iter);
     }
 
     // SDF collision debug (every 500 steps)
@@ -1587,6 +1816,7 @@ void ShapeMatchingGPUSolver::step() {
     // cut_only 模式: 仍跑 edge damage 更新 + particle damage 聚合(stiffness 软化用),
     //               但跳过 gpu_aspirate() — 粒子不被 CUSA 吸走。
     //               连通性切断通过 CPU 端的 cluster split (cpu_bfs_split Phase 2) 实现。
+    if (!config.knife_active) cut_prev_valid = false;   // crossing mode: the sweep restarts on the next contact
     if (config.knife_active && d_edges.num_edges > 0 &&
         (step_count % cutting_update_interval == 0)) {
         gpu_update_damage();
@@ -1597,6 +1827,12 @@ void ShapeMatchingGPUSolver::step() {
     }
     step_count++;
 
+    // A1: this substep's tool pose is the next substep's "previous" pose
+    knife_pos_prev = config.knife_pos;
+    for (int k = 0; k < 9; k++) knife_rot_prev[k] = config.knife_rot[k];
+    knife_prev_valid = config.knife_active != 0;
+
+    trace_point(6, -1);
     // 5. Update velocity
     float inv_dt = 1.0f / config.dt;
     update_velocity_kernel<<<blocks_n, 256>>>(
@@ -1743,10 +1979,16 @@ void ShapeMatchingGPUSolver::build_hash_grid() {
 
 void ShapeMatchingGPUSolver::cleanup() {
     if (d_cut_segments) { cudaFree(d_cut_segments); d_cut_segments = nullptr; }
+    if (d_cut_prev_pos) { cudaFree(d_cut_prev_pos); d_cut_prev_pos = nullptr; }
+    if (d_cut_normals) { cudaFree(d_cut_normals); d_cut_normals = nullptr; }
+    if (d_tool_sdf.d_tri) { cudaFree(d_tool_sdf.d_tri); d_tool_sdf.d_tri = nullptr; }
+    if (d_tool_sdf.d_sheet) { cudaFree(d_tool_sdf.d_sheet); d_tool_sdf.d_sheet = nullptr; }
+    if (d_tool_sdf.d_sheet_seg) { cudaFree(d_tool_sdf.d_sheet_seg); d_tool_sdf.d_sheet_seg = nullptr; }
     if (d_cl_edge_start) { cudaFree(d_cl_edge_start); cudaFree(d_cl_edge_eid); cudaFree(d_cl_edge_uv); cudaFree(d_labels); cudaFree(d_topo_dirty); cudaFree(d_cluster_multi); }
     cudaFree(d_particles.pos);
     cudaFree(d_particles.vel);
     cudaFree(d_particles.predicted_pos);
+    cudaFree(d_particles.pre_apply_pos);
     cudaFree(d_particles.old_pos);
     cudaFree(d_particles.damage);
     cudaFree(d_particles.damage_sum);

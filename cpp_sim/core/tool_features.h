@@ -29,6 +29,8 @@
 
 struct SharpFeatures {
     std::vector<Vec3> seg;       // pairs (seg[2k], seg[2k+1]); a point feature has seg[2k] == seg[2k+1]
+    std::vector<Vec3> nrm;       // pairs (nrm[2k], nrm[2k+1]): outward normals of the two faces of a sharp
+                                 //   edge (they span its normal cone); zero for a point feature
     int n_edges = 0, n_points = 0;
     int boundary_edges = 0, nonmanifold_edges = 0, misoriented_edges = 0;
     double sharp_length = 0.0;   // total length of the sharp edges
@@ -100,6 +102,7 @@ inline SharpFeatures extract_sharp_features(const RigidMesh& m, double sharp_ang
         if (!convex) vert_ok[a] = vert_ok[b] = 0;     // solid-angle formula needs a convex cone
         if (convex && theta < theta_max) {
             out.seg.push_back(P[a]); out.seg.push_back(P[b]);
+            out.nrm.push_back(n1); out.nrm.push_back(n2);
             out.n_edges++;
             out.sharp_length += (P[a] - P[b]).norm();
             on_sharp_edge[a] = on_sharp_edge[b] = 1;
@@ -114,6 +117,7 @@ inline SharpFeatures extract_sharp_features(const RigidMesh& m, double sharp_ang
         double omega = sum - ((double)vert_edges[v].size() - 2.0) * PI;
         if (omega < omega_max) {
             out.seg.push_back(P[v]); out.seg.push_back(P[v]);
+            out.nrm.push_back(Vec3::Zero()); out.nrm.push_back(Vec3::Zero());
             out.n_points++;
         }
     }
@@ -129,7 +133,93 @@ inline void print_sharp_features(const SharpFeatures& f, double sharp_angle_deg,
     for (int k = 0; k < n && k < max_list; k++) {
         const Vec3 &a = f.seg[2 * k], &b = f.seg[2 * k + 1];
         if (a == b) std::printf("    point (%.5f, %.5f, %.5f)\n", a.x(), a.y(), a.z());
-        else        std::printf("    edge  (%.5f, %.5f, %.5f) - (%.5f, %.5f, %.5f)\n", a.x(), a.y(), a.z(), b.x(), b.y(), b.z());
+        else {
+            std::printf("    edge  (%.5f, %.5f, %.5f) - (%.5f, %.5f, %.5f)", a.x(), a.y(), a.z(), b.x(), b.y(), b.z());
+            if ((int)f.nrm.size() == 2 * n)
+                std::printf("  face normals (%.3f, %.3f, %.3f) (%.3f, %.3f, %.3f)", f.nrm[2*k].x(), f.nrm[2*k].y(), f.nrm[2*k].z(),
+                            f.nrm[2*k+1].x(), f.nrm[2*k+1].y(), f.nrm[2*k+1].z());
+            std::printf("\n");
+        }
     }
     if (n > max_list) std::printf("    ... %d more\n", n - max_list);
+}
+
+// Straddle rule "sheet" — the 2D intruders of a tool (intruder-dimension framework, paper §3.2).
+// A sharp edge is the rim of a blade; the blade is the SHEET through the edge on the bisector
+// plane of its two faces (normal m = n1 - n2, normalised). The sheet's extent is the cross-section
+// of the tool solid with that plane, kept as a set of 2D boundary segments (any number of loops,
+// convex or not). An edge element (minimum ball B of the edge, endpoints a, b) is cut in two by
+// the tool when a and b lie on opposite sides of the plane and the disk B ∩ plane lies inside the
+// cross-section: then B minus the sheet has two components, a in one and b in the other. If any
+// part of the disk is outside the cross-section, the material connects around the sheet's rim.
+// Since the sheet is part of the solid, a separation by the sheet is a separation by the tool.
+struct ToolSheet {
+    Vec3 o, m, u, v;                               // plane point, unit normal, in-plane basis (u, v, m right-handed)
+    std::vector<std::array<double, 4>> seg;       // cross-section boundary, (u0, v0, u1, v1), oriented
+    double area = 0.0;                             // enclosed area (shoelace over the oriented segments)
+};
+
+inline std::vector<ToolSheet> extract_tool_sheets(const RigidMesh& mesh, const SharpFeatures& f) {
+    std::vector<ToolSheet> out;
+    Vec3 bmin, bmax; mesh.get_bounds(bmin, bmax);
+    const double tol = 1e-7 * (bmax - bmin).norm();
+    double vol = 0.0;                              // outward face normals: sign of the enclosed volume
+    for (const auto& fc : mesh.faces)
+        vol += mesh.vertices[fc[0]].dot(mesh.vertices[fc[1]].cross(mesh.vertices[fc[2]])) / 6.0;
+    const double sg = vol >= 0.0 ? 1.0 : -1.0;
+    const int n = (int)f.seg.size() / 2;
+    for (int k = 0; k < n; k++) {
+        if (f.seg[2 * k] == f.seg[2 * k + 1] || (int)f.nrm.size() < 2 * n) continue;   // point feature
+        Vec3 m = f.nrm[2 * k] - f.nrm[2 * k + 1];
+        if (m.norm() < 1e-12) continue;
+        m.normalize();
+        const Vec3 o = f.seg[2 * k];
+        bool dup = false;                          // features on one plane share one sheet
+        for (const auto& s : out)
+            if (std::fabs(std::fabs(s.m.dot(m)) - 1.0) < 1e-9 && std::fabs(s.m.dot(o - s.o)) < tol) { dup = true; break; }
+        if (dup) continue;
+        ToolSheet s; s.o = o; s.m = m;
+        Vec3 a = std::fabs(m.x()) < 0.9 ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
+        s.u = (a - m * m.dot(a)).normalized();
+        s.v = m.cross(s.u);
+        for (const auto& fc : mesh.faces) {
+            Vec3 P[3]; double d[3];
+            for (int i = 0; i < 3; i++) {
+                P[i] = mesh.vertices[fc[i]];
+                d[i] = m.dot(P[i] - o);
+                if (std::fabs(d[i]) < tol) d[i] = 0.0;   // on the plane: counted on the + side (consistent per vertex)
+            }
+            Vec3 X[2]; int nx = 0;
+            for (int i = 0; i < 3; i++) {
+                int j = (i + 1) % 3;
+                if ((d[i] < 0.0) != (d[j] < 0.0)) {
+                    X[nx++] = d[j] == 0.0 ? P[j] : d[i] == 0.0 ? P[i] : P[i] + (P[j] - P[i]) * (d[i] / (d[i] - d[j]));
+                }
+            }
+            if (nx != 2) continue;
+            Vec3 nf = sg * (P[1] - P[0]).cross(P[2] - P[0]);
+            if ((X[1] - X[0]).dot(m.cross(nf)) < 0.0) std::swap(X[0], X[1]);   // solid on the left (CCW about m)
+            std::array<double, 4> e = {s.u.dot(X[0] - o), s.v.dot(X[0] - o), s.u.dot(X[1] - o), s.v.dot(X[1] - o)};
+            if (e[0] == e[2] && e[1] == e[3]) continue;
+            s.area += 0.5 * (e[0] * e[3] - e[2] * e[1]);
+            s.seg.push_back(e);
+        }
+        out.push_back(s);
+    }
+    return out;
+}
+
+inline void print_tool_sheets(const std::vector<ToolSheet>& sh) {
+    std::printf("[straddle-sheet] %zu sheet(s) from the sharp edges\n", sh.size());
+    for (const auto& s : sh) {
+        double u0 = 1e30, u1 = -1e30, v0 = 1e30, v1 = -1e30;
+        for (const auto& e : s.seg) {
+            u0 = std::min({u0, e[0], e[2]}); u1 = std::max({u1, e[0], e[2]});
+            v0 = std::min({v0, e[1], e[3]}); v1 = std::max({v1, e[1], e[3]});
+        }
+        std::printf("    plane n (%.3f, %.3f, %.3f) through (%.5f, %.5f, %.5f): %zu boundary segments,"
+                    " area %.2f mm^2, extent %.2f x %.2f mm\n",
+                    s.m.x(), s.m.y(), s.m.z(), s.o.x(), s.o.y(), s.o.z(), s.seg.size(), s.area * 1e6,
+                    (u1 - u0) * 1e3, (v1 - v0) * 1e3);
+    }
 }

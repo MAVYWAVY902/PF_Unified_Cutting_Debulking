@@ -38,8 +38,9 @@ inline bool cpu_bfs_split(
     bool enable_fragment_drop = true,    // false in cut_only mode
     int* out_components = nullptr,       // OUT (optional): connected components of alive particles
     int* out_broken_edges = nullptr,     // OUT (optional): edges with broken flag set
-    bool recluster = true)               // false with R1 local_split: clusters are split per
+    bool recluster = true,               // false with R1 local_split: clusters are split per
                                          //   sub-cluster on the GPU; no global re-clustering
+    std::unordered_set<int64_t>* out_broken_set = nullptr)   // OUT (optional): broken edges (render.split_tets)
 {
     int N = cpu_solver.particles.size();
     int E = (int)edge_a.size();
@@ -130,6 +131,8 @@ inline bool cpu_bfs_split(
             if (i != largest_idx) kept_big++;
         }
     }
+
+    if (out_broken_set) *out_broken_set = broken_edge_set;
 
     // ★ Scheme B: 计算 tet_broken[T] — 跟踪哪些 tet 含 broken 边,
     //   让 rebuild_surface_faces 跳过这些 tet → 切口处出现可见开口。
@@ -350,6 +353,19 @@ struct FramePipeline {
     bool prev_valid = false;
     float3 prev_pos = {0, 0, 0};
     float prev_rot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    // B — tool proxy (virtual coupling). The input (mouse / Haply / replay) sets a TARGET pose; the
+    // simulated tool is a proxy that moves toward it by at most proxy_max_step per substep, measured
+    // as the largest displacement of any tool point (|dp| + angle * tool_reach). Contact resolves a
+    // particle only if the tool moved less than a particle radius within the substep (CFL): an input
+    // jump of tens of mm in one substep (measured: median 8.4, max 260 mm per frame from the mouse)
+    // swept the tool through the tissue, which contact cannot push aside, so everything swept was cut.
+    // While the tool is off the proxy follows the target exactly (no interaction to protect).
+    bool tool_proxy = false;
+    double proxy_max_step = 0.0;      // [m] per substep: particle radius = 0.5 * mean particle spacing
+    double tool_reach = 0.0;          // [m] largest distance of a tool point from the tool origin
+    bool proxy_valid = false;
+    float3 proxy_pos = {0, 0, 0};
+    float proxy_rot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 };
 
 struct FrameResult {
@@ -366,6 +382,7 @@ struct FrameResult {
     // Topology (Step 1, needed when debulking is off and removal stays 0). Only measured on
     // frames where BFS runs; -1 on other frames (the stats writer carries the last value).
     int components = -1, broken_edges = -1;
+    double proxy_lag = 0.0;           // [m] B: distance from the proxy to the target after the frame
 };
 
 // knife_active: same flag the viewer previously read from viewer.knife_active (gates BFS).
@@ -381,11 +398,63 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
         // the way from the previous frame's pose (last substep = target).
         const float3 tgt_pos = P.gpu.config.knife_pos;
         float tgt_rot[9]; for (int k = 0; k < 9; k++) tgt_rot[k] = P.gpu.config.knife_rot[k];
-        const bool interp = P.tool_interp && knife_active && P.prev_valid;
+        const bool proxy = P.tool_proxy && P.proxy_max_step > 0.0;
+        const bool interp = !proxy && P.tool_interp && knife_active && P.prev_valid;
         Quatd qa = {1, 0, 0, 0}, qb = {1, 0, 0, 0};
         if (interp) { qa = quat_from_rot(P.prev_rot); qb = quat_from_rot(tgt_rot); }
+        if (proxy && (!knife_active || !P.proxy_valid)) {   // tool off: the proxy sits on the target
+            P.proxy_pos = tgt_pos; for (int k = 0; k < 9; k++) P.proxy_rot[k] = tgt_rot[k];
+            P.proxy_valid = true;
+        }
+        const Quatd q_tgt = quat_from_rot(tgt_rot);
+        // B: the step limit only matters where the tool can touch tissue. Region = AABB of the alive
+        // particles (last downloaded positions) grown by the tool reach plus one step; the part of the
+        // proxy's path outside it is travelled at once (e.g. the tool brought in from its parking pose).
+        double blo[3] = {1e30, 1e30, 1e30}, bhi[3] = {-1e30, -1e30, -1e30};
+        if (proxy && knife_active) {
+            for (int i = 0; i < N; i++) {
+                if (P.removed[i]) continue;
+                const float3& p = P.positions[i];
+                blo[0] = std::min(blo[0], (double)p.x); blo[1] = std::min(blo[1], (double)p.y); blo[2] = std::min(blo[2], (double)p.z);
+                bhi[0] = std::max(bhi[0], (double)p.x); bhi[1] = std::max(bhi[1], (double)p.y); bhi[2] = std::max(bhi[2], (double)p.z);
+            }
+            double g = P.tool_reach + P.proxy_max_step;
+            for (int k = 0; k < 3; k++) { blo[k] -= g; bhi[k] += g; }
+        }
         for (int sub = 0; sub < substeps; sub++) {
-            if (interp) {
+            if (proxy && knife_active) {
+                double dx = tgt_pos.x - P.proxy_pos.x, dy = tgt_pos.y - P.proxy_pos.y, dz = tgt_pos.z - P.proxy_pos.z;
+                Quatd qp = quat_from_rot(P.proxy_rot);
+                // free part of the path: segment proxy -> target against the region (slab test)
+                double o[3] = {P.proxy_pos.x, P.proxy_pos.y, P.proxy_pos.z}, dv[3] = {dx, dy, dz};
+                double t_in = 0.0, t_out = 1.0;
+                for (int k = 0; k < 3 && t_in <= t_out; k++) {
+                    if (std::fabs(dv[k]) < 1e-15) { if (o[k] < blo[k] || o[k] > bhi[k]) t_in = 2.0; continue; }
+                    double a = (blo[k] - o[k]) / dv[k], b = (bhi[k] - o[k]) / dv[k];
+                    if (a > b) std::swap(a, b);
+                    t_in = std::max(t_in, a); t_out = std::min(t_out, b);
+                }
+                double t_free = (t_in > t_out) ? 1.0 : t_in;    // never enters the region: go all the way
+                if (t_free > 0.0) {
+                    if (t_free >= 1.0) { P.proxy_pos = tgt_pos; for (int k = 0; k < 9; k++) P.proxy_rot[k] = tgt_rot[k]; }
+                    else {
+                        P.proxy_pos = make_float3((float)(o[0] + t_free * dx), (float)(o[1] + t_free * dy), (float)(o[2] + t_free * dz));
+                        rot_from_quat(slerp(qp, q_tgt, t_free), P.proxy_rot);
+                    }
+                    dx = tgt_pos.x - P.proxy_pos.x; dy = tgt_pos.y - P.proxy_pos.y; dz = tgt_pos.z - P.proxy_pos.z;
+                    qp = quat_from_rot(P.proxy_rot);
+                }
+                double d = std::fabs(qp.w*q_tgt.w + qp.x*q_tgt.x + qp.y*q_tgt.y + qp.z*q_tgt.z);
+                double ang = 2.0 * std::acos(std::min(1.0, d));
+                double sweep = std::sqrt(dx*dx + dy*dy + dz*dz) + ang * P.tool_reach;   // bound on any tool point
+                double f = sweep > P.proxy_max_step ? P.proxy_max_step / sweep : 1.0;
+                P.proxy_pos = make_float3((float)(P.proxy_pos.x + f * dx), (float)(P.proxy_pos.y + f * dy),
+                                          (float)(P.proxy_pos.z + f * dz));
+                if (f >= 1.0) for (int k = 0; k < 9; k++) P.proxy_rot[k] = tgt_rot[k];
+                else rot_from_quat(slerp(qp, q_tgt, f), P.proxy_rot);
+                P.gpu.config.knife_pos = P.proxy_pos;
+                for (int k = 0; k < 9; k++) P.gpu.config.knife_rot[k] = P.proxy_rot[k];
+            } else if (interp) {
                 double t = (double)(sub + 1) / substeps;
                 P.gpu.config.knife_pos = make_float3((float)(P.prev_pos.x + t * (tgt_pos.x - P.prev_pos.x)),
                                                      (float)(P.prev_pos.y + t * (tgt_pos.y - P.prev_pos.y)),
@@ -394,6 +463,10 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
                 else rot_from_quat(slerp(qa, qb, t), P.gpu.config.knife_rot);
             }
             P.gpu.step();
+        }
+        if (proxy) {
+            double lx = tgt_pos.x - P.proxy_pos.x, ly = tgt_pos.y - P.proxy_pos.y, lz = tgt_pos.z - P.proxy_pos.z;
+            res.proxy_lag = std::sqrt(lx*lx + ly*ly + lz*lz);
         }
         P.prev_valid = knife_active;
         P.prev_pos = tgt_pos;
@@ -490,7 +563,8 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
                 P.edge_a, P.edge_b, P.edge_pf_rest,
                 P.positions, P.removed,
                 P.tet_broken,
-                P.tet_mesh, 5, enable_drop, &res.components, &res.broken_edges, !P.local_split);
+                P.tet_mesh, 5, enable_drop, &res.components, &res.broken_edges, !P.local_split,
+                P.tet_mesh.split_render ? &P.tet_mesh.broken_edges : nullptr);
             res.bfs_ms = std::chrono::duration<double, std::milli>(
                              std::chrono::high_resolution_clock::now() - t_bfs0).count();
             // Scheme B: 即使 `changed`=false (无 fragment 删除/cluster split),

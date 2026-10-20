@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cross_rec.h"
+#include "tool_sheet.h"
 #include <cuda_runtime.h>
 #include <vector>
 
@@ -8,6 +10,7 @@ struct ParticlesGPU {
     float3* pos;
     float3* vel;
     float3* predicted_pos;
+    float3* pre_apply_pos; // contact_ccd: positions before each iteration's shape-matching apply
     float3* old_pos;       // 用于速度更新
     float* damage;         // per-particle MEAN edge damage (monotonic, only increases)
     float* damage_sum;     // [N] accumulator for mean aggregation — zeroed each cutting step
@@ -82,6 +85,28 @@ struct SimConfigGPU {
     int edge_contact = 0;
     // R3: 1 = intact edges separated by the tool body (straddle) accumulate P(F) damage
     int straddle_fracture = 0;
+    // A1: 1 = a particle inside a mesh tool is returned to the side it entered from (not the nearest face)
+    int entry_side_contact = 0;
+    // F1: 1 = mesh-tool contact repeats the projection until the particle is out (<= 8 pushes)
+    int contact_iterate = 0;
+    // F3: 1 = self-collision pairs with a mesh tool between them are skipped
+    int selfcol_tool_block = 0;
+    // 1 = CUT_CURVE cuts an edge when the sharp feature passes BETWEEN its particles (swept crossing);
+    // 0 = legacy proximity (edge midpoint within r_e of the feature)
+    int cut_curve_crossing = 0;
+    // CCD tool contact: a particle whose path since a known-outside reference crossed the tool is put
+    // back on the entry face (tool_query.cuh tool_project_out_ccd)
+    int contact_ccd = 0;
+    // R3 loads an edge only if the tool cuts its element (minimum ball) in two: no detour a -> c -> b
+    // around the tool through K points of the ball sphere (straddle_detour, straddle_detour_k)
+    int straddle_detour = 0;
+    int straddle_detour_k = 32;
+    // R3 rule: 0 = segment (the segment passes through the tool, outward normals opposed); 1 = sheet
+    // (the tool's 2D intruders cut the edge's element in two, exact; tool_query.cuh tool_sheet_separates)
+    int straddle_sheet = 0;
+    // 1 (with crossing) = a crossing cuts only if the feature LEADS: the tool's motion relative to the
+    // tissue lies in the feature's normal cone (cut_curve: leading)
+    int cut_curve_leading = 0;
     float3 sharp_edge_a;   // endpoint A in tool local frame (only read if use_sharp_edge_damage=1)
     float3 sharp_edge_b;   // endpoint B
 
@@ -101,6 +126,14 @@ struct SDFData {
     float3 origin;          // bounding box min corner (local frame)
     float3 cell_size;       // per-axis cell size
     int active;
+    // contact_ccd: the tool's triangles in the same local frame (tri[4k..4k+2] = vertices, tri[4k+3] =
+    // outward unit normal), for exact path tests; n_tri = 0 → SDF tracing only
+    float3* d_tri = nullptr;
+    int n_tri = 0;
+    // straddle_rule sheet: the tool's sheets and their cross-section segments (local frame)
+    ToolSheetGPU* d_sheet = nullptr;
+    float4* d_sheet_seg = nullptr;
+    int n_sheet = 0;
 };
 
 // 边数据（cutting 用）
@@ -232,8 +265,39 @@ public:
         update_cluster_labels();
     }
 
+    // Debug trace (diagnostics only): positions of chosen particles after each stage of step(),
+    // with the tool pose of that substep. Enabled by set_trace(); off = no effect, no cost.
+    struct TraceRec { int step; int stage; int iter; float3 kpos; float krot[9]; std::vector<float3> pos; };
+    std::vector<int> trace_ids;          // empty = off
+    bool trace_on = false;               // toggled per frame by the caller
+    std::vector<TraceRec> trace_log;
+    int* d_trace_ids = nullptr; float3* d_trace_buf = nullptr;
+    void set_trace(const std::vector<int>& ids);
+    void trace_point(int stage, int iter);   // stage: 0 predict, 1 first collision, 2 shape match,
+                                             // 3 self collision, 4 tool collision, 5 bone, 6 end
+
+    // A1: tool pose of the previous substep (set at the end of step())
+    float3 knife_pos_prev = {0, 0, 0};
+    float knife_rot_prev[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    bool knife_prev_valid = false;
+    struct ToolDesc prev_tool_desc() const;
+    int entry_side_active() const;
+    int tool_contact_mode() const;
+
     // Sharp features of the CUT_CURVE channel (used when config.use_sharp_edge_damage = 1).
-    void set_cut_segments(const std::vector<float3>& segs) { h_cut_segments = segs; cut_segments_dirty = true; }
+    // diagnostics: crossing events (tool_bench --cross-log)
+    bool cross_log_on = false; int cross_log_cap = 1 << 16;
+    CrossRec* d_cross_log = nullptr; int* d_cross_log_n = nullptr;
+    std::vector<CrossRec> cross_log; std::vector<int> cross_log_step;
+    CrossRec* d_strad_log = nullptr; int* d_strad_log_n = nullptr;          // R3 breaks (seg = -1, s = t, sdist = phi)
+    std::vector<CrossRec> strad_log; std::vector<int> strad_log_step;
+    // nrms (optional): two outward face normals per feature, the normal cone used by cut_curve: leading
+    // contact_ccd: exact tool triangles (local frame, 4 float3 per triangle: v0 v1 v2 outward normal)
+    void set_tool_triangles(const std::vector<float3>& tri4);
+    void set_tool_sheets(const std::vector<ToolSheetGPU>& sheets, const std::vector<float4>& seg);
+    void set_cut_segments(const std::vector<float3>& segs, const std::vector<float3>& nrms = {}) {
+        h_cut_segments = segs; h_cut_normals = nrms; cut_segments_dirty = true; }
+    bool has_cut_normals() const { return !h_cut_normals.empty() && h_cut_normals.size() == h_cut_segments.size(); }
     const std::vector<float3>& cut_segments() const { return h_cut_segments; }
 
     // 初始化 SDF (通用: bone or tool)
@@ -270,10 +334,16 @@ private:
     void gpu_update_damage();
     // CUT_CURVE channel features (tool local frame, 2 float3 per segment; a point feature has
     // equal endpoints). Host copy set by set_cut_segments, uploaded on the next damage update.
-    std::vector<float3> h_cut_segments;
+    std::vector<float3> h_cut_segments, h_cut_normals;
     float3* d_cut_segments = nullptr;
+    float3* d_cut_normals = nullptr;
     size_t d_cut_segments_cap = 0;
     bool cut_segments_dirty = false;
+    // CUT_CURVE crossing mode: particle positions + tool pose at the previous damage evaluation
+    float3* d_cut_prev_pos = nullptr;
+    float3 cut_prev_pos_tool = {0, 0, 0};
+    float cut_prev_rot_tool[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    bool cut_prev_valid = false;
     void sync_cut_segments();
     void gpu_aspirate();
     void gpu_update_particle_damage();

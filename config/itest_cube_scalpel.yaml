@@ -1,0 +1,59 @@
+## Interactive test (2026-10-19): Interactive: cube + scalpel (x12), cut only
+## Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_cube_scalpel.yaml
+## See config/ITEST_README.md for keys and what to look for.
+
+## P(F) Shape Matching - Cube Test Configuration
+## Matches parameters from cube32.msh direct run
+
+name: "Interactive: cube + scalpel (x12), cut only"
+debulking: false   # cut only: edges break, nothing is aspirated
+
+## Dense cube (1m x 1m x 1m, ~31k vertices, 158k tets)
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.005
+  gravity: [0, -9.81, 0]
+  num_iterations: 16    # 之前4，更多迭代 → 更stiff
+  stiffness: 1.0        # 之前0.6，满stiffness
+  damping: 0.95         # 0.98 → 0.88 → 0.95（中间值）
+  substeps: 4           # 之前4，更细时间步 → 更稳定
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.10
+
+clusters:
+  rings: 2
+  local_split: true           # R1: clusters split by their own intact edges
+
+knife:
+  radius: 0.04                 # sphere fallback only
+  tool_mesh: "../../resources/tools/scalpel.obj"
+  tool_scale: 12.0             # 144 x 60 x 9.6 mm blade, cutting edge along x at the bottom
+  cutting_interval: 1          # damage every substep (mouse motion can be fast)
+  alpha_min: 7.0
+  aspiration_threshold: 0.7
+  tool_sdf_resolution: 64
+  sdf_normal: trilinear        # required by straddle_fracture
+  cut_features: auto           # sharp edges / points from the tool mesh (wedge or cone angle < 30 deg)
+  straddle_fracture: true      # R3: tissue the tool body separates is fractured
+  damage_growth_rate: 0.1      # ~5 substeps of loading before an edge breaks
+
+self_collision:
+  enabled: true
+  radius: 0.0045       # 2026-09-19: kernel 判定距离 = 2×radius = 9mm ≈ 粒子间距 8.9mm (原 0.012 → 24mm, 2.7× 间距, 刀压时粒子被弹飞)
+  stiffness: 0.8
+
+## 地板 Coulomb 摩擦 (2026-09-19, 对齐 cardinalsim tumor_debulk.yaml)
+## 没有 mesh，只用来覆盖 collision_kernel 的地板 μ_s/μ_k (默认 0.5/0.3)。
+## 该模型的"法向力"= 每 substep 穿透深度 (~0.1mm)，μ 必须大才能锁住落地碎片。
+rigid_object:
+  friction_s: 2.0
+  friction_k: 1.5
+
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: false

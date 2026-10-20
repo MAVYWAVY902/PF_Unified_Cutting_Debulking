@@ -74,7 +74,9 @@ int main(int argc, char** argv) {
     std::string tool = "sphere";
     int n_frames = 80, grid_res = 64, n_settle = 60, n_approach = 30;
     bool timing = false, replay_allow_mismatch = false, gpu_only = false;
-    std::string replay_path, stats_path, write_traj_path, pass_path, topo_path;
+    std::string replay_path, stats_path, write_traj_path, pass_path, topo_path, track_path, trace_path, fast_path, cross_path;
+    double proxy_step_override_mm = -1.0;
+    int trace_from = 0, trace_to = -1;
     float depth = 0.0f;
     // --tool mesh orientation: "flat" = identity (old behaviour; the dissector lies flat, its
     // 71 mm length covers the whole tumour); "tipdown" = long axis vertical, blade width along
@@ -100,7 +102,13 @@ int main(int argc, char** argv) {
         else if (a == "--write-traj" && i + 1 < argc) write_traj_path = argv[++i];   // scripted pose → recording file   // replay without orphan cleanup / BFS (old behaviour)
         else if (a == "--stats" && i + 1 < argc) stats_path = argv[++i];
         else if (a == "--pass-through" && i + 1 < argc) pass_path = argv[++i];   
-        else if (a == "--dump-topology" && i + 1 < argc) topo_path = argv[++i];   // replay: final positions + cutting edges (a,b,broken)   // replay + mesh tool: per-frame tool/edge crossing diagnostic
+        else if (a == "--dump-topology" && i + 1 < argc) topo_path = argv[++i];
+        else if (a == "--track-edges" && i + 1 < argc) track_path = argv[++i];
+        else if (a == "--proxy-step-mm" && i + 1 < argc) proxy_step_override_mm = std::atof(argv[++i]);   // diagnostics only
+        else if (a == "--cross-log" && i + 1 < argc) cross_path = argv[++i];   // replay: every CUT_CURVE crossing (crossing mode)
+        else if (a == "--fast-log" && i + 1 < argc) fast_path = argv[++i];   // replay: particles moving > 1 spacing/frame + their sub-cluster sizes
+        else if (a == "--trace-particles" && i + 3 < argc) {   // replay: F (ids) FROM TO → stage-by-stage GPU positions
+            trace_path = argv[++i]; trace_from = std::atoi(argv[++i]); trace_to = std::atoi(argv[++i]); }   // replay: per-frame state of listed edges (F has one edge id per line; writes F.out.csv)   // replay: final positions + cutting edges (a,b,broken)   // replay + mesh tool: per-frame tool/edge crossing diagnostic
         else if (a == "--depth" && i + 1 < argc) depth = (float)std::atof(argv[++i]);
         else if (a == "--mesh-pose" && i + 1 < argc) mesh_pose = argv[++i];
         else if (a == "--fix-x-ends" && i + 1 < argc) fix_x_ends = (float)std::atof(argv[++i]);
@@ -233,9 +241,9 @@ int main(int argc, char** argv) {
     printf("[tool_bench] debulking=%s (enable_aspiration=%d, damage_shape_weight=%.1f, sharp_edge=%d)\n",
            cfg.debulking ? "on" : "off", g.config.enable_aspiration, g.config.damage_shape_weight,
            g.config.use_sharp_edge_damage);
-    printf("[tool_bench] tool switches: tool_scale=%.3f sdf_normal=%s sdf_pf_edge_radius=%d aspiration_reach=%.6g edge_contact=%d straddle_fracture=%d\n",
+    printf("[tool_bench] tool switches: tool_scale=%.3f sdf_normal=%s sdf_pf_edge_radius=%d aspiration_reach=%.6g edge_contact=%d straddle_fracture=%d entry_side_contact=%d contact_iterate=%d selfcol_tool_block=%d cut_curve_crossing=%d cut_curve_leading=%d contact_ccd=%d straddle_sheet=%d\n",
            cfg.tool_scale, g.config.sdf_normal_mode ? "trilinear" : "legacy", g.config.sdf_pf_edge_radius,
-           g.config.aspiration_reach, g.config.edge_contact, g.config.straddle_fracture);
+           g.config.aspiration_reach, g.config.edge_contact, g.config.straddle_fracture, g.config.entry_side_contact, g.config.contact_iterate, g.config.selfcol_tool_block, g.config.cut_curve_crossing, g.config.cut_curve_leading, g.config.contact_ccd, g.config.straddle_sheet);
     if (prestretch_x != 1.0f) {            // after clusters / edges were built from the rest shape
         double xmin = 1e30, xmax = -1e30;
         for (auto& p : positions) { xmin = std::min(xmin, (double)p.x); xmax = std::max(xmax, (double)p.x); }
@@ -330,6 +338,9 @@ int main(int argc, char** argv) {
         simrec_frame::FramePipeline pipe{g, cpu_solver, tet_mesh, ea, eb, epf,
                                          rpos, rrem, rdmg, tet_broken, true, cfg.cutting_mode, N, cfg.local_split,
                                          cfg.tool_substep_interp};
+        setup_tool_proxy(cfg, g, tool_rm, avg_spacing, pipe.tool_proxy, pipe.proxy_max_step, pipe.tool_reach);
+        if (proxy_step_override_mm > 0.0) { pipe.proxy_max_step = proxy_step_override_mm * 1e-3;
+                                            printf("[tool-proxy] DIAGNOSTIC override: max step %.3f mm\n", proxy_step_override_mm); }
         // --pass-through: after each active frame (end-of-frame positions, the tool pose of that
         // frame) classify every edge whose two particles are alive by sampling phi along it every
         // half of the smallest SDF cell:
@@ -477,8 +488,39 @@ int main(int argc, char** argv) {
             fprintf(pass_f, "%d,%d,%d,%d,%d,%.4f,%d,%d,%d,%d\n", frame, pin, in_u, pass_u, pass_b, minphi * 1e3f, pass_us,
                     in_ex, strad_ex, strad_ex_missed);
         };
+        // --track-edges F: every frame, for each listed edge: broken, damage, both endpoints in the
+        // tool local frame and their phi (baked grid), and the deepest phi along the segment.
+        std::vector<int> track_ids; FILE* track_f = nullptr; std::vector<int> tbroken; std::vector<float> tdmg;
+        if (!track_path.empty()) {
+            std::ifstream in(track_path); int id; while (in >> id) if (id >= 0 && id < E) track_ids.push_back(id);
+            track_f = fopen((track_path + ".out.csv").c_str(), "w");
+            fprintf(track_f, "frame,edge,broken,damage,ax,ay,az,bx,by,bz,phi_a,phi_b,phi_seg_min\n");
+            printf("[track] %zu edges -> %s.out.csv\n", track_ids.size(), track_path.c_str());
+        }
+        if (!trace_path.empty()) {
+            std::ifstream in(trace_path); std::vector<int> ids; int id; while (in >> id) if (id >= 0 && id < N) ids.push_back(id);
+            g.set_trace(ids);
+            printf("[trace] %zu particles, frames %d..%d -> %s.out.csv\n", ids.size(), trace_from, trace_to, trace_path.c_str());
+        }
+        // --fast-log: per frame, every particle that moved more than one spacing, with the sizes of
+        // the R1 sub-clusters it belongs to and its intact cutting-edge degree
+        FILE* fast_f = nullptr; std::vector<float3> fast_prev; std::vector<std::pair<int,int>> fast_entry;  // entry -> (cluster, particle)
+        std::vector<int> fast_brk;
+        if (!fast_path.empty()) {
+            fast_f = fopen(fast_path.c_str(), "w");
+            fprintf(fast_f, "frame,pid,disp_mm,y_mm,n_clusters,min_sub,max_sub,n_sub_le3,intact_deg,deg\n");
+            for (int c = 0; c < (int)cpu_solver.clusters.size(); c++)
+                for (int pid : cpu_solver.clusters[c].particle_ids) fast_entry.push_back({c, pid});
+        }
+        g.cross_log_on = !cross_path.empty();
+        std::vector<int> cross_frame;           // frame index of each crossing record
+        std::vector<int> strad_frame;           // frame index of each R3-break record
+        double proxy_lag_max = 0.0, proxy_lag_sum = 0.0; int proxy_lag_n = 0, proxy_lag_frames = 0;
+        std::vector<int> trace_frame_of_step;   // frame index of each traced record's step
         int f = 0; bool prev_active = false;
         for (const auto& fr : rp.frames()) {
+            g.trace_on = !trace_path.empty() && f >= trace_from && f <= trace_to;
+            size_t trace_before = g.trace_log.size();
             g.config.knife_pos = fr.kp;
             memcpy(g.config.knife_rot, fr.rot, sizeof(fr.rot));
             g.config.knife_active = fr.active;
@@ -500,18 +542,125 @@ int main(int argc, char** argv) {
                 src.gpu_new = ra - rb;
             } else {
                 simrec_frame::FrameResult fres = simrec_frame::advance_frame(pipe, fr.substeps, f, fr.active != 0);
+                if (pipe.tool_proxy && fr.active) { proxy_lag_max = std::max(proxy_lag_max, fres.proxy_lag);
+                                                    proxy_lag_sum += fres.proxy_lag; proxy_lag_n++; proxy_lag_frames += fres.proxy_lag > 1e-6; }
                 ms = fres.gpu_ms;
                 src = simrec::FrameSources{fres.gpu_new, fres.orphan_new, fres.bfs_new, fres.orphan_ms, fres.bfs_ms,
                                                fres.components, fres.broken_edges,
                                                fres.bfs_ran ? fres.tet_broken_count : -1};
             }
-            stats.write(f, ms, fr.kp, g.config.knife_radius, fr.active, g.config.tool_type, rpos, rrem, fixed_arr,
+            stats.write(f, ms, g.config.knife_pos, g.config.knife_radius, fr.active, g.config.tool_type, rpos, rrem, fixed_arr,
                         0.0, src);
-            if (pass_f && fr.active) pass_through_frame(f, fr.kp);
+            if (fast_f) {
+                float sp = 0.00887487f;
+                std::vector<int> fp;
+                if (!fast_prev.empty())
+                    for (int i = 0; i < N; i++) {
+                        if (fixed_arr[i]) continue;
+                        float dx = rpos[i].x - fast_prev[i].x, dy = rpos[i].y - fast_prev[i].y, dz = rpos[i].z - fast_prev[i].z;
+                        if (dx*dx + dy*dy + dz*dz > sp * sp) fp.push_back(i);
+                    }
+                if (!fp.empty()) {
+                    std::vector<int> lab;
+                    if (g.local_split) { g.update_cluster_labels_public(); g.download_labels(lab); }
+                    g.download_edge_broken(fast_brk);
+                    std::vector<int> deg(N, 0), ideg(N, 0);
+                    for (int e = 0; e < E; e++) { deg[ea[e]]++; deg[eb[e]]++; if (!fast_brk[e]) { ideg[ea[e]]++; ideg[eb[e]]++; } }
+                    std::vector<char> want(N, 0); for (int i : fp) want[i] = 1;
+                    std::vector<int> nc(N, 0), mn(N, 1 << 30), mx(N, 0), le3(N, 0);
+                    size_t k0 = 0;
+                    for (int c = 0; c < (int)cpu_solver.clusters.size(); c++) {
+                        int sz = (int)cpu_solver.clusters[c].particle_ids.size();
+                        for (int j = 0; j < sz; j++) {
+                            int pid = cpu_solver.clusters[c].particle_ids[j];
+                            if (!want[pid]) continue;
+                            int s = sz;
+                            if (!lab.empty()) { s = 0; for (int q = 0; q < sz; q++) s += (lab[k0 + q] == lab[k0 + j]); }
+                            nc[pid]++; mn[pid] = std::min(mn[pid], s); mx[pid] = std::max(mx[pid], s); le3[pid] += (s >= 2 && s <= 3);
+                        }
+                        k0 += sz;
+                    }
+                    for (int i : fp) {
+                        float dx = rpos[i].x - fast_prev[i].x, dy = rpos[i].y - fast_prev[i].y, dz = rpos[i].z - fast_prev[i].z;
+                        fprintf(fast_f, "%d,%d,%.3f,%.3f,%d,%d,%d,%d,%d,%d\n", f, i, std::sqrt(dx*dx + dy*dy + dz*dz) * 1e3f,
+                                rpos[i].y * 1e3f, nc[i], mn[i], mx[i], le3[i], ideg[i], deg[i]);
+                    }
+                }
+                fast_prev = rpos;
+            }
+            while (cross_frame.size() < g.cross_log.size()) cross_frame.push_back(f);
+            while (strad_frame.size() < g.strad_log.size()) strad_frame.push_back(f);
+            for (size_t k = trace_before; k < g.trace_log.size(); k++) trace_frame_of_step.push_back(f);
+            if (pass_f && fr.active) pass_through_frame(f, g.config.knife_pos);   // the pose the solver used (proxy)
+            if (track_f && fr.active && !track_ids.empty()) {
+                g.download_edge_broken(tbroken); g.download_edge_damage(tdmg);
+                for (int e : track_ids) {
+                    float3 pa = rpos[ea[e]], pb = rpos[eb[e]];
+                    float la[3], lb[3]; to_local(pa.x, pa.y, pa.z, g.config.knife_pos, la); to_local(pb.x, pb.y, pb.z, g.config.knife_pos, lb);
+                    float mn = 1e30f;
+                    for (int k = 1; k < 40; k++) {
+                        float s = k / 40.0f;
+                        mn = std::min(mn, tool_phi(pa.x + s*(pb.x-pa.x), pa.y + s*(pb.y-pa.y), pa.z + s*(pb.z-pa.z), g.config.knife_pos));
+                    }
+                    fprintf(track_f, "%d,%d,%d,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n", f, e, tbroken[e], tdmg[e],
+                            la[0]*1e3f, la[1]*1e3f, la[2]*1e3f, lb[0]*1e3f, lb[1]*1e3f, lb[2]*1e3f,
+                            tool_phi(pa.x, pa.y, pa.z, g.config.knife_pos)*1e3f, tool_phi(pb.x, pb.y, pb.z, g.config.knife_pos)*1e3f, mn*1e3f);
+                }
+            }
             f++;
         }
         if (pass_f) fclose(pass_f);
         if (pass_e) fclose(pass_e);
+        if (track_f) fclose(track_f);
+        if (fast_f) fclose(fast_f);
+        if (proxy_lag_n) printf("[tool-proxy] lag behind the input: mean %.2f mm, max %.1f mm, lagging in %d / %d active frames\n",
+                                1e3 * proxy_lag_sum / proxy_lag_n, 1e3 * proxy_lag_max, proxy_lag_frames, proxy_lag_n);
+        if (!cross_path.empty()) {     // local frame (mm): edge endpoints before (a0,b0) / after (a1,b1)
+            FILE* cf = fopen(cross_path.c_str(), "w");
+            fprintf(cf, "frame,step,eid,seg,s,sdist_mm,len_mm,a0x,a0y,a0z,b0x,b0y,b0z,a1x,a1y,a1z,b1x,b1y,b1z\n");
+            for (size_t r = 0; r < g.cross_log.size(); r++) {
+                const CrossRec& c = g.cross_log[r];
+                float rl = std::sqrt((c.a1.x-c.b1.x)*(c.a1.x-c.b1.x) + (c.a1.y-c.b1.y)*(c.a1.y-c.b1.y) + (c.a1.z-c.b1.z)*(c.a1.z-c.b1.z));
+                fprintf(cf, "%d,%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                        cross_frame[r], g.cross_log_step[r], c.eid, c.seg, c.s, c.sdist * 1e3f, rl * 1e3f,
+                        c.a0.x*1e3f, c.a0.y*1e3f, c.a0.z*1e3f, c.b0.x*1e3f, c.b0.y*1e3f, c.b0.z*1e3f,
+                        c.a1.x*1e3f, c.a1.y*1e3f, c.a1.z*1e3f, c.b1.x*1e3f, c.b1.y*1e3f, c.b1.z*1e3f);
+            }
+            fclose(cf);
+            printf("[cross-log] %zu crossings -> %s\n", g.cross_log.size(), cross_path.c_str());
+            FILE* sf = fopen((cross_path + ".straddle.csv").c_str(), "w");   // R3 breaks: prev (a0,b0) / now (a1,b1), tool frame
+            fprintf(sf, "frame,step,eid,t,phi_mm,len_mm,a0x,a0y,a0z,b0x,b0y,b0z,a1x,a1y,a1z,b1x,b1y,b1z\n");
+            for (size_t r = 0; r < g.strad_log.size(); r++) {
+                const CrossRec& c = g.strad_log[r];
+                float rl = std::sqrt((c.a1.x-c.b1.x)*(c.a1.x-c.b1.x) + (c.a1.y-c.b1.y)*(c.a1.y-c.b1.y) + (c.a1.z-c.b1.z)*(c.a1.z-c.b1.z));
+                fprintf(sf, "%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                        strad_frame[r], g.strad_log_step[r], c.eid, c.s, c.sdist * 1e3f, rl * 1e3f,
+                        c.a0.x*1e3f, c.a0.y*1e3f, c.a0.z*1e3f, c.b0.x*1e3f, c.b0.y*1e3f, c.b0.z*1e3f,
+                        c.a1.x*1e3f, c.a1.y*1e3f, c.a1.z*1e3f, c.b1.x*1e3f, c.b1.y*1e3f, c.b1.z*1e3f);
+            }
+            fclose(sf);
+            printf("[cross-log] %zu R3 breaks -> %s.straddle.csv\n", g.strad_log.size(), cross_path.c_str());
+        }
+        if (!trace_path.empty()) {    // stage-by-stage positions in the tool frame of THAT substep + grid phi
+            FILE* tf = fopen((trace_path + ".out.csv").c_str(), "w");
+            fprintf(tf, "frame,step,stage,iter,pid,lx,ly,lz,phi,wx,wy,wz,kx,ky,kz,r00,r22\n");
+            for (size_t r = 0; r < g.trace_log.size(); r++) {
+                const auto& rec = g.trace_log[r];
+                for (size_t k = 0; k < g.trace_ids.size(); k++) {
+                    float3 p = rec.pos[k];
+                    float wx = p.x - rec.kpos.x, wy = p.y - rec.kpos.y, wz = p.z - rec.kpos.z;
+                    const float* R = rec.krot;
+                    float l[3] = {R[0]*wx + R[3]*wy + R[6]*wz, R[1]*wx + R[4]*wy + R[7]*wz, R[2]*wx + R[5]*wy + R[8]*wz};
+                    float save[9]; for (int q = 0; q < 9; q++) { save[q] = g.config.knife_rot[q]; g.config.knife_rot[q] = R[q]; }
+                    float ph = tool_phi(p.x, p.y, p.z, rec.kpos);
+                    for (int q = 0; q < 9; q++) g.config.knife_rot[q] = save[q];
+                    fprintf(tf, "%d,%d,%d,%d,%d,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.6f,%.6f\n", trace_frame_of_step[r], rec.step,
+                            rec.stage, rec.iter, g.trace_ids[k], l[0]*1e3f, l[1]*1e3f, l[2]*1e3f, ph*1e3f,
+                            p.x*1e3f, p.y*1e3f, p.z*1e3f, rec.kpos.x*1e3f, rec.kpos.y*1e3f, rec.kpos.z*1e3f, R[0], R[8]);
+                }
+            }
+            fclose(tf);
+        }
         // --dump-topology F: end-of-replay state for offline connectivity checks.
         //   F.particles.csv  i,x,y,z,removed,fixed      F.edges.csv  a,b,broken  (cutting edges)
         if (!topo_path.empty()) {

@@ -1,0 +1,75 @@
+## Interactive test (2026-10-19): tumour + bone + scalpel, cut only, R1+R3.
+## Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_tumor_scalpel.yaml
+## About 110 ms per frame (~9 fps). See config/ITEST_README.md.
+## P(F) Shape Matching - Tumor CUTTING (no debulk, no removal)
+## 复制自 tumor_debulk.yaml,唯一改动是顶部 cutting_mode: cut_only。
+## 行为:
+##   - 边继续累积 P(F) damage,broken 边正常标记
+##   - cluster 仍按 broken 边分裂 → 切口两侧 kinematic 独立
+##   - 含 broken 边的 tet 跳过 surface 提取 → 切口在 viewer 中可见
+##   - 但 NO 粒子被 CUSA 吸走,NO 小碎片删除,NO orphan 清理
+## 适合演示"先切再剥"流程的"先切"阶段,或纯切割实验。
+
+name: "Interactive: tumour + bone + scalpel, cut only (R1+R3)"
+
+## ★ 这是新增字段,决定模式
+cutting_mode: "cut_only"   # "debulk" = 旧行为 (会删粒子) | "cut_only" = 只切连通性
+
+## Mesh
+mesh: "../../resources/tumor/tumor_uniform.msh"  # 10911 verts, 52735 tets
+
+## Simulation
+simulation:
+  dt: 0.002
+  gravity: [0, -9.81, 0]
+  num_iterations: 15
+  stiffness: 1.0
+  damping: 0.95
+  substeps: 8
+
+## Boundary
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.10
+
+## Cluster building
+clusters:
+  rings: 2
+  local_split: true           # R1
+
+## Knife — mesh SDF; the cutting edge is extracted from the mesh (cut_features: auto, the bottom
+## edge of the wedge), the blade body fractures tissue it gets between (straddle_fracture).
+knife:
+  radius: 0.002             # 仅 sphere fallback;tool_mesh 非空时使用 mesh SDF
+  tool_mesh: "../../resources/tools/scalpel.obj"
+  tool_sdf_resolution: 64
+  sdf_normal: trilinear        # required by straddle_fracture
+  cut_features: auto           # = the bottom edge, same as the old manual sharp_edge_a/b
+  straddle_fracture: true      # R3
+  cutting_interval: 1
+  alpha_min: 3.0
+  aspiration_threshold: 0.3 # cut_only 下被忽略
+  # ★ 关键: damage 每步最多涨这么多。1.0=瞬间断(debulk 默认),0.02=约50ms 才断
+  #   (~25 substeps × dt=0.002),让粒子有时间被 cluster shape match 拉着变形。
+  #   太小 → 切不动;太大 → 接触就断,看不到 deform。
+  damage_growth_rate: 0.02
+
+## Self-collision (cut_only 模式很重要 — 两半切完后不能互穿)
+self_collision:
+  enabled: true
+  radius: 0.000296
+  stiffness: 0.8
+
+## Rigid object (temporal bone)
+rigid_object:
+  mesh: "../../resources/tbone/tbone_MOD4.obj"
+  collision_thickness: auto
+  friction_s: 0.5
+  friction_k: 0.3
+
+## Viewer
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: true       # cut_only 下打开粒子点 — 早期 debug 更直观看到切口两侧粒子分离

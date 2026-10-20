@@ -118,6 +118,7 @@ struct TetMesh {
     //   nullptr 表示不启用(原 debulk 行为完全保持)。
     void rebuild_surface_faces(const Particles& particles,
                                 const std::vector<int>* tet_broken = nullptr) {
+        if (split_render) { _rebuild_surface_split(particles); return; }
         surface_faces.clear();
 
         // Key = the sorted vertex triple itself (was a*1e10+b*1e5+c: collided once N > 100000).
@@ -206,6 +207,14 @@ struct TetMesh {
 
     // 用当前粒子位置更新法线
     void update_normals(const Particles& particles) {
+        if (split_render) {
+            update_render_positions(particles);
+            for (int i = 0; i < num_surface_faces(); i++) {
+                const auto& f = surface_faces[i];
+                face_normals[i] = (render_pos[f[1]] - render_pos[f[0]]).cross(render_pos[f[2]] - render_pos[f[0]]).normalized();
+            }
+            return;
+        }
         for (int i = 0; i < num_surface_faces(); i++) {
             const auto& f = surface_faces[i];
             Vec3 v0 = particles[f[0]].pos;
@@ -213,6 +222,159 @@ struct TetMesh {
             Vec3 v2 = particles[f[2]].pos;
             face_normals[i] = (v1 - v0).cross(v2 - v0).normalized();
         }
+    }
+
+    // ---------------- split rendering (render.split_tets) ----------------
+    // A tet whose broken edges separate its four vertices into several groups (connected through
+    // its intact edges) is drawn once per group, each piece ending at the cut, instead of being
+    // hidden as a whole (virtual node algorithm, Molino et al. 2004, restricted to rendering).
+    // Piece of group C = convex hull of the vertices of C and the cut points on the edges from C to
+    // the other vertices. A cut point belongs to one side of its edge: the point of edge (u, v) on
+    // the side of u is x_u + s R_u (X_v - X_u), with R_u the rotation of the material around u
+    // (best-fit rotation, rest -> current, of u and its neighbours through intact edges), so each
+    // side's cut face moves with its own fragment and an opening appears where the fragments part.
+    // s = 0.5 (the position of the cut along the edge is not recorded). Faces shared by two pieces
+    // (same vertex set) are interior and dropped, as for whole tets; the two cut faces of a closed
+    // cut are both kept (each side's own face) and coincide while the cut is closed.
+    // Vertex ids: 0..N-1 particles, N + k cut point k (cut_verts[k]).
+    bool split_render = false;
+    std::unordered_set<int64_t> broken_edges;          // key edge_key(a, b), set by the frame pipeline
+    struct CutVert { int u, v; };                       // cut point of edge (u, v) on the side of u
+    std::vector<CutVert> cut_verts;
+    std::vector<Vec3> render_pos;                       // positions of all render vertices (particles + cut points)
+    float cut_s = 0.5f;
+
+    static int64_t edge_key(int a, int b) {             // same key as the frame pipeline's broken-edge set
+        if (a > b) std::swap(a, b);
+        return (int64_t)(((uint64_t)(uint32_t)a << 32) | (uint32_t)b);
+    }
+    int num_render_vertices() const { return num_vertices() + (int)cut_verts.size(); }
+    // owner particle of a render vertex (for removed checks)
+    int render_owner(int id) const { return id < num_vertices() ? id : cut_verts[id - num_vertices()].u; }
+
+    void update_render_positions(const Particles& particles) {
+        const int N = num_vertices();
+        render_pos.resize(N + cut_verts.size());
+        for (int i = 0; i < N; i++) render_pos[i] = particles[i].pos;
+        std::unordered_map<int, Eigen::Matrix3d> R;     // rotation per cut-point owner
+        for (size_t k = 0; k < cut_verts.size(); k++) {
+            int u = cut_verts[k].u, v = cut_verts[k].v;
+            auto it = R.find(u);
+            if (it == R.end()) it = R.emplace(u, _material_rotation(particles, u)).first;
+            render_pos[N + k] = particles[u].pos + (double)cut_s * (it->second * (vertices[v] - vertices[u]));
+        }
+    }
+
+    Eigen::Matrix3d _material_rotation(const Particles& particles, int u) const {
+        std::vector<int> S = {u};
+        for (int w : vertex_neighbors[u])
+            if (!particles[w].removed && !broken_edges.count(edge_key(u, w))) S.push_back(w);
+        if (S.size() < 3) return Eigen::Matrix3d::Identity();
+        Vec3 c = Vec3::Zero(), C = Vec3::Zero();
+        for (int i : S) { c += particles[i].pos; C += vertices[i]; }
+        c /= (double)S.size(); C /= (double)S.size();
+        Eigen::Matrix3d A = Eigen::Matrix3d::Zero();
+        for (int i : S) A += (particles[i].pos - c) * (vertices[i] - C).transpose();
+        Eigen::JacobiSVD<Eigen::Matrix3d> svd(A, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        Eigen::Matrix3d U = svd.matrixU(), V = svd.matrixV();
+        if ((U * V.transpose()).determinant() < 0.0) U.col(2) *= -1.0;
+        return U * V.transpose();
+    }
+
+    void _rebuild_surface_split(const Particles& particles) {
+        const int N = num_vertices();
+        cut_verts.clear();
+        std::unordered_map<int64_t, int> cut_id;        // directed (u, v) -> render id
+        auto cid = [&](int u, int v) {
+            int64_t k = (int64_t)(((uint64_t)(uint32_t)u << 32) | (uint32_t)v);
+            auto it = cut_id.find(k);
+            if (it != cut_id.end()) return it->second;
+            int id = N + (int)cut_verts.size();
+            cut_verts.push_back({u, v});
+            cut_id.emplace(k, id);
+            return id;
+        };
+        auto rest = [&](int id) -> Vec3 {
+            if (id < N) return vertices[id];
+            const CutVert& c = cut_verts[id - N];
+            return vertices[c.u] + (double)cut_s * (vertices[c.v] - vertices[c.u]);
+        };
+        using Key = std::array<int, 4>;                 // sorted polygon vertex ids, padded with -1
+        struct KeyHash {
+            size_t operator()(const Key& k) const {
+                uint64_t h = 1469598103934665603ULL;
+                for (int x : k) { h ^= (uint32_t)x; h *= 1099511628211ULL; }
+                return (size_t)h;
+            }
+        };
+        struct Poly { std::vector<int> v; int count; };
+        std::unordered_map<Key, Poly, KeyHash> polys;
+        polys.reserve(tets.size() * 2);
+        auto add_poly = [&](std::vector<int> v, const Vec3& away) {   // orient: normal points away from `away`
+            if (v.size() < 3) return;
+            Vec3 n = Vec3::Zero(), c = Vec3::Zero();
+            for (size_t i = 0; i < v.size(); i++) {      // Newell normal
+                Vec3 a = rest(v[i]), b = rest(v[(i + 1) % v.size()]);
+                n += a.cross(b); c += a;
+            }
+            c /= (double)v.size();
+            if (n.dot(away - c) > 0.0) std::reverse(v.begin(), v.end());
+            Key k = {-1, -1, -1, -1};
+            std::vector<int> sv = v; std::sort(sv.begin(), sv.end());
+            for (size_t i = 0; i < sv.size() && i < 4; i++) k[i] = sv[i];
+            auto it = polys.find(k);
+            if (it == polys.end()) polys.emplace(k, Poly{v, 1}); else it->second.count++;
+        };
+        static const int FACE[4][4] = {{0, 1, 2, 3}, {0, 1, 3, 2}, {0, 2, 3, 1}, {1, 2, 3, 0}};   // 3 face vertices + opposite
+        for (const auto& t : tets) {
+            bool rem = false;
+            for (int j = 0; j < 4; j++) if (particles[t[j]].removed) { rem = true; break; }
+            if (rem) continue;
+            int g[4] = {0, 1, 2, 3};                     // groups: union over intact tet edges
+            auto find = [&](int x) { while (g[x] != x) x = g[x] = g[g[x]]; return x; };
+            for (int i = 0; i < 4; i++)
+                for (int j = i + 1; j < 4; j++)
+                    if (!broken_edges.count(edge_key(t[i], t[j]))) g[find(i)] = find(j);
+            for (int r = 0; r < 4; r++) {
+                if (find(r) != r) continue;              // one piece per group root
+                bool in[4]; Vec3 cen = Vec3::Zero(); int nc = 0;
+                for (int j = 0; j < 4; j++) { in[j] = find(j) == r; if (in[j]) { cen += vertices[t[j]]; nc++; } }
+                cen /= (double)nc;
+                std::vector<std::pair<int, int>> crack;  // cut-face segments, one per mixed tet face
+                for (int f = 0; f < 4; f++) {
+                    std::vector<int> v; int cut[2], ncut = 0;
+                    for (int k = 0; k < 3; k++) {
+                        int p = FACE[f][k], q = FACE[f][(k + 1) % 3];
+                        if (in[p]) v.push_back(t[p]);
+                        if (in[p] != in[q]) {
+                            int id = in[p] ? cid(t[p], t[q]) : cid(t[q], t[p]);
+                            v.push_back(id); cut[ncut++] = id;
+                        }
+                    }
+                    add_poly(v, vertices[t[FACE[f][3]]]);
+                    if (ncut == 2) crack.push_back({cut[0], cut[1]});
+                }
+                if (crack.size() >= 3) {                 // chain the segments into the cut-face polygon
+                    std::vector<int> loop = {crack[0].first, crack[0].second};
+                    std::vector<char> used(crack.size(), 0); used[0] = 1;
+                    for (size_t n = 1; n < crack.size(); n++)
+                        for (size_t i = 0; i < crack.size(); i++) {
+                            if (used[i]) continue;
+                            if (crack[i].first == loop.back())  { loop.push_back(crack[i].second); used[i] = 1; break; }
+                            if (crack[i].second == loop.back()) { loop.push_back(crack[i].first);  used[i] = 1; break; }
+                        }
+                    if (loop.size() > 1 && loop.front() == loop.back()) loop.pop_back();
+                    add_poly(loop, cen);
+                }
+            }
+        }
+        surface_faces.clear();
+        for (auto& [k, p] : polys) {
+            if (p.count != 1) continue;
+            for (size_t i = 1; i + 1 < p.v.size(); i++) surface_faces.push_back({p.v[0], p.v[i], p.v[i + 1]});
+        }
+        face_normals.assign(surface_faces.size(), Vec3::Zero());
+        update_normals(particles);
     }
 
     // 根据 tet 邻接关系构建簇（比空间半径更精确）

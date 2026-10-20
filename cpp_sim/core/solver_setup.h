@@ -64,6 +64,15 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     s.config.aspiration_reach = cfg.aspiration_reach;
     s.config.edge_contact = cfg.edge_contact ? 1 : 0;
     s.config.straddle_fracture = cfg.straddle_fracture ? 1 : 0;
+    s.config.entry_side_contact = cfg.entry_side_contact ? 1 : 0;
+    s.config.contact_iterate = cfg.contact_iterate ? 1 : 0;
+    s.config.selfcol_tool_block = cfg.selfcol_tool_block ? 1 : 0;
+    s.config.cut_curve_crossing = cfg.cut_curve_crossing ? 1 : 0;
+    s.config.cut_curve_leading = cfg.cut_curve_leading ? 1 : 0;
+    s.config.contact_ccd = cfg.contact_ccd ? 1 : 0;
+    s.config.straddle_detour = cfg.straddle_detour ? 1 : 0;
+    s.config.straddle_detour_k = cfg.straddle_detour_k;
+    s.config.straddle_sheet = cfg.straddle_rule == "sheet" ? 1 : 0;
     s.config.damage_growth_rate = cfg.damage_growth_rate;
     if (cfg.use_sharp_edge_damage) {
         printf("[CUT] sharp_edge: A=(%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f) growth_rate=%.3f\n",
@@ -144,11 +153,50 @@ inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s,
             if (cfg.cut_features == "auto") {
                 SharpFeatures f = extract_sharp_features(tool_mesh, cfg.sharp_angle_deg);
                 print_sharp_features(f, cfg.sharp_angle_deg);
-                std::vector<float3> segs;
+                std::vector<float3> segs, nrms;
                 for (const auto& p : f.seg) segs.push_back(make_float3((float)p.x(), (float)p.y(), (float)p.z()));
+                for (const auto& n : f.nrm) nrms.push_back(make_float3((float)n.x(), (float)n.y(), (float)n.z()));
                 s.config.use_sharp_edge_damage = 1;
-                s.set_cut_segments(segs);
+                s.set_cut_segments(segs, nrms);
                 if (segs.empty()) std::printf("[cut-features] no sharp feature: the tool is blunt (contact only)\n");
+                if (cfg.straddle_rule == "sheet") {          // R3 sheet rule: the 2D intruders on the sharp edges
+                    std::vector<ToolSheet> sh = extract_tool_sheets(tool_mesh, f);
+                    print_tool_sheets(sh);
+                    std::vector<ToolSheetGPU> hs; std::vector<float4> hseg;
+                    auto f3 = [](const Vec3& v) { return make_float3((float)v.x(), (float)v.y(), (float)v.z()); };
+                    for (const auto& t : sh) {
+                        hs.push_back(ToolSheetGPU{f3(t.o), f3(t.m), f3(t.u), f3(t.v), (int)hseg.size(), (int)t.seg.size()});
+                        for (const auto& e : t.seg) hseg.push_back(make_float4((float)e[0], (float)e[1], (float)e[2], (float)e[3]));
+                    }
+                    s.set_tool_sheets(hs, hseg);
+                }
+            }
+
+            // contact_ccd: exact triangles for the path test (same local frame as the SDF), outward
+            // normals oriented by the sign of the enclosed volume; brute-force loop → small meshes only
+            if (cfg.contact_ccd || cfg.straddle_detour) {
+                double vol = 0.0;
+                for (const auto& f : tool_mesh.faces)
+                    vol += tool_mesh.vertices[f[0]].dot(tool_mesh.vertices[f[1]].cross(tool_mesh.vertices[f[2]])) / 6.0;
+                const double sg = vol >= 0.0 ? 1.0 : -1.0;
+                const size_t max_tri = 256;
+                if (tool_mesh.faces.size() <= max_tri) {
+                    std::vector<float3> tri4;
+                    for (const auto& f : tool_mesh.faces) {
+                        const Vec3 &a = tool_mesh.vertices[f[0]], &b = tool_mesh.vertices[f[1]], &c = tool_mesh.vertices[f[2]];
+                        Vec3 n = (b - a).cross(c - a);
+                        if (n.norm() < 1e-30) continue;
+                        n = sg * n.normalized();
+                        for (const Vec3* v : {&a, &b, &c}) tri4.push_back(make_float3((float)v->x(), (float)v->y(), (float)v->z()));
+                        tri4.push_back(make_float3((float)n.x(), (float)n.y(), (float)n.z()));
+                    }
+                    s.set_tool_triangles(tri4);
+                    std::printf("[contact-ccd] exact path test on %zu tool triangles\n", tri4.size() / 4);
+                } else {
+                    std::printf("[contact-ccd] %zu triangles > %zu: exact path test needs an acceleration structure "
+                                "(not implemented) — SDF tracing only, parts thinner than a cell are not seen\n",
+                                tool_mesh.faces.size(), max_tri);
+                }
             }
 
             float3 origin = make_float3(
@@ -164,6 +212,19 @@ inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s,
                 origin, cs, "Tool");
         }
     }
+}
+
+// B: tool proxy parameters. max step = particle radius (half the mean particle spacing); reach =
+// largest distance of a tool point from the tool origin (mesh vertices after centring/scaling, or
+// the sphere radius), so |dp| + angle * reach bounds the motion of every tool point.
+inline void setup_tool_proxy(const SimConfigYAML& cfg, const ShapeMatchingGPUSolver& s, const RigidMesh& tool_mesh,
+                             float avg_spacing, bool& on, double& max_step, double& reach) {
+    on = cfg.tool_proxy;
+    max_step = 0.5 * (double)avg_spacing;
+    reach = (double)s.config.knife_radius;
+    if (s.config.tool_type == 1) { reach = 0.0; for (const auto& v : tool_mesh.vertices) reach = std::max(reach, v.norm()); }
+    if (on) std::printf("[tool-proxy] max step %.3f mm per substep (particle radius), tool reach %.1f mm\n",
+                        max_step * 1e3, reach * 1e3);
 }
 
 // Longest cutting edge at the rest positions (the tool-box margin straddle_fracture needs).
