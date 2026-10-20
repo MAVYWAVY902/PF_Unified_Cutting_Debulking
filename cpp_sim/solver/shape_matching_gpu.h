@@ -80,6 +80,8 @@ struct SimConfigGPU {
     float aspiration_reach = 0.0f;
     // Step 3c: 1 = intact tissue edges also collide with the tool body (thin tools between particles)
     int edge_contact = 0;
+    // R3: 1 = intact edges separated by the tool body (straddle) accumulate P(F) damage
+    int straddle_fracture = 0;
     float3 sharp_edge_a;   // endpoint A in tool local frame (only read if use_sharp_edge_damage=1)
     float3 sharp_edge_b;   // endpoint B
 

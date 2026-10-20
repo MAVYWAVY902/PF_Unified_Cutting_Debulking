@@ -63,6 +63,7 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     s.config.sdf_pf_edge_radius = cfg.sdf_pf_edge_radius ? 1 : 0;
     s.config.aspiration_reach = cfg.aspiration_reach;
     s.config.edge_contact = cfg.edge_contact ? 1 : 0;
+    s.config.straddle_fracture = cfg.straddle_fracture ? 1 : 0;
     s.config.damage_growth_rate = cfg.damage_growth_rate;
     if (cfg.use_sharp_edge_damage) {
         printf("[CUT] sharp_edge: A=(%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f) growth_rate=%.3f\n",
@@ -114,7 +115,11 @@ inline void setup_rigid_object(const SimConfigYAML& cfg, ShapeMatchingGPUSolver&
 // Tool mesh (cfg.tool_mesh_path): centred at its bbox centre (tool local frame), baked at
 // cfg.tool_sdf_resolution with 20% padding, uploaded as d_tool_sdf. Falls back to the sphere
 // (tool_type 0) if the OBJ fails to load. Call after solver.init(). Body MOVED from the viewer.
-inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s, RigidMesh& tool_mesh) {
+// extra_margin [m]: grow the baked box by whole cells (same cell size, same voxel centres, so phi in
+// the original box is unchanged): queries up to one tissue edge away from the tool (e.g. the far
+// endpoint of an edge crossing a thin blade) get a valid phi and normal. Pass the longest edge.
+inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s, RigidMesh& tool_mesh,
+                            double extra_margin = 0.0) {
     if (!cfg.tool_mesh_path.empty()) {
         if (!tool_mesh.load_obj(cfg.tool_mesh_path)) {
             std::cerr << "Tool mesh加载失败: " << cfg.tool_mesh_path << std::endl;
@@ -132,7 +137,7 @@ inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s,
                 std::cout << "Tool scaled by " << cfg.tool_scale << std::endl;
             }
 
-            tool_mesh.compute_sdf(cfg.tool_sdf_resolution, 0.2);
+            tool_mesh.compute_sdf(cfg.tool_sdf_resolution, 0.2, extra_margin);
 
             // Step 3b: cut_features: auto → sharp edges / points of the (centred, scaled) mesh are
             // the CUT_CURVE channel. No feature = blunt tool: contact only, no cutting.
@@ -159,6 +164,16 @@ inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s,
                 origin, cs, "Tool");
         }
     }
+}
+
+// Longest cutting edge at the rest positions (the tool-box margin straddle_fracture needs).
+inline double longest_edge(const std::vector<float3>& pos, const std::vector<int>& ea, const std::vector<int>& eb) {
+    double m = 0.0;
+    for (size_t e = 0; e < ea.size(); e++) {
+        float3 a = pos[ea[e]], b = pos[eb[e]];
+        m = std::max(m, (double)std::sqrt((a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y) + (a.z-b.z)*(a.z-b.z)));
+    }
+    return m;
 }
 
 // --debulk on|off  →  true/false; returns false on a bad value.

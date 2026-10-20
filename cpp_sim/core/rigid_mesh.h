@@ -79,7 +79,11 @@ struct RigidMesh {
     // Generate SDF: signed distance field on a uniform grid
     // resolution: grid cells per axis (e.g. 128)
     // padding: extra space around bounding box (fraction, e.g. 0.1 = 10%)
-    void compute_sdf(int resolution = 128, double padding = 0.1) {
+    // extra_margin [m]: after the cells are sized from the padded box, add whole cells on every side
+    // until the box extends at least extra_margin beyond the padded box. The cell size (resolution)
+    // is unchanged; only the grid grows. Used so that queries a given distance away from a thin tool
+    // (e.g. the far endpoint of a tissue edge crossing it) still get a valid phi and normal.
+    void compute_sdf(int resolution = 128, double padding = 0.1, double extra_margin = 0.0) {
         auto t0 = std::chrono::high_resolution_clock::now();
 
         Vec3 bmin, bmax;
@@ -99,6 +103,13 @@ struct RigidMesh {
         sdf_cell_size = Vec3(extent.x() / sdf_res[0],
                               extent.y() / sdf_res[1],
                               extent.z() / sdf_res[2]);
+        if (extra_margin > 0.0) {
+            for (int k = 0; k < 3; k++) {
+                int n = (int)std::ceil(extra_margin / sdf_cell_size[k]);
+                sdf_res[k] += 2 * n;
+                sdf_origin[k] -= n * sdf_cell_size[k];
+            }
+        }
 
         int total = sdf_res[0] * sdf_res[1] * sdf_res[2];
         sdf_data.resize(total);

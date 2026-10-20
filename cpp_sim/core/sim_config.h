@@ -107,6 +107,7 @@ struct SimConfigYAML {
     bool sdf_pf_edge_radius = false;     // mesh-SDF P(F): subtract edge radius (phi - r_e)
     float aspiration_reach = 0.0f;       // [m] 0 = legacy contains test; >0 = phi <= reach
     bool edge_contact = false;           // Step 3c: intact edges collide with the tool body too
+    bool straddle_fracture = false;      // R3: edges the tool body separates accumulate P(F) damage
 
     // Sharp-edge damage (overrides SDF damage when set).
     // Real-physics cutting: only the sharp edge cuts; blade body just pushes.
@@ -277,6 +278,13 @@ struct SimConfigYAML {
             if (k["sdf_pf_edge_radius"]) sdf_pf_edge_radius = k["sdf_pf_edge_radius"].as<bool>();
             if (k["aspiration_reach"]) aspiration_reach = k["aspiration_reach"].as<float>();
             if (k["edge_contact"]) edge_contact = k["edge_contact"].as<bool>();
+            if (k["straddle_fracture"]) straddle_fracture = k["straddle_fracture"].as<bool>();
+            if (straddle_fracture && !tool_mesh_path.empty() && sdf_normal == "legacy") {
+                std::cerr << "Config error: knife.straddle_fracture needs knife.sdf_normal: trilinear "
+                             "(the straddle test uses the tool normal; legacy normals are wrong on "
+                             "anisotropic SDF grids)" << std::endl;
+                return false;
+            }
             if (k["sharp_edge_a"]) {
                 auto a = k["sharp_edge_a"];
                 sharp_edge_a[0] = a[0].as<float>();
@@ -466,7 +474,8 @@ struct SimConfigYAML {
         std::cout << "  tool: scale=" << tool_scale << " sdf_normal=" << sdf_normal
                   << " sdf_pf_edge_radius=" << (sdf_pf_edge_radius ? "on" : "off")
                   << " aspiration_reach=" << aspiration_reach
-                  << " edge_contact=" << (edge_contact ? "on" : "off") << std::endl;
+                  << " edge_contact=" << (edge_contact ? "on" : "off")
+                  << " straddle_fracture=" << (straddle_fracture ? "on" : "off") << std::endl;
         std::cout << "  debulking: " << (debulking ? "on" : "off") << "  cutting_mode: " << cutting_mode
                   << (cutting_mode == "cut_only"
                       ? " (NO particle removal — true topological cut)"

@@ -232,9 +232,9 @@ int main(int argc, char** argv) {
     printf("[tool_bench] debulking=%s (enable_aspiration=%d, damage_shape_weight=%.1f, sharp_edge=%d)\n",
            cfg.debulking ? "on" : "off", g.config.enable_aspiration, g.config.damage_shape_weight,
            g.config.use_sharp_edge_damage);
-    printf("[tool_bench] tool switches: tool_scale=%.3f sdf_normal=%s sdf_pf_edge_radius=%d aspiration_reach=%.6g edge_contact=%d\n",
+    printf("[tool_bench] tool switches: tool_scale=%.3f sdf_normal=%s sdf_pf_edge_radius=%d aspiration_reach=%.6g edge_contact=%d straddle_fracture=%d\n",
            cfg.tool_scale, g.config.sdf_normal_mode ? "trilinear" : "legacy", g.config.sdf_pf_edge_radius,
-           g.config.aspiration_reach, g.config.edge_contact);
+           g.config.aspiration_reach, g.config.edge_contact, g.config.straddle_fracture);
     if (prestretch_x != 1.0f) {            // after clusters / edges were built from the rest shape
         double xmin = 1e30, xmax = -1e30;
         for (auto& p : positions) { xmin = std::min(xmin, (double)p.x); xmax = std::max(xmax, (double)p.x); }
@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
     } else if (tool == "mesh") {
         if (cfg.tool_mesh_path.empty()) { fprintf(stderr, "--tool mesh needs knife.tool_mesh in yaml\n"); return 1; }
         RigidMesh& tm = tool_rm;
-        setup_tool_mesh(cfg, g, tm);                  // Step 1: same baking as the viewer
+        setup_tool_mesh(cfg, g, tm, longest_edge(positions, ea, eb));   // Step 1: same baking as the viewer
         if (g.config.tool_type != 1) { fprintf(stderr, "tool mesh failed to load\n"); return 1; }
         tool_sdf_host = tm.sdf_data;
         for (int k = 0; k < 3; k++) { tool_res[k] = tm.sdf_res[k]; tool_org[k] = (float)tm.sdf_origin[k]; tool_cell[k] = (float)tm.sdf_cell_size[k]; }
@@ -373,14 +373,13 @@ int main(int argc, char** argv) {
                 n[k] = tool_phi(q1.x, q1.y, q1.z, kp) - tool_phi(q2.x, q2.y, q2.z, kp);
             }
         };
-        // straddling = endpoints on opposite sides of the tangent plane at the deepest point x(t)
-        // (same test as tool_edge_contact_kernel)
+        // straddling = the tool lies between the particles: their outward tool normals point into
+        // opposite half-spaces, and the penetration is deeper than half a cell (same test as
+        // tool_straddle_damage_kernel; the caller checks the penetration)
         auto straddles = [&](const float3& pa, const float3& pb, float tt, const float3& kp) {
-            float3 x = make_float3(pa.x + tt*(pb.x-pa.x), pa.y + tt*(pb.y-pa.y), pa.z + tt*(pb.z-pa.z));
-            float n[3]; tool_n(x, kp, n);
-            float sa = (pa.x-x.x)*n[0] + (pa.y-x.y)*n[1] + (pa.z-x.z)*n[2];
-            float sb = (pb.x-x.x)*n[0] + (pb.y-x.y)*n[1] + (pb.z-x.z)*n[2];
-            return sa * sb < 0.0f;
+            (void)tt;
+            float na[3], nb[3]; tool_n(pa, kp, na); tool_n(pb, kp, nb);
+            return na[0]*nb[0] + na[1]*nb[1] + na[2]*nb[2] < 0.0f;
         };
         auto to_local = [&](float px, float py, float pz, const float3& kp, float l[3]) {
             float wx = px - kp.x, wy = py - kp.y, wz = pz - kp.z;
@@ -436,7 +435,7 @@ int main(int argc, char** argv) {
                     if (pbroken[e]) pass_b++;
                     else {
                         pass_u++; minphi = std::min(minphi, mn);
-                        if (straddles(pa, pb, tmn, kp)) pass_us++;
+                        if (mn < -pass_h && straddles(pa, pb, tmn, kp)) pass_us++;
                     }
                 }
             }

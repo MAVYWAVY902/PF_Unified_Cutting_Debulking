@@ -698,6 +698,58 @@ __global__ void tool_damage_kernel(
     }
 }
 
+// R3 — straddle fracture. The tool body may not coexist with intact material: an intact edge
+// whose SEGMENT the tool separates (its endpoints lie on opposite sides of the tangent plane at
+// the deepest intrusion point, see tool_edge_contact_kernel) is under fracture loading. Damage
+// uses the same P(F) model with the edge segment as the element and the tool solid as the
+// intruder: sdist = phi_seg (penetration of the tool into the segment, < 0), pf = sigma(alpha *
+// sdist / r_e), and the same capped growth / damage model as tool_damage_kernel. Same-side
+// intrusions (the tool presses into the edge from one side) are contact, not fracture.
+__global__ void tool_straddle_damage_kernel(
+    float3* pred_pos, int* removed,
+    int* edge_a, int* edge_b, float* pf_rest, float* damage, int* broken,
+    ToolDesc tool, float sample_h, float eps,
+    float alpha_min_scalar, const float* alpha_min_per_edge,
+    float damage_growth_rate, int num_edges, int damage_model, int* topo_dirty)
+{
+    int eid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (eid >= num_edges || broken[eid]) return;
+    int a = edge_a[eid], b = edge_b[eid];
+    if (removed[a] || removed[b]) return;
+    float3 pa = pred_pos[a], pb = pred_pos[b];
+    float t, phi; float3 n;
+    if (!tool_edge_deepest(tool, pa, pb, sample_h, t, phi, n)) return;
+    float3 x = make_float3(pa.x + t*(pb.x - pa.x), pa.y + t*(pb.y - pa.y), pa.z + t*(pb.z - pa.z));
+    // Separation: the tool lies BETWEEN the particles when their outward tool normals point into
+    // opposite half-spaces (n_a . n_b < 0): crossing a blade or a needle shaft gives ~ -1, an edge
+    // lying on a face +1. (Not the tangent plane at the deepest point: at an interior minimum of
+    // phi along the segment the gradient is orthogonal to the segment, so that test degenerates.)
+    // Topology is decided only beyond the representation's resolution: penetration deeper than eps.
+    (void)x;
+    if (phi > -eps) return;
+    float3 na = tool_query(tool, pa, true).n, nb = tool_query(tool, pb, true).n;
+    if (na.x*nb.x + na.y*nb.y + na.z*nb.z >= 0.0f) return;   // same side (or a normal undefined)
+    float ex = pa.x - pb.x, ey = pa.y - pb.y, ez = pa.z - pb.z;
+    float radius = sqrtf(ex*ex + ey*ey + ez*ez) * 0.5f;
+    if (radius < 1e-10f) return;
+    float alpha_min = (alpha_min_per_edge != nullptr) ? alpha_min_per_edge[eid] : alpha_min_scalar;
+    float pf = 1.0f / (1.0f + expf(-alpha_min * phi / radius));
+    float rest = pf_rest[eid];
+    if (rest > 0.01f) {
+        float target = fmaxf(0.0f, 1.0f - pf / rest);
+        float gap = target - damage[eid];
+        if (gap > 0.0f) {
+            float effective_rate = damage_growth_rate;
+            if (damage_model == 1) effective_rate = damage_growth_rate / fmaxf(alpha_min, 0.1f);
+            damage[eid] += gap < effective_rate ? gap : effective_rate;
+        }
+    }
+    if (damage[eid] > 0.5f) {
+        broken[eid] = 1;
+        if (topo_dirty) *topo_dirty = 1;
+    }
+}
+
 // float atomicMax（CUDA 原生不支持，用 atomicCAS 模拟）
 __device__ void atomicMaxFloat(float* addr, float val) {
     if (val <= 0.0f) return;
@@ -1203,7 +1255,7 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
         memcpy(ch.tool.rot, config.knife_rot, sizeof(ch.tool.rot));
         ch.seg = d_cut_segments;
         ch.num_seg = (int)h_cut_segments.size() / 2;
-        if (ch.num_seg == 0) return;          // blunt tool: no sharp feature, nothing to cut
+        if (ch.num_seg == 0) ch.kind = -1;    // blunt tool: no sharp feature → no feature cut
     } else if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
         ch.kind = CUT_SURFACE;
         ch.tool = grid_tool_desc(config, d_tool_sdf);
@@ -1216,6 +1268,7 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
     // Material fields (per-edge α, damage model) apply to every channel.
     const float* alpha_arr = (per_edge_alpha && d_edges.alpha_min_per_edge != nullptr)
                               ? d_edges.alpha_min_per_edge : nullptr;
+    if (ch.kind >= 0)
     tool_damage_kernel<<<blocks_e, 256>>>(
         d_particles.predicted_pos, d_particles.removed,
         d_edges.particle_a, d_edges.particle_b,
@@ -1223,6 +1276,26 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
         ch, alpha_min, alpha_arr,
         config.damage_growth_rate, E,
         damage_model_mode, local_split ? d_topo_dirty : nullptr);
+
+    // R3: intact edges the tool body separates (straddle) are under fracture loading
+    if (config.straddle_fracture) {
+        ToolDesc tool;
+        float h = 0.0f, eps;
+        if (config.tool_type == 1 && d_tool_sdf.active && d_tool_sdf.d_sdf) {
+            tool = grid_tool_desc(config, d_tool_sdf);
+            h = 0.5f * fminf(tool.cell.x, fminf(tool.cell.y, tool.cell.z));
+            eps = h;                          // grid: half the smallest SDF cell
+        } else {
+            tool = make_sphere_tool(config.knife_pos, config.knife_radius);
+            eps = 1e-5f * config.knife_radius;  // analytic sphere: float precision only
+        }
+        tool_straddle_damage_kernel<<<blocks_e, 256>>>(
+            d_particles.predicted_pos, d_particles.removed,
+            d_edges.particle_a, d_edges.particle_b,
+            d_edges.pf_rest, d_edges.damage, d_edges.broken,
+            tool, h, eps, alpha_min, alpha_arr,
+            config.damage_growth_rate, E, damage_model_mode, local_split ? d_topo_dirty : nullptr);
+    }
 }
 
 // Upload the CUT_CURVE features when set_cut_segments changed them.

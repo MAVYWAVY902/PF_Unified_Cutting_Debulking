@@ -291,7 +291,7 @@ int main(int argc, char** argv) {
     RigidMesh rigid_mesh;
     setup_rigid_object(cfg, gpu_solver, deformable_y_offset, rigid_mesh);
     RigidMesh tool_mesh;
-    setup_tool_mesh(cfg, gpu_solver, tool_mesh);
+    setup_tool_mesh(cfg, gpu_solver, tool_mesh, longest_edge(positions, edge_a, edge_b));
 
     // --- CPU 端 buffers（GPU → CPU 下载用）---
     std::vector<float3> cpu_positions(N);
