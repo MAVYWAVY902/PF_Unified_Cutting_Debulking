@@ -38,6 +38,7 @@ struct SimConfigYAML {
     float damping = 0.98f;
     int substeps = 4;
     bool substeps_auto = false;
+    bool tool_substep_interp = false;   // R4: tool pose interpolated across the substeps of a frame
 
     // Boundary
     float floor_y = 0.0f;
@@ -234,6 +235,7 @@ struct SimConfigYAML {
                     if (sim["substeps"].as<std::string>() == "auto") substeps_auto = true;
                 }
             }
+            if (sim["tool_substep_interp"]) tool_substep_interp = sim["tool_substep_interp"].as<bool>();
         }
 
         // Boundary
@@ -485,7 +487,8 @@ struct SimConfigYAML {
         else
             std::cout << "  particle_grid: " << grid_side << "^3, spacing=" << grid_spacing << std::endl;
         std::cout << "  dt=" << dt << ", iters=" << num_iterations
-                  << ", stiffness=" << stiffness << ", substeps=" << substeps << std::endl;
+                  << ", stiffness=" << stiffness << ", substeps=" << substeps
+                  << ", tool_substep_interp=" << (tool_substep_interp ? "on" : "off") << std::endl;
         std::cout << "  knife_radius=" << knife_radius
                   << ", self_collision_radius=" << self_collision_radius << std::endl;
         std::cout << "  fixed_ratio=" << fixed_ratio

@@ -328,7 +328,8 @@ int main(int argc, char** argv) {
         std::vector<float3> rpos(N); std::vector<int> rrem(N, 0); std::vector<float> rdmg(N, 0.0f);
         std::vector<int> tet_broken(tet_mesh.num_tets(), 0);
         simrec_frame::FramePipeline pipe{g, cpu_solver, tet_mesh, ea, eb, epf,
-                                         rpos, rrem, rdmg, tet_broken, true, cfg.cutting_mode, N, cfg.local_split};
+                                         rpos, rrem, rdmg, tet_broken, true, cfg.cutting_mode, N, cfg.local_split,
+                                         cfg.tool_substep_interp};
         // --pass-through: after each active frame (end-of-frame positions, the tool pose of that
         // frame) classify every edge whose two particles are alive by sampling phi along it every
         // half of the smallest SDF cell:

@@ -13,6 +13,7 @@
 #include "core/tet_mesh.h"
 #include <cuda_runtime.h>
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <queue>
@@ -297,6 +298,37 @@ inline bool cpu_bfs_split(
 
 namespace simrec_frame {
 
+// R4 — tool pose interpolation across the substeps of a frame. Rotations are row-major 3x3
+// (local -> world), interpolated as unit quaternions (slerp); positions linearly.
+struct Quatd { double w, x, y, z; };
+inline Quatd quat_from_rot(const float R[9]) {           // Shepperd's method
+    double m00 = R[0], m01 = R[1], m02 = R[2], m10 = R[3], m11 = R[4], m12 = R[5], m20 = R[6], m21 = R[7], m22 = R[8];
+    double tr = m00 + m11 + m22; Quatd q;
+    if (tr > 0) { double s = std::sqrt(tr + 1.0) * 2; q = {0.25 * s, (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s}; }
+    else if (m00 > m11 && m00 > m22) { double s = std::sqrt(1.0 + m00 - m11 - m22) * 2; q = {(m21 - m12) / s, 0.25 * s, (m01 + m10) / s, (m02 + m20) / s}; }
+    else if (m11 > m22) { double s = std::sqrt(1.0 + m11 - m00 - m22) * 2; q = {(m02 - m20) / s, (m01 + m10) / s, 0.25 * s, (m12 + m21) / s}; }
+    else { double s = std::sqrt(1.0 + m22 - m00 - m11) * 2; q = {(m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, 0.25 * s}; }
+    double n = std::sqrt(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z);
+    return {q.w / n, q.x / n, q.y / n, q.z / n};
+}
+inline void rot_from_quat(const Quatd& q, float R[9]) {
+    double w = q.w, x = q.x, y = q.y, z = q.z;
+    R[0] = (float)(1 - 2*(y*y + z*z)); R[1] = (float)(2*(x*y - w*z));     R[2] = (float)(2*(x*z + w*y));
+    R[3] = (float)(2*(x*y + w*z));     R[4] = (float)(1 - 2*(x*x + z*z)); R[5] = (float)(2*(y*z - w*x));
+    R[6] = (float)(2*(x*z - w*y));     R[7] = (float)(2*(y*z + w*x));     R[8] = (float)(1 - 2*(x*x + y*y));
+}
+inline Quatd slerp(Quatd a, Quatd b, double t) {
+    double d = a.w*b.w + a.x*b.x + a.y*b.y + a.z*b.z;
+    if (d < 0) { b = {-b.w, -b.x, -b.y, -b.z}; d = -d; }   // shortest arc
+    if (d > 0.9995) {                                      // nearly equal: normalized lerp
+        Quatd q = {a.w + t*(b.w - a.w), a.x + t*(b.x - a.x), a.y + t*(b.y - a.y), a.z + t*(b.z - a.z)};
+        double n = std::sqrt(q.w*q.w + q.x*q.x + q.y*q.y + q.z*q.z);
+        return {q.w / n, q.x / n, q.y / n, q.z / n};
+    }
+    double th = std::acos(d), s = std::sin(th), ka = std::sin((1 - t) * th) / s, kb = std::sin(t * th) / s;
+    return {ka*a.w + kb*b.w, ka*a.x + kb*b.x, ka*a.y + kb*b.y, ka*a.z + kb*b.z};
+}
+
 struct FramePipeline {
     ShapeMatchingGPUSolver& gpu;
     ShapeMatchingSolver& cpu;
@@ -312,6 +344,12 @@ struct FramePipeline {
     std::string cutting_mode;
     int N;
     bool local_split = false;         // R1: GPU sub-clusters; skip cpu_bfs_split re-clustering
+    // R4: interpolate the tool pose across the substeps (only while the tool stays active, so
+    // switching it on never sweeps it in from the parking position). State of the previous frame:
+    bool tool_interp = false;
+    bool prev_valid = false;
+    float3 prev_pos = {0, 0, 0};
+    float prev_rot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 };
 
 struct FrameResult {
@@ -339,9 +377,27 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
         for (int i = 0; i < N; i++) rem_before += (P.removed[i] != 0);
         // GPU 仿真
         auto t0 = std::chrono::high_resolution_clock::now();
+        // R4: the caller has set this frame's TARGET pose; substep k uses the pose (k+1)/substeps of
+        // the way from the previous frame's pose (last substep = target).
+        const float3 tgt_pos = P.gpu.config.knife_pos;
+        float tgt_rot[9]; for (int k = 0; k < 9; k++) tgt_rot[k] = P.gpu.config.knife_rot[k];
+        const bool interp = P.tool_interp && knife_active && P.prev_valid;
+        Quatd qa = {1, 0, 0, 0}, qb = {1, 0, 0, 0};
+        if (interp) { qa = quat_from_rot(P.prev_rot); qb = quat_from_rot(tgt_rot); }
         for (int sub = 0; sub < substeps; sub++) {
+            if (interp) {
+                double t = (double)(sub + 1) / substeps;
+                P.gpu.config.knife_pos = make_float3((float)(P.prev_pos.x + t * (tgt_pos.x - P.prev_pos.x)),
+                                                     (float)(P.prev_pos.y + t * (tgt_pos.y - P.prev_pos.y)),
+                                                     (float)(P.prev_pos.z + t * (tgt_pos.z - P.prev_pos.z)));
+                if (sub + 1 == substeps) { for (int k = 0; k < 9; k++) P.gpu.config.knife_rot[k] = tgt_rot[k]; P.gpu.config.knife_pos = tgt_pos; }
+                else rot_from_quat(slerp(qa, qb, t), P.gpu.config.knife_rot);
+            }
             P.gpu.step();
         }
+        P.prev_valid = knife_active;
+        P.prev_pos = tgt_pos;
+        for (int k = 0; k < 9; k++) P.prev_rot[k] = tgt_rot[k];
         cudaDeviceSynchronize();
         auto t1 = std::chrono::high_resolution_clock::now();
 

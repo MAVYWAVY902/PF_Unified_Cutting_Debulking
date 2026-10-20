@@ -360,7 +360,7 @@ int main(int argc, char** argv) {
     simrec_frame::FramePipeline pipeline{gpu_solver, cpu_solver, tet_mesh,
                                          edge_a, edge_b, edge_pf_rest,
                                          cpu_positions, cpu_removed, cpu_damage, tet_broken,
-                                         use_tet, cfg.cutting_mode, N, cfg.local_split};
+                                         use_tet, cfg.cutting_mode, N, cfg.local_split, cfg.tool_substep_interp};
 
     // --- Step 0.5a: recorder / per-frame stats (observation only) ---
     simrec::TrajectoryRecorder recorder;
