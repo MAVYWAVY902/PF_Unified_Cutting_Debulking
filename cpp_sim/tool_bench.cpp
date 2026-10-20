@@ -34,6 +34,7 @@
 #include "core/particles.h"
 #include "core/cluster.h"
 #include "core/tet_mesh.h"
+#include "core/mesh_distance.h"
 #include <set>
 #include "core/cutting_manager.h"
 #include "core/pf_calculator.h"
@@ -343,7 +344,8 @@ int main(int argc, char** argv) {
             if (tool != "mesh") { fprintf(stderr, "--pass-through needs --tool mesh\n"); return 1; }
             pass_f = fopen(pass_path.c_str(), "w");
             if (!pass_f) { fprintf(stderr, "cannot open %s\n", pass_path.c_str()); return 1; }
-            fprintf(pass_f, "frame,particles_inside,in_unbroken,pass_unbroken,pass_broken,pass_unbroken_min_phi_mm,pass_unbroken_straddle\n");
+            fprintf(pass_f, "frame,particles_inside,in_unbroken,pass_unbroken,pass_broken,pass_unbroken_min_phi_mm,pass_unbroken_straddle,"
+                            "inside_exact,straddle_exact,straddle_exact_missed_by_grid\n");
         }
         float pass_h = 0.5f * std::min(tool_cell[0], std::min(tool_cell[1], tool_cell[2]));
         // "inside" means phi < -pass_tol: the collision projects particles ONTO the surface, so a
@@ -363,6 +365,17 @@ int main(int argc, char** argv) {
             pass_e = fopen((pass_path + ".edges.csv").c_str(), "w");
             fprintf(pass_e, "frame,edge,kind,lx,ly,lz,broken,damage,len_mm,mid_to_sharp_mm,straddle,phi_a_mm,phi_b_mm,t\n");
         }
+        // R2 reference: exact signed distance to the tool mesh (local frame), its outward normal
+        ExactMeshSDF exact; if (tool == "mesh") exact.build(tool_rm);
+        auto ex_local = [&](const float3& p, const float3& kp) {
+            float wx = p.x - kp.x, wy = p.y - kp.y, wz = p.z - kp.z;
+            return Vec3(KR[0]*wx + KR[3]*wy + KR[6]*wz, KR[1]*wx + KR[4]*wy + KR[7]*wz, KR[2]*wx + KR[5]*wy + KR[8]*wz);
+        };
+        auto ex_phi_n = [&](const Vec3& l, Vec3* n) {
+            Vec3 c; double ph = exact.phi(l, &c);
+            if (n) { Vec3 d = l - c; double dn = d.norm(); *n = dn > 1e-15 ? Vec3(d / dn * (ph < 0 ? -1.0 : 1.0)) : Vec3(0, 0, 0); }
+            return ph;
+        };
         // outward normal of the baked tool SDF at p (central differences, half a cell)
         auto tool_n = [&](const float3& p, const float3& kp, float n[3]) {
             float hh = pass_h;
@@ -405,6 +418,12 @@ int main(int argc, char** argv) {
             bool dump = pass_e && (pass_count++ % 10 == 0);
             if (dump) g.download_edge_damage(pdmg);
             int pin = 0, in_u = 0, pass_u = 0, pass_b = 0, pass_us = 0; float minphi = 0.0f;
+            int in_ex = 0, strad_ex = 0, strad_ex_missed = 0;
+            // exact-geometry counts (only near the tool: inside the grown baked box)
+            for (int i = 0; i < N; i++) {
+                if (rrem[i] || tool_phi(rpos[i].x, rpos[i].y, rpos[i].z, kp) > 1e29f) continue;
+                if (ex_phi_n(ex_local(rpos[i], kp), nullptr) < -pass_tol) in_ex++;
+            }
             for (int i = 0; i < N; i++)
                 if (!rrem[i] && tool_phi(rpos[i].x, rpos[i].y, rpos[i].z, kp) < -pass_tol) pin++;
             for (int e = 0; e < E; e++) {
@@ -431,6 +450,21 @@ int main(int argc, char** argv) {
                     fprintf(pass_e, "%d,%d,pass,%.4f,%.4f,%.4f,%d,%.3f,%.4f,%.4f,%d,%.4f,%.4f,%.3f\n", frame, e, l[0]*1e3f, l[1]*1e3f, l[2]*1e3f,
                             pbroken[e], pdmg[e], len*1e3f, mid_to_sharp(m)*1e3f, strad, fa*1e3f, fb*1e3f, tmn);
                 }
+                if (!pbroken[e]) {          // exact straddle test (same rule as the kernel, exact geometry)
+                    Vec3 la = ex_local(pa, kp), lb = ex_local(pb, kp);
+                    double emn = 1e30;
+                    for (int k = 1; k < 4 * ns; k++) {
+                        double tt = (double)k / (4 * ns);
+                        emn = std::min(emn, exact.phi(la + (lb - la) * tt));
+                    }
+                    if (emn < -pass_h) {
+                        Vec3 na, nb; ex_phi_n(la, &na); ex_phi_n(lb, &nb);
+                        if (na.dot(nb) < 0.0) {
+                            strad_ex++;
+                            if (!(mn < -pass_h && straddles(pa, pb, tmn, kp))) strad_ex_missed++;
+                        }
+                    }
+                }
                 if (mn < -pass_tol) {
                     if (pbroken[e]) pass_b++;
                     else {
@@ -439,7 +473,8 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            fprintf(pass_f, "%d,%d,%d,%d,%d,%.4f,%d\n", frame, pin, in_u, pass_u, pass_b, minphi * 1e3f, pass_us);
+            fprintf(pass_f, "%d,%d,%d,%d,%d,%.4f,%d,%d,%d,%d\n", frame, pin, in_u, pass_u, pass_b, minphi * 1e3f, pass_us,
+                    in_ex, strad_ex, strad_ex_missed);
         };
         int f = 0; bool prev_active = false;
         for (const auto& fr : rp.frames()) {
