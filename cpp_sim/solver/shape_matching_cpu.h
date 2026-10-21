@@ -55,8 +55,8 @@ public:
         // 1. 外力 + 阻尼 + 预测（跳过 removed 和 fixed 粒子）
         for (int i = 0; i < N; i++) {
             if (particles[i].removed || particles[i].fixed) continue;
+            particles[i].vel *= config.damping;          // damp first: gravity is not scaled by damping
             particles[i].vel += config.gravity * dt;
-            particles[i].vel *= config.damping;
             particles[i].predicted_pos = particles[i].pos + particles[i].vel * dt;
         }
 

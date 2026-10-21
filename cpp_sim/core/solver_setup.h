@@ -17,6 +17,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -25,7 +26,26 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     s.config.gravity = make_float3(cfg.gravity[0], cfg.gravity[1], cfg.gravity[2]);
     s.config.num_iterations = cfg.num_iterations;
     s.config.stiffness = cfg.stiffness;
-    s.config.damping = cfg.damping;
+    s.config.damping = cfg.damping_rate >= 0.0f ? std::exp(-cfg.damping_rate * cfg.dt) : cfg.damping;
+    // tissue elasticity solver (see SimConfigGPU::solver_xpbd)
+    if (cfg.solver != "pbd" && cfg.solver != "xpbd") {
+        std::cerr << "[config] simulation.solver must be pbd or xpbd, got " << cfg.solver << std::endl;
+        std::exit(1);
+    }
+    s.config.solver_xpbd = cfg.solver == "xpbd" ? 1 : 0;
+    s.config.xpbd_stiffness = cfg.xpbd_stiffness;
+    if (s.config.solver_xpbd) {
+        if (cfg.xpbd_stiffness <= 0.0f) {
+            std::cerr << "[config] solver xpbd needs simulation.xpbd_stiffness > 0 (1/s^2)" << std::endl;
+            std::exit(1);
+        }
+        if (cfg.per_particle_stiffness) {   // the per-particle field is a PBD per-iteration factor
+            std::cerr << "[config] solver xpbd does not support per_particle_stiffness yet" << std::endl;
+            std::exit(1);
+        }
+        printf("[XPBD] k/m = %.4g 1/s^2, dt %.4g s, %d iterations, damping %.6g per substep\n",
+               cfg.xpbd_stiffness, cfg.dt, cfg.num_iterations, s.config.damping);
+    }
     s.config.floor_y = cfg.floor_y;
     s.config.knife_pos = make_float3(100, 100, 100);
     // Identity rotation

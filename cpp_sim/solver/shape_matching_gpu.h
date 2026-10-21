@@ -121,6 +121,12 @@ struct SimConfigGPU {
     //          → user sees 0.5s of elastic deformation before tissue yields
     // Lower = more elastic feel. Physical analogy: tissue tensile strength integral.
     float damage_growth_rate = 1.0f;
+    // XPBD shape matching (solver: xpbd). Each cluster member is a zero-length link to its goal with
+    // stiffness k per particle mass m (xpbd_stiffness = k/m, 1/s^2); the multipliers accumulate over
+    // the iterations of a substep, so the converged deformation depends on k/m, not on dt or on
+    // num_iterations. 0 = legacy PBD (stiffness applied per iteration).
+    int solver_xpbd = 0;
+    float xpbd_stiffness = 0.0f;
 };
 
 // SDF data (used for both rigid body collision and tool collision)
@@ -339,6 +345,12 @@ private:
     int* d_cluster_multi = nullptr;   // [C] 1 = cluster split into >= 2 sub-clusters
     int max_cluster_size = 0;
     void update_cluster_labels();
+    // XPBD (config.solver_xpbd): per cluster entry [total_entries], goal of this iteration (NaN = no
+    // goal) and the accumulated multiplier of the substep (mass-normalised, metres)
+    float3* d_xpbd_goal = nullptr;
+    float3* d_xpbd_lambda = nullptr;
+    int xpbd_entries = 0;
+    void ensure_xpbd_buffers();
 
     // GPU cutting kernels
     void gpu_update_damage();

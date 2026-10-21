@@ -17,12 +17,15 @@ __global__ void predict_kernel(
     if (i >= N || removed[i] || fixed[i]) return;
 
     old_pos[i] = pos[i];
-    vel[i].x += gravity.x * dt;
-    vel[i].y += gravity.y * dt;
-    vel[i].z += gravity.z * dt;
+    // Damp the velocity carried over from the last substep, THEN add this substep's gravity. Damping
+    // after gravity also scaled the gravity load: at rest (v = 0) the body carried only damping * g,
+    // a dt-dependent loss (5% at 0.95, 14% at 0.857) that changed the static sag.
     vel[i].x *= damping;
     vel[i].y *= damping;
     vel[i].z *= damping;
+    vel[i].x += gravity.x * dt;
+    vel[i].y += gravity.y * dt;
+    vel[i].z += gravity.z * dt;
     predicted_pos[i].x = pos[i].x + vel[i].x * dt;
     predicted_pos[i].y = pos[i].y + vel[i].y * dt;
     predicted_pos[i].z = pos[i].z + vel[i].z * dt;
@@ -78,7 +81,7 @@ __device__ __forceinline__ void cluster_solve_body(
     int* cluster_starts, int* cluster_sizes,
     int* particle_ids, float3* rest_offsets,
     float3* deltas, int* delta_counts,
-    float damage_shape_weight);
+    float damage_shape_weight, float3* goals);
 
 __global__ void cluster_solve_kernel(
     float3* positions, int* removed, float* damage,
@@ -86,12 +89,13 @@ __global__ void cluster_solve_kernel(
     int* particle_ids, float3* rest_offsets,
     float3* deltas, int* delta_counts,
     float damage_shape_weight,    // α: 0=no weighting (debulk), 1=PF-weighted (cut_only)
-    int num_clusters)
+    int num_clusters,
+    float3* goals)                // XPBD: write each member's goal here instead of the delta (nullptr = PBD)
 {
     int cid = blockIdx.x;
     if (cid >= num_clusters) return;
     cluster_solve_body(cid, positions, removed, damage, cluster_starts, cluster_sizes, particle_ids,
-                       rest_offsets, deltas, delta_counts, damage_shape_weight);
+                       rest_offsets, deltas, delta_counts, damage_shape_weight, goals);
 }
 
 // Body of the legacy whole-cluster shape match (also used by R1 for clusters that are not split).
@@ -101,7 +105,7 @@ __device__ __forceinline__ void cluster_solve_body(
     int* cluster_starts, int* cluster_sizes,
     int* particle_ids, float3* rest_offsets,
     float3* deltas, int* delta_counts,
-    float damage_shape_weight)
+    float damage_shape_weight, float3* goals)
 {
     int tid = threadIdx.x;
 
@@ -240,6 +244,11 @@ __device__ __forceinline__ void cluster_solve_body(
         float gy = r21*qx + r22*qy + r23*qz + cy;
         float gz = r31*qx + r32*qy + r33*qz + cz;
 
+        if (goals) {                    // XPBD: the link update needs every member's count first
+            goals[start + j] = make_float3(gx, gy, gz);
+            atomicAdd(&delta_counts[pid], 1);
+            continue;
+        }
         atomicAdd(&deltas[pid].x, gx - positions[pid].x);
         atomicAdd(&deltas[pid].y, gy - positions[pid].y);
         atomicAdd(&deltas[pid].z, gz - positions[pid].z);
@@ -309,13 +318,14 @@ __global__ void cluster_solve_sub_kernel(
     int* particle_ids, float3* rest_offsets, const int* labels,
     float3* deltas, int* delta_counts,
     float damage_shape_weight, int min_sub,
-    int num_clusters, const int* cluster_multi)
+    int num_clusters, const int* cluster_multi,
+    float3* goals)
 {
     int cid = blockIdx.x;
     if (cid >= num_clusters) return;
     if (!cluster_multi[cid]) {          // not split: the legacy whole-cluster shape match
         cluster_solve_body(cid, positions, removed, damage, cluster_starts, cluster_sizes, particle_ids,
-                           rest_offsets, deltas, delta_counts, damage_shape_weight);
+                           rest_offsets, deltas, delta_counts, damage_shape_weight, goals);
         return;
     }
     int tid = threadIdx.x;
@@ -437,6 +447,11 @@ __global__ void cluster_solve_sub_kernel(
             float gx = r11*qx + r12*qy + r13*qz + cx;
             float gy = r21*qx + r22*qy + r23*qz + cy;
             float gz = r31*qx + r32*qy + r33*qz + cz;
+            if (goals) {
+                goals[start + j] = make_float3(gx, gy, gz);
+                atomicAdd(&delta_counts[pid], 1);
+                continue;
+            }
             atomicAdd(&deltas[pid].x, gx - positions[pid].x);
             atomicAdd(&deltas[pid].y, gy - positions[pid].y);
             atomicAdd(&deltas[pid].z, gz - positions[pid].z);
@@ -478,6 +493,50 @@ __global__ void apply_kernel_per_particle_stiff(
     pred_pos[i].x += local_stiff * deltas[i].x * inv_count;
     pred_pos[i].y += local_stiff * deltas[i].y * inv_count;
     pred_pos[i].z += local_stiff * deltas[i].z * inv_count;
+}
+
+// XPBD shape matching (Macklin 2016), one thread per cluster entry. The entry is a zero-length link
+// C = x_i - g (goal g held fixed within the iteration, as in Müller 2005) with compliance
+// alpha = 1/k. Mass-normalised (lambda in metres, k/m = xpbd_stiffness):
+//   alpha_t = 1 / (k/m * dt^2),  dlambda = (-C - alpha_t * lambda) / (n_i + alpha_t),  dx_i += dlambda
+// n_i = the particle's goals this iteration: the Jacobi average of the PBD path written as mass
+// splitting, so the multipliers stay consistent with the averaged positions. Damage softens the link
+// like apply_kernel's (1 - 0.95 damage) stiffness factor. The goal is reset to NaN once read.
+__global__ void xpbd_shape_kernel(
+    const float3* pred_pos, const int* particle_ids, float3* goals, float3* lambda,
+    const int* delta_counts, const float* damage, const int* removed, const int* fixed,
+    float3* deltas, float k_over_m, float dt, int E)
+{
+    int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= E) return;
+    float3 g = goals[e];
+    if (isnan(g.x)) return;
+    goals[e] = make_float3(NAN, NAN, NAN);
+    int i = particle_ids[e];
+    if (removed[i] || fixed[i]) return;
+    float k = k_over_m * (1.0f - damage[i] * 0.95f);
+    if (k <= 0.0f) return;
+    float at = 1.0f / (k * dt * dt);
+    float n = (float)delta_counts[i];
+    float3 l = lambda[e], p = pred_pos[i];
+    float inv = 1.0f / (n + at);
+    float3 dl = make_float3((g.x - p.x - at * l.x) * inv, (g.y - p.y - at * l.y) * inv, (g.z - p.z - at * l.z) * inv);
+    lambda[e] = make_float3(l.x + dl.x, l.y + dl.y, l.z + dl.z);
+    atomicAdd(&deltas[i].x, dl.x);
+    atomicAdd(&deltas[i].y, dl.y);
+    atomicAdd(&deltas[i].z, dl.z);
+}
+
+// XPBD apply: the summed link corrections (already split by n_i in xpbd_shape_kernel).
+__global__ void xpbd_apply_kernel(
+    float3* pred_pos, const float3* deltas, const int* delta_counts,
+    const int* removed, const int* fixed, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || removed[i] || fixed[i] || delta_counts[i] == 0) return;
+    pred_pos[i].x += deltas[i].x;
+    pred_pos[i].y += deltas[i].y;
+    pred_pos[i].z += deltas[i].z;
 }
 
 // Apply self-collision delta (FleX constraint groups, Macklin 2014, Sec 4).
@@ -1674,6 +1733,18 @@ void ShapeMatchingGPUSolver::update_cluster_labels() {
 
 // ============== Simulation Step ==============
 
+// XPBD buffers, sized to the current cluster CSR (reupload_clusters may change it). A new goal
+// buffer starts all-NaN (= no goal); xpbd_shape_kernel resets every goal it reads.
+void ShapeMatchingGPUSolver::ensure_xpbd_buffers() {
+    int E = d_clusters.total_entries;
+    if (d_xpbd_goal && xpbd_entries == E) return;
+    if (d_xpbd_goal) { cudaFree(d_xpbd_goal); cudaFree(d_xpbd_lambda); }
+    CUDA_CHECK(cudaMalloc(&d_xpbd_goal, E * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_xpbd_lambda, E * sizeof(float3)));
+    CUDA_CHECK(cudaMemset(d_xpbd_goal, 0xFF, E * sizeof(float3)));
+    xpbd_entries = E;
+}
+
 void ShapeMatchingGPUSolver::step() {
     int N = d_particles.N;
     int C = d_clusters.num_clusters;
@@ -1719,6 +1790,14 @@ void ShapeMatchingGPUSolver::step() {
     // R1: sub-cluster labels from the current broken edges / removed particles
     if (local_split) update_cluster_labels();
 
+    // XPBD: the multipliers accumulate over the iterations of this substep only
+    const bool xpbd = config.solver_xpbd != 0;
+    if (xpbd) {
+        ensure_xpbd_buffers();
+        CUDA_CHECK(cudaMemsetAsync(d_xpbd_lambda, 0, xpbd_entries * sizeof(float3)));
+    }
+    float3* goals = xpbd ? d_xpbd_goal : nullptr;
+
     // 3. Jacobi 迭代 — FleX constraint groups (Macklin 2014 Sec 4):
     //    Group 1: shape-matching (cluster_solve → apply) — soft constraint, Jacobi-averaged
     //    Group 2: self-collision (self_collision_kernel → apply_sc) — separate delta buffer
@@ -1736,7 +1815,7 @@ void ShapeMatchingGPUSolver::step() {
                 d_clusters.particle_ids, d_clusters.rest_offsets, d_labels,
                 d_deltas, d_delta_counts,
                 config.damage_shape_weight, 4,
-                C, d_cluster_multi);
+                C, d_cluster_multi, goals);
         } else {
             cluster_solve_kernel<<<C, 32>>>(
                 d_particles.predicted_pos, d_particles.removed, d_particles.damage,
@@ -1744,7 +1823,14 @@ void ShapeMatchingGPUSolver::step() {
                 d_clusters.particle_ids, d_clusters.rest_offsets,
                 d_deltas, d_delta_counts,
                 config.damage_shape_weight,
-                C);
+                C, goals);
+        }
+        if (xpbd) {
+            int E = d_clusters.total_entries;
+            xpbd_shape_kernel<<<(E + 255) / 256, 256>>>(
+                d_particles.predicted_pos, d_clusters.particle_ids, d_xpbd_goal, d_xpbd_lambda,
+                d_delta_counts, d_particles.damage, d_particles.removed, d_particles.fixed,
+                d_deltas, config.xpbd_stiffness, config.dt, E);
         }
 
         // CCD (contact_ccd): the positions before this iteration's apply — just put outside the tool
@@ -1759,7 +1845,11 @@ void ShapeMatchingGPUSolver::step() {
         // Apply shape-match delta (avg over ~60 cluster memberships)
         // Day (2026-05-24): dispatch to per-particle stiffness variant when enabled.
         // Global path (else branch) is BYTE-IDENTICAL to original behavior.
-        if (per_particle_stiffness && d_stiffness_per_particle != nullptr) {
+        if (xpbd) {
+            xpbd_apply_kernel<<<blocks_n, 256>>>(
+                d_particles.predicted_pos, d_deltas, d_delta_counts,
+                d_particles.removed, d_particles.fixed, N);
+        } else if (per_particle_stiffness && d_stiffness_per_particle != nullptr) {
             apply_kernel_per_particle_stiff<<<blocks_n, 256>>>(
                 d_particles.predicted_pos, d_deltas, d_delta_counts,
                 d_particles.damage, d_particles.removed, d_particles.fixed,
@@ -2065,6 +2155,7 @@ void ShapeMatchingGPUSolver::cleanup() {
     cudaFree(d_delta_counts_sc);
     cudaFree(d_deltas_ec);
     cudaFree(d_delta_counts_ec);
+    if (d_xpbd_goal) { cudaFree(d_xpbd_goal); cudaFree(d_xpbd_lambda); d_xpbd_goal = d_xpbd_lambda = nullptr; xpbd_entries = 0; }
     if (d_edges.particle_a) {
         cudaFree(d_edges.particle_a);
         cudaFree(d_edges.particle_b);

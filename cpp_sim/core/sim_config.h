@@ -36,6 +36,11 @@ struct SimConfigYAML {
     bool iterations_auto = false;
     float stiffness = 0.6f;
     float damping = 0.98f;
+    float damping_rate = -1.0f;         // [1/s] if >= 0: damping per substep = exp(-damping_rate * dt)
+                                        //   (dt-independent); < 0 → the per-substep factor `damping`
+    std::string solver = "pbd";         // tissue elasticity: "pbd" (stiffness per iteration, legacy) or
+                                        //   "xpbd" (compliance: dt- and iteration-independent)
+    float xpbd_stiffness = 0.0f;        // [1/s^2] xpbd: stiffness / particle mass of each particle-goal link
     int substeps = 4;
     bool substeps_auto = false;
     bool tool_substep_interp = false;   // R4: tool pose interpolated across the substeps of a frame
@@ -241,6 +246,9 @@ struct SimConfigYAML {
             }
             if (sim["stiffness"]) stiffness = sim["stiffness"].as<float>();
             if (sim["damping"]) damping = sim["damping"].as<float>();
+            if (sim["damping_rate"]) damping_rate = sim["damping_rate"].as<float>();
+            if (sim["solver"]) solver = sim["solver"].as<std::string>();
+            if (sim["xpbd_stiffness"]) xpbd_stiffness = sim["xpbd_stiffness"].as<float>();
             if (sim["substeps"]) {
                 try {
                     substeps = sim["substeps"].as<int>();
