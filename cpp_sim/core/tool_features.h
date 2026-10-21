@@ -34,6 +34,10 @@ struct SharpFeatures {
     int n_edges = 0, n_points = 0;
     int boundary_edges = 0, nonmanifold_edges = 0, misoriented_edges = 0;
     double sharp_length = 0.0;   // total length of the sharp edges
+    // edge_sweep_contact: every convex, non-flat mesh edge (the edges a tool can meet tissue edges
+    // with), endpoints + the two outward face normals, and whether it is sharp
+    std::vector<Vec3> cvx_seg, cvx_nrm;
+    std::vector<int> cvx_sharp;
 };
 
 inline SharpFeatures extract_sharp_features(const RigidMesh& m, double sharp_angle_deg) {
@@ -100,6 +104,11 @@ inline SharpFeatures extract_sharp_features(const RigidMesh& m, double sharp_ang
         theta_of[ekey(a, b)] = theta;
         vert_edges[a].push_back(b); vert_edges[b].push_back(a);
         if (!convex) vert_ok[a] = vert_ok[b] = 0;     // solid-angle formula needs a convex cone
+        if (convex && theta < PI - 1e-3) {           // convex, not flat (a diagonal of a planar quad is flat)
+            out.cvx_seg.push_back(P[a]); out.cvx_seg.push_back(P[b]);
+            out.cvx_nrm.push_back(n1); out.cvx_nrm.push_back(n2);
+            out.cvx_sharp.push_back(theta < theta_max ? 1 : 0);
+        }
         if (convex && theta < theta_max) {
             out.seg.push_back(P[a]); out.seg.push_back(P[b]);
             out.nrm.push_back(n1); out.nrm.push_back(n2);

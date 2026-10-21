@@ -45,6 +45,9 @@ struct ToolDesc {
     int    normal_mode;   // 0 legacy, 1 trilinear
     const float3* tri;    // contact_ccd: exact triangles (v0 v1 v2 n per triangle, local frame); nullptr = none
     int    n_tri;
+    const float3* cedge;  // edge_sweep_contact: convex tool edges (P, Q, n1, n2 per edge, local frame)
+    const int* cedge_sharp;
+    int    n_cedge;
     const ToolSheetGPU* sheet;   // straddle_rule sheet: 2D intruders (core/tool_features.h), local frame
     const float4* sheet_seg;            // cross-section boundary segments (u0, v0, u1, v1) of all sheets
     int    n_sheet;
@@ -447,10 +450,27 @@ __device__ inline bool tool_project_out_ccd(const ToolDesc& cur, const ToolDesc&
     // prefilter: the grid phi can overestimate the true distance by up to half a cell diagonal (a blade
     // thinner than a cell is not in the grid at all), so the exact test must not be skipped within it
     const float err = cur.tri ? 0.5f * sqrtf(cur.cell.x*cur.cell.x + cur.cell.y*cur.cell.y + cur.cell.z*cur.cell.z) : eps;
-    if (phi_n > L + err) return false;                     // no point of the path can reach the tool
+    // Outside the baked box phi is the 1e30 sentinel, not a distance: the bound is then the distance to
+    // the box (the tool lies inside it). Using the sentinel skipped every path that ended outside the box
+    // (measured: shape matching pulled a particle on the blade face 40 mm through the blade in one apply).
+    float bound = phi_n;
+    if (phi_n >= 1e29f) {
+        const float hx = cur.origin.x + cur.res_x * cur.cell.x, hy = cur.origin.y + cur.res_y * cur.cell.y,
+                    hz = cur.origin.z + cur.res_z * cur.cell.z;
+        float bx = fmaxf(fmaxf(cur.origin.x - ln.x, ln.x - hx), 0.0f);
+        float by = fmaxf(fmaxf(cur.origin.y - ln.y, ln.y - hy), 0.0f);
+        float bz = fmaxf(fmaxf(cur.origin.z - ln.z, ln.z - hz), 0.0f);
+        bound = sqrtf(bx*bx + by*by + bz*bz);
+    }
+    if (bound > L + err) return false;                     // no point of the path can reach the tool
+    // Exact triangles: the side is decided on them alone. The grid must not decide here: its zero
+    // surface lies inside the real one (a convex tool's trilinear phi never underestimates), the thin
+    // bottom of a wedge is not in it at all, and on the blade mid-plane its gradient points along the
+    // blade (the z differences cancel), so the grid push-out left particles inside the blade or walked
+    // them to the far face. tool_ccd_exact handles a reference inside the tool (nearest face to it).
+    if (cur.tri && cur.n_tri > 0) return tool_ccd_exact(cur, p, lo, ln, max_iter);
     float phi_o = tq_phi_local(cur, lo);
     if (phi_o < -eps) return phi_n < 0.0f ? tool_project_out_iter(cur, p, max_iter) : false;   // no side known
-    if (cur.tri && cur.n_tri > 0) return tool_ccd_exact(cur, p, lo, ln, max_iter);
     // first entry along lo -> ln
     float t_in = -1.0f, t_out = 0.0f;                      // bracket: phi(t_out) >= 0, phi(t_in) < 0
     if (phi_o <= 0.0f) { t_in = 0.0f; }                    // on the surface: entry = the reference itself

@@ -400,13 +400,18 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
         float tgt_rot[9]; for (int k = 0; k < 9; k++) tgt_rot[k] = P.gpu.config.knife_rot[k];
         const bool proxy = P.tool_proxy && P.proxy_max_step > 0.0;
         const bool interp = !proxy && P.tool_interp && knife_active && P.prev_valid;
+        // The proxy chases the target interpolated over the substeps (from the previous frame's
+        // target), not the frame's target itself: chasing that, a proxy faster than the input covered
+        // the whole frame's motion in the first substep and stood still for the rest, and the tissue,
+        // catching up, swung back and forth across the blade edge in the tool frame (measured: the
+        // particles under the edge crossed it 180 times in the side push, 67 with smooth motion).
+        const bool proxy_interp = proxy && knife_active && P.prev_valid;
         Quatd qa = {1, 0, 0, 0}, qb = {1, 0, 0, 0};
-        if (interp) { qa = quat_from_rot(P.prev_rot); qb = quat_from_rot(tgt_rot); }
+        if (interp || proxy_interp) { qa = quat_from_rot(P.prev_rot); qb = quat_from_rot(tgt_rot); }
         if (proxy && (!knife_active || !P.proxy_valid)) {   // tool off: the proxy sits on the target
             P.proxy_pos = tgt_pos; for (int k = 0; k < 9; k++) P.proxy_rot[k] = tgt_rot[k];
             P.proxy_valid = true;
         }
-        const Quatd q_tgt = quat_from_rot(tgt_rot);
         // B: the step limit only matters where the tool can touch tissue. Region = AABB of the alive
         // particles (last downloaded positions) grown by the tool reach plus one step; the part of the
         // proxy's path outside it is travelled at once (e.g. the tool brought in from its parking pose).
@@ -423,7 +428,17 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
         }
         for (int sub = 0; sub < substeps; sub++) {
             if (proxy && knife_active) {
-                double dx = tgt_pos.x - P.proxy_pos.x, dy = tgt_pos.y - P.proxy_pos.y, dz = tgt_pos.z - P.proxy_pos.z;
+                // this substep's target: (sub+1)/substeps of the way from the previous frame's target
+                float3 sub_pos = tgt_pos; float sub_rot[9]; for (int k = 0; k < 9; k++) sub_rot[k] = tgt_rot[k];
+                if (proxy_interp && sub + 1 < substeps) {
+                    double t = (double)(sub + 1) / substeps;
+                    sub_pos = make_float3((float)(P.prev_pos.x + t * (tgt_pos.x - P.prev_pos.x)),
+                                          (float)(P.prev_pos.y + t * (tgt_pos.y - P.prev_pos.y)),
+                                          (float)(P.prev_pos.z + t * (tgt_pos.z - P.prev_pos.z)));
+                    rot_from_quat(slerp(qa, qb, t), sub_rot);
+                }
+                const Quatd q_sub = quat_from_rot(sub_rot);
+                double dx = sub_pos.x - P.proxy_pos.x, dy = sub_pos.y - P.proxy_pos.y, dz = sub_pos.z - P.proxy_pos.z;
                 Quatd qp = quat_from_rot(P.proxy_rot);
                 // free part of the path: segment proxy -> target against the region (slab test)
                 double o[3] = {P.proxy_pos.x, P.proxy_pos.y, P.proxy_pos.z}, dv[3] = {dx, dy, dz};
@@ -436,22 +451,22 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
                 }
                 double t_free = (t_in > t_out) ? 1.0 : t_in;    // never enters the region: go all the way
                 if (t_free > 0.0) {
-                    if (t_free >= 1.0) { P.proxy_pos = tgt_pos; for (int k = 0; k < 9; k++) P.proxy_rot[k] = tgt_rot[k]; }
+                    if (t_free >= 1.0) { P.proxy_pos = sub_pos; for (int k = 0; k < 9; k++) P.proxy_rot[k] = sub_rot[k]; }
                     else {
                         P.proxy_pos = make_float3((float)(o[0] + t_free * dx), (float)(o[1] + t_free * dy), (float)(o[2] + t_free * dz));
-                        rot_from_quat(slerp(qp, q_tgt, t_free), P.proxy_rot);
+                        rot_from_quat(slerp(qp, q_sub, t_free), P.proxy_rot);
                     }
-                    dx = tgt_pos.x - P.proxy_pos.x; dy = tgt_pos.y - P.proxy_pos.y; dz = tgt_pos.z - P.proxy_pos.z;
+                    dx = sub_pos.x - P.proxy_pos.x; dy = sub_pos.y - P.proxy_pos.y; dz = sub_pos.z - P.proxy_pos.z;
                     qp = quat_from_rot(P.proxy_rot);
                 }
-                double d = std::fabs(qp.w*q_tgt.w + qp.x*q_tgt.x + qp.y*q_tgt.y + qp.z*q_tgt.z);
+                double d = std::fabs(qp.w*q_sub.w + qp.x*q_sub.x + qp.y*q_sub.y + qp.z*q_sub.z);
                 double ang = 2.0 * std::acos(std::min(1.0, d));
                 double sweep = std::sqrt(dx*dx + dy*dy + dz*dz) + ang * P.tool_reach;   // bound on any tool point
                 double f = sweep > P.proxy_max_step ? P.proxy_max_step / sweep : 1.0;
                 P.proxy_pos = make_float3((float)(P.proxy_pos.x + f * dx), (float)(P.proxy_pos.y + f * dy),
                                           (float)(P.proxy_pos.z + f * dz));
-                if (f >= 1.0) for (int k = 0; k < 9; k++) P.proxy_rot[k] = tgt_rot[k];
-                else rot_from_quat(slerp(qp, q_tgt, f), P.proxy_rot);
+                if (f >= 1.0) for (int k = 0; k < 9; k++) P.proxy_rot[k] = sub_rot[k];
+                else rot_from_quat(slerp(qp, q_sub, f), P.proxy_rot);
                 P.gpu.config.knife_pos = P.proxy_pos;
                 for (int k = 0; k < 9; k++) P.gpu.config.knife_rot[k] = P.proxy_rot[k];
             } else if (interp) {
@@ -555,7 +570,23 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
         //   改成 (rem > 0 || knife_active) — cut_only 下靠 knife_active 触发 BFS,
         //   发现新的 broken 边 → cluster split → 两半 kinematic 独立 + tet_broken 更新。
         bool enable_drop = (P.cutting_mode == "debulk");
-        if (P.use_tet && (rem > 0 || knife_active) && frame % 5 == 0) {
+        const bool bfs_frame = P.use_tet && (rem > 0 || knife_active) && frame % 5 == 0;
+        // render.split_tets: the drawn pieces follow the GPU fracture every frame. The BFS below
+        // refreshes the set only every 5th frame (and never after the knife is switched off in
+        // cut_only mode), so freshly broken tets were drawn whole, straight through the blade.
+        if (P.use_tet && P.tet_mesh.split_render && !bfs_frame) {
+            std::vector<int> eb;
+            P.gpu.download_edge_broken(eb);
+            int nb = 0;
+            for (int v : eb) nb += (v != 0);
+            if (nb != (int)P.tet_mesh.broken_edges.size()) {
+                P.tet_mesh.broken_edges.clear();
+                for (int e = 0; e < (int)eb.size(); e++)
+                    if (eb[e]) P.tet_mesh.broken_edges.insert(TetMesh::edge_key(P.edge_a[e], P.edge_b[e]));
+            }
+            res.broken_edges = nb;
+        }
+        if (bfs_frame) {
             const int rem_pre_bfs = rem;
             auto t_bfs0 = std::chrono::high_resolution_clock::now();
             bool changed = cpu_bfs_split(

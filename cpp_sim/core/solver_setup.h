@@ -73,6 +73,7 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     s.config.straddle_detour = cfg.straddle_detour ? 1 : 0;
     s.config.straddle_detour_k = cfg.straddle_detour_k;
     s.config.straddle_sheet = cfg.straddle_rule == "sheet" ? 1 : 0;
+    s.config.edge_sweep_contact = cfg.edge_sweep_contact ? 1 : 0;
     s.config.damage_growth_rate = cfg.damage_growth_rate;
     if (cfg.use_sharp_edge_damage) {
         printf("[CUT] sharp_edge: A=(%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f) growth_rate=%.3f\n",
@@ -172,6 +173,20 @@ inline void setup_tool_mesh(const SimConfigYAML& cfg, ShapeMatchingGPUSolver& s,
                 }
             }
 
+            // edge_sweep_contact: the convex edges of the (centred, scaled) mesh
+            if (cfg.edge_sweep_contact) {
+                SharpFeatures f = extract_sharp_features(tool_mesh, cfg.sharp_angle_deg);
+                std::vector<float3> e4; std::vector<int> sh;
+                auto f3 = [](const Vec3& v) { return make_float3((float)v.x(), (float)v.y(), (float)v.z()); };
+                for (size_t k = 0; k < f.cvx_sharp.size(); k++) {
+                    e4.push_back(f3(f.cvx_seg[2*k])); e4.push_back(f3(f.cvx_seg[2*k+1]));
+                    e4.push_back(f3(f.cvx_nrm[2*k])); e4.push_back(f3(f.cvx_nrm[2*k+1]));
+                    sh.push_back(f.cvx_sharp[k]);
+                }
+                s.set_tool_contact_edges(e4, sh);
+                int ns = 0; for (int x : sh) ns += x;
+                std::printf("[edge-sweep-contact] %zu convex tool edges (%d sharp)\n", sh.size(), ns);
+            }
             // contact_ccd: exact triangles for the path test (same local frame as the SDF), outward
             // normals oriented by the sign of the enclosed volume; brute-force loop → small meshes only
             if (cfg.contact_ccd || cfg.straddle_detour) {

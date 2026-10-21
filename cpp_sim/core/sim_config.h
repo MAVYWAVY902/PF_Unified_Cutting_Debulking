@@ -120,6 +120,7 @@ struct SimConfigYAML {
     bool contact_ccd = false;            // CCD tool contact: paths that cross the tool are stopped at the entry face
     bool straddle_detour = false;        // R3 only if the tool cuts the edge's element (no detour around the tool)
     int straddle_detour_k = 32;           // sphere samples of the detour test (resolution)
+    bool edge_sweep_contact = false;     // EXPERIMENTAL, keep off: tissue-edge vs tool-edge CCD push (blunt tool edges push the edges they sweep across); measured worse on cube and tumor (fights the particle contact: oscillation, tunnelling)
     std::string straddle_rule = "segment"; // R3: segment (legacy) | sheet (the tool's sheets cut the element in two, exact)
 
     // Sharp-edge damage (overrides SDF damage when set).
@@ -300,6 +301,7 @@ struct SimConfigYAML {
             if (k["contact_ccd"]) contact_ccd = k["contact_ccd"].as<bool>();
             if (k["straddle_detour"]) straddle_detour = k["straddle_detour"].as<bool>();
             if (k["straddle_detour_k"]) straddle_detour_k = k["straddle_detour_k"].as<int>();
+            if (k["edge_sweep_contact"]) edge_sweep_contact = k["edge_sweep_contact"].as<bool>();
             if (k["straddle_rule"]) {
                 straddle_rule = k["straddle_rule"].as<std::string>();
                 if (straddle_rule != "segment" && straddle_rule != "sheet") {
@@ -359,6 +361,11 @@ struct SimConfigYAML {
             if (straddle_rule == "sheet" && ( cut_features != "auto")) {
                 std::cerr << "Config error: knife.straddle_rule: sheet needs a tool mesh with cut_features: auto "
                              "(the sheets are built on its sharp edges)" << std::endl;
+                return false;
+            }
+            if (edge_sweep_contact && !contact_ccd) {
+                std::cerr << "Config error: knife.edge_sweep_contact needs knife.contact_ccd: true "
+                             "(it uses the CCD reference positions)" << std::endl;
                 return false;
             }
             if (cut_curve_leading && cut_features != "auto") {   // the normal cone comes from the mesh faces
@@ -536,7 +543,8 @@ struct SimConfigYAML {
                   << " cut_curve=" << (cut_curve_leading ? "leading" : cut_curve_crossing ? "crossing" : "proximity")
                   << " contact_ccd=" << (contact_ccd ? "on" : "off")
                   << " straddle_detour=" << (straddle_detour ? std::to_string(straddle_detour_k) : std::string("off"))
-                  << " straddle_rule=" << straddle_rule << std::endl;
+                  << " straddle_rule=" << straddle_rule
+                  << " edge_sweep_contact=" << (edge_sweep_contact ? "on" : "off") << std::endl;
         std::cout << "  debulking: " << (debulking ? "on" : "off") << "  cutting_mode: " << cutting_mode
                   << (cutting_mode == "cut_only"
                       ? " (NO particle removal — true topological cut)"

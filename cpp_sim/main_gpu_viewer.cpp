@@ -350,6 +350,43 @@ int main(int argc, char** argv) {
     if (use_tet) {
         viewer.tet_mesh = &tet_mesh;
         tet_mesh.split_render = cfg.render_split_tets;
+        if (tet_mesh.split_render && tool_mesh.num_faces() > 0) {
+            // cut points stop at the tool surface (exact triangles, current tool pose), see TetMesh::render_clip
+            Vec3 tlo, thi; tool_mesh.get_bounds(tlo, thi);
+            tet_mesh.render_clip = [&gpu_solver, &tool_mesh, tlo, thi](const Vec3& a, const Vec3& b) -> double {
+                if (!gpu_solver.config.knife_active) return 1.0;
+                const float* R = gpu_solver.config.knife_rot;     // row-major, local -> world
+                const float3 kp = gpu_solver.config.knife_pos;
+                auto to_local = [&](const Vec3& w) {
+                    Vec3 d(w.x() - kp.x, w.y() - kp.y, w.z() - kp.z);
+                    return Vec3(R[0]*d.x() + R[3]*d.y() + R[6]*d.z(), R[1]*d.x() + R[4]*d.y() + R[7]*d.z(),
+                                R[2]*d.x() + R[5]*d.y() + R[8]*d.z());
+                };
+                const Vec3 la = to_local(a), lb = to_local(b), d = lb - la;
+                for (int k = 0; k < 3; k++)                         // segment box vs tool box
+                    if (std::max(la[k], lb[k]) < tlo[k] || std::min(la[k], lb[k]) > thi[k]) return 1.0;
+                double t_in = 2.0;
+                for (const auto& f : tool_mesh.faces) {             // first ENTRY (outward face normals)
+                    const Vec3 &v0 = tool_mesh.vertices[f[0]], &v1 = tool_mesh.vertices[f[1]], &v2 = tool_mesh.vertices[f[2]];
+                    const Vec3 e1 = v1 - v0, e2 = v2 - v0, pv = d.cross(e2);
+                    const double det = e1.dot(pv);
+                    if (std::fabs(det) < 1e-30) continue;
+                    const Vec3 tv = la - v0; const double u = tv.dot(pv) / det;
+                    if (u < 0.0 || u > 1.0) continue;
+                    const Vec3 q = tv.cross(e1); const double v = d.dot(q) / det;
+                    if (v < 0.0 || u + v > 1.0) continue;
+                    const double t = e2.dot(q) / det;
+                    if (t < 0.0 || t > 1.0 || d.dot(e1.cross(e2)) >= 0.0) continue;
+                    t_in = std::min(t_in, t);
+                }
+                if (t_in > 1.0) return 1.0;
+                const double L = d.norm();
+                return L > 0.0 ? std::max(0.0, t_in - 1e-4 / L) : 0.0;   // 0.1 mm off the face
+            };
+        }
+        // split rendering is incremental after a one-time build of every tet (~0.4 s on the 110k-tet
+        // cube): do it here, not as a hitch at the first cut
+        if (tet_mesh.split_render) tet_mesh.rebuild_surface_faces(cpu_solver.particles);
         viewer.draw_surface = cfg.draw_surface;
         viewer.draw_wireframe = cfg.draw_wireframe;
         viewer.draw_points = cfg.draw_points;
@@ -453,7 +490,8 @@ int main(int argc, char** argv) {
         int active = fr_res.active, rem = fr_res.removed;
         viewer.num_active_particles = active;
         viewer.num_removed_particles = rem;
-        if (fr_res.bfs_ran) { viewer.tet_broken_count = fr_res.tet_broken_count; viewer.broken_edge_count = fr_res.broken_edges; }
+        if (fr_res.bfs_ran) viewer.tet_broken_count = fr_res.tet_broken_count;
+        if (fr_res.broken_edges >= 0) viewer.broken_edge_count = fr_res.broken_edges;   // every frame with split_tets
         if (fr_res.clusters_changed) {
             C = (int)cpu_solver.clusters.size();
             viewer.num_clusters_display = C;
@@ -520,6 +558,7 @@ int main(int argc, char** argv) {
     std::cout << "  LMB: 旋转  RMB: 平移  滚轮: 缩放" << std::endl;
     std::cout << "  K: 开关刀具  Space+鼠标: 移动刀具  Space+滚轮: 前后" << std::endl;
     std::cout << "  M: 切换移刀模式（不用按住，远程桌面/TeamViewer 下用这个）" << std::endl;
+    std::cout << "     移刀模式下：不按键移动鼠标 = 移刀；左键拖 = 旋转视角，右键拖 = 平移，中键拖/滚轮 = 缩放，Shift+滚轮 = 刀前后" << std::endl;
     std::cout << "  X/Y/Z: 旋转刀具 (Shift+X/Y/Z: 反向)" << std::endl;
     std::cout << "  P: 暂停  1: 切换面  2: 切换线框  3: 切换粒子点" << std::endl;
     std::cout << "  T: 相机追踪  R: 重置刀具+旋转  ESC: 退出" << std::endl;

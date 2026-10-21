@@ -104,6 +104,10 @@ struct SimConfigGPU {
     // R3 rule: 0 = segment (the segment passes through the tool, outward normals opposed); 1 = sheet
     // (the tool's 2D intruders cut the edge's element in two, exact; tool_query.cuh tool_sheet_separates)
     int straddle_sheet = 0;
+    // 1 = tissue-edge vs tool-edge CCD: a convex tool edge that sweeps across an intact tissue edge
+    // pushes it (unless it is a sharp edge that leads: the cut channel decides those). Without it a
+    // blunt part thinner than the particle spacing passes between particles (tool_query.cuh)
+    int edge_sweep_contact = 0;
     // 1 (with crossing) = a crossing cuts only if the feature LEADS: the tool's motion relative to the
     // tissue lies in the feature's normal cone (cut_curve: leading)
     int cut_curve_leading = 0;
@@ -130,6 +134,10 @@ struct SDFData {
     // outward unit normal), for exact path tests; n_tri = 0 → SDF tracing only
     float3* d_tri = nullptr;
     int n_tri = 0;
+    // edge_sweep_contact: convex tool edges (4 float3 per edge: P, Q, n1, n2) + sharp flags
+    float3* d_cedge = nullptr;
+    int* d_cedge_sharp = nullptr;
+    int n_cedge = 0;
     // straddle_rule sheet: the tool's sheets and their cross-section segments (local frame)
     ToolSheetGPU* d_sheet = nullptr;
     float4* d_sheet_seg = nullptr;
@@ -294,6 +302,8 @@ public:
     // nrms (optional): two outward face normals per feature, the normal cone used by cut_curve: leading
     // contact_ccd: exact tool triangles (local frame, 4 float3 per triangle: v0 v1 v2 outward normal)
     void set_tool_triangles(const std::vector<float3>& tri4);
+    void edge_sweep_contact(const float3* ref, const struct ToolDesc& ref_t);
+    void set_tool_contact_edges(const std::vector<float3>& e4, const std::vector<int>& sharp);
     void set_tool_sheets(const std::vector<ToolSheetGPU>& sheets, const std::vector<float4>& seg);
     void set_cut_segments(const std::vector<float3>& segs, const std::vector<float3>& nrms = {}) {
         h_cut_segments = segs; h_cut_normals = nrms; cut_segments_dirty = true; }

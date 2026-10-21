@@ -12,6 +12,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <functional>
 #include <algorithm>
 #include <stdexcept>
 
@@ -243,6 +244,11 @@ struct TetMesh {
     std::vector<CutVert> cut_verts;
     std::vector<Vec3> render_pos;                       // positions of all render vertices (particles + cut points)
     float cut_s = 0.5f;
+    // Optional: fraction t in [0, 1] of the segment a -> b before it enters the tool (1 = no tool on
+    // it). A cut point is placed half a rest edge from its particle; with the blade still in the cut,
+    // the blade lies between the two particles and that point was drawn inside it (the tissue looked
+    // as if it went through the knife). The tissue's cut surface is the blade face there.
+    std::function<double(const Vec3&, const Vec3&)> render_clip;
 
     static int64_t edge_key(int a, int b) {             // same key as the frame pipeline's broken-edge set
         if (a > b) std::swap(a, b);
@@ -261,7 +267,9 @@ struct TetMesh {
             int u = cut_verts[k].u, v = cut_verts[k].v;
             auto it = R.find(u);
             if (it == R.end()) it = R.emplace(u, _material_rotation(particles, u)).first;
-            render_pos[N + k] = particles[u].pos + (double)cut_s * (it->second * (vertices[v] - vertices[u]));
+            Vec3 c = particles[u].pos + (double)cut_s * (it->second * (vertices[v] - vertices[u]));
+            if (render_clip) c = particles[u].pos + render_clip(particles[u].pos, c) * (c - particles[u].pos);
+            render_pos[N + k] = c;
         }
     }
 
@@ -281,17 +289,53 @@ struct TetMesh {
         return U * V.transpose();
     }
 
-    void _rebuild_surface_split(const Particles& particles) {
+    // Incremental: only the tets touching an edge broken (or a particle removed) since the last call
+    // are re-cut; every polygon keeps the list of tets that contributed it (at most two share one), and
+    // the polygons with a single contributor are the surface. A full rebuild took 222 ms on the 110k-tet
+    // cube, and with the broken edges refreshed every frame it ran every frame while cutting.
+    using SplitKey = std::array<int, 4>;                // sorted polygon vertex ids, padded with -1
+    struct SplitKeyHash {
+        size_t operator()(const SplitKey& k) const {
+            uint64_t h = 1469598103934665603ULL;
+            for (int x : k) { h ^= (uint32_t)x; h *= 1099511628211ULL; }
+            return (size_t)h;
+        }
+    };
+    struct SplitContrib { int tet; std::vector<int> v; };          // v oriented outward from that tet
+    bool split_init = false;
+    std::unordered_map<SplitKey, std::vector<SplitContrib>, SplitKeyHash> split_polys;
+    std::unordered_set<SplitKey, SplitKeyHash> split_surface;       // polygons with one contributor
+    std::vector<std::vector<SplitKey>> split_tet_keys;              // polygons contributed by each tet
+    std::unordered_map<int64_t, int> split_cut_id;                 // directed (u, v) -> render id
+    std::unordered_set<int64_t> split_applied;                     // broken edges already cut
+    std::vector<char> split_removed;                               // removed flags already applied
+
+    void _split_touch(const SplitKey& k) {
+        auto it = split_polys.find(k);
+        if (it != split_polys.end() && it->second.size() == 1) split_surface.insert(k); else split_surface.erase(k);
+    }
+    void _split_remove_tet(int t) {
+        for (const SplitKey& k : split_tet_keys[t]) {
+            auto it = split_polys.find(k);
+            if (it == split_polys.end()) continue;
+            auto& c = it->second;
+            c.erase(std::remove_if(c.begin(), c.end(), [t](const SplitContrib& x) { return x.tet == t; }), c.end());
+            if (c.empty()) split_polys.erase(it);
+            _split_touch(k);
+        }
+        split_tet_keys[t].clear();
+    }
+    void _split_add_tet(int ti, const Particles& particles) {
+        const auto& t = tets[ti];
+        for (int j = 0; j < 4; j++) if (particles[t[j]].removed) return;
         const int N = num_vertices();
-        cut_verts.clear();
-        std::unordered_map<int64_t, int> cut_id;        // directed (u, v) -> render id
         auto cid = [&](int u, int v) {
             int64_t k = (int64_t)(((uint64_t)(uint32_t)u << 32) | (uint32_t)v);
-            auto it = cut_id.find(k);
-            if (it != cut_id.end()) return it->second;
+            auto it = split_cut_id.find(k);
+            if (it != split_cut_id.end()) return it->second;
             int id = N + (int)cut_verts.size();
             cut_verts.push_back({u, v});
-            cut_id.emplace(k, id);
+            split_cut_id.emplace(k, id);
             return id;
         };
         auto rest = [&](int id) -> Vec3 {
@@ -299,17 +343,6 @@ struct TetMesh {
             const CutVert& c = cut_verts[id - N];
             return vertices[c.u] + (double)cut_s * (vertices[c.v] - vertices[c.u]);
         };
-        using Key = std::array<int, 4>;                 // sorted polygon vertex ids, padded with -1
-        struct KeyHash {
-            size_t operator()(const Key& k) const {
-                uint64_t h = 1469598103934665603ULL;
-                for (int x : k) { h ^= (uint32_t)x; h *= 1099511628211ULL; }
-                return (size_t)h;
-            }
-        };
-        struct Poly { std::vector<int> v; int count; };
-        std::unordered_map<Key, Poly, KeyHash> polys;
-        polys.reserve(tets.size() * 2);
         auto add_poly = [&](std::vector<int> v, const Vec3& away) {   // orient: normal points away from `away`
             if (v.size() < 3) return;
             Vec3 n = Vec3::Zero(), c = Vec3::Zero();
@@ -319,59 +352,87 @@ struct TetMesh {
             }
             c /= (double)v.size();
             if (n.dot(away - c) > 0.0) std::reverse(v.begin(), v.end());
-            Key k = {-1, -1, -1, -1};
+            SplitKey k = {-1, -1, -1, -1};
             std::vector<int> sv = v; std::sort(sv.begin(), sv.end());
             for (size_t i = 0; i < sv.size() && i < 4; i++) k[i] = sv[i];
-            auto it = polys.find(k);
-            if (it == polys.end()) polys.emplace(k, Poly{v, 1}); else it->second.count++;
+            split_polys[k].push_back(SplitContrib{ti, std::move(v)});
+            split_tet_keys[ti].push_back(k);
+            _split_touch(k);
         };
         static const int FACE[4][4] = {{0, 1, 2, 3}, {0, 1, 3, 2}, {0, 2, 3, 1}, {1, 2, 3, 0}};   // 3 face vertices + opposite
-        for (const auto& t : tets) {
-            bool rem = false;
-            for (int j = 0; j < 4; j++) if (particles[t[j]].removed) { rem = true; break; }
-            if (rem) continue;
-            int g[4] = {0, 1, 2, 3};                     // groups: union over intact tet edges
-            auto find = [&](int x) { while (g[x] != x) x = g[x] = g[g[x]]; return x; };
-            for (int i = 0; i < 4; i++)
-                for (int j = i + 1; j < 4; j++)
-                    if (!broken_edges.count(edge_key(t[i], t[j]))) g[find(i)] = find(j);
-            for (int r = 0; r < 4; r++) {
-                if (find(r) != r) continue;              // one piece per group root
-                bool in[4]; Vec3 cen = Vec3::Zero(); int nc = 0;
-                for (int j = 0; j < 4; j++) { in[j] = find(j) == r; if (in[j]) { cen += vertices[t[j]]; nc++; } }
-                cen /= (double)nc;
-                std::vector<std::pair<int, int>> crack;  // cut-face segments, one per mixed tet face
-                for (int f = 0; f < 4; f++) {
-                    std::vector<int> v; int cut[2], ncut = 0;
-                    for (int k = 0; k < 3; k++) {
-                        int p = FACE[f][k], q = FACE[f][(k + 1) % 3];
-                        if (in[p]) v.push_back(t[p]);
-                        if (in[p] != in[q]) {
-                            int id = in[p] ? cid(t[p], t[q]) : cid(t[q], t[p]);
-                            v.push_back(id); cut[ncut++] = id;
-                        }
+        int g[4] = {0, 1, 2, 3};                         // groups: union over intact tet edges
+        auto find = [&](int x) { while (g[x] != x) x = g[x] = g[g[x]]; return x; };
+        for (int i = 0; i < 4; i++)
+            for (int j = i + 1; j < 4; j++)
+                if (!broken_edges.count(edge_key(t[i], t[j]))) g[find(i)] = find(j);
+        for (int r = 0; r < 4; r++) {
+            if (find(r) != r) continue;                  // one piece per group root
+            bool in[4]; Vec3 cen = Vec3::Zero(); int nc = 0;
+            for (int j = 0; j < 4; j++) { in[j] = find(j) == r; if (in[j]) { cen += vertices[t[j]]; nc++; } }
+            cen /= (double)nc;
+            std::vector<std::pair<int, int>> crack;      // cut-face segments, one per mixed tet face
+            for (int f = 0; f < 4; f++) {
+                std::vector<int> v; int cut[2], ncut = 0;
+                for (int k = 0; k < 3; k++) {
+                    int p = FACE[f][k], q = FACE[f][(k + 1) % 3];
+                    if (in[p]) v.push_back(t[p]);
+                    if (in[p] != in[q]) {
+                        int id = in[p] ? cid(t[p], t[q]) : cid(t[q], t[p]);
+                        v.push_back(id); cut[ncut++] = id;
                     }
-                    add_poly(v, vertices[t[FACE[f][3]]]);
-                    if (ncut == 2) crack.push_back({cut[0], cut[1]});
                 }
-                if (crack.size() >= 3) {                 // chain the segments into the cut-face polygon
-                    std::vector<int> loop = {crack[0].first, crack[0].second};
-                    std::vector<char> used(crack.size(), 0); used[0] = 1;
-                    for (size_t n = 1; n < crack.size(); n++)
-                        for (size_t i = 0; i < crack.size(); i++) {
-                            if (used[i]) continue;
-                            if (crack[i].first == loop.back())  { loop.push_back(crack[i].second); used[i] = 1; break; }
-                            if (crack[i].second == loop.back()) { loop.push_back(crack[i].first);  used[i] = 1; break; }
-                        }
-                    if (loop.size() > 1 && loop.front() == loop.back()) loop.pop_back();
-                    add_poly(loop, cen);
-                }
+                add_poly(v, vertices[t[FACE[f][3]]]);
+                if (ncut == 2) crack.push_back({cut[0], cut[1]});
+            }
+            if (crack.size() >= 3) {                     // chain the segments into the cut-face polygon
+                std::vector<int> loop = {crack[0].first, crack[0].second};
+                std::vector<char> used(crack.size(), 0); used[0] = 1;
+                for (size_t n = 1; n < crack.size(); n++)
+                    for (size_t i = 0; i < crack.size(); i++) {
+                        if (used[i]) continue;
+                        if (crack[i].first == loop.back())  { loop.push_back(crack[i].second); used[i] = 1; break; }
+                        if (crack[i].second == loop.back()) { loop.push_back(crack[i].first);  used[i] = 1; break; }
+                    }
+                if (loop.size() > 1 && loop.front() == loop.back()) loop.pop_back();
+                add_poly(loop, cen);
             }
         }
+    }
+    void _rebuild_surface_split(const Particles& particles) {
+        const int N = num_vertices(), T = (int)tets.size();
+        bool full = !split_init || (int)split_removed.size() != N || broken_edges.size() < split_applied.size();
+        if (!full) for (int64_t k : split_applied) if (!broken_edges.count(k)) { full = true; break; }   // un-broken: start over
+        std::vector<int> dirty;
+        if (full) {
+            cut_verts.clear(); split_cut_id.clear(); split_polys.clear(); split_surface.clear();
+            split_polys.reserve(tets.size() * 2);
+            split_tet_keys.assign(T, {});
+            split_applied.clear();
+            split_removed.assign(N, 0);
+            dirty.resize(T); for (int t = 0; t < T; t++) dirty[t] = t;
+            split_init = true;
+        } else {
+            std::vector<char> mark(T, 0);
+            auto push = [&](int t) { if (!mark[t]) { mark[t] = 1; dirty.push_back(t); } };
+            for (int64_t k : broken_edges) {
+                if (split_applied.count(k)) continue;
+                int a = (int)(k >> 32), b = (int)(uint32_t)k;
+                if (a < 0 || a >= N) continue;
+                for (int t : vertex_to_tets[a]) {
+                    const auto& q = tets[t];
+                    if (q[0] == b || q[1] == b || q[2] == b || q[3] == b) push(t);
+                }
+            }
+            for (int i = 0; i < N; i++)
+                if ((char)(particles[i].removed != 0) != split_removed[i]) for (int t : vertex_to_tets[i]) push(t);
+        }
+        for (int t : dirty) { _split_remove_tet(t); _split_add_tet(t, particles); }
+        split_applied = broken_edges;
+        for (int i = 0; i < N; i++) split_removed[i] = particles[i].removed != 0;
         surface_faces.clear();
-        for (auto& [k, p] : polys) {
-            if (p.count != 1) continue;
-            for (size_t i = 1; i + 1 < p.v.size(); i++) surface_faces.push_back({p.v[0], p.v[i], p.v[i + 1]});
+        for (const SplitKey& k : split_surface) {
+            const auto& v = split_polys.find(k)->second[0].v;
+            for (size_t i = 1; i + 1 < v.size(); i++) surface_faces.push_back({v[0], v[i], v[i + 1]});
         }
         face_normals.assign(surface_faces.size(), Vec3::Zero());
         update_normals(particles);

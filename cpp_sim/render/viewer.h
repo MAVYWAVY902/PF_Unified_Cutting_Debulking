@@ -311,7 +311,7 @@ private:
     Eigen::Vector3f m_cam_target = {0.09f, 0.15f, 0.09f};
 
     // 鼠标
-    bool m_lmb_down = false, m_rmb_down = false;
+    bool m_lmb_down = false, m_rmb_down = false, m_mmb_down = false;
     double m_last_mx = 0, m_last_my = 0;
     bool m_space_held = false;
     // Sticky knife-move mode (key M). Needed for remote desktops (e.g. TeamViewer) that deliver
@@ -995,7 +995,7 @@ private:
             if (key == GLFW_KEY_M) {
                 self->m_move_mode = !self->m_move_mode;
                 printf("[input] knife move mode %s (mouse = %s)\n", self->m_move_mode ? "ON" : "OFF",
-                       self->m_move_mode ? "move knife, scroll = forward/back" : "camera");
+                       self->m_move_mode ? "move knife (hold a button for the camera), Shift+scroll = forward/back, scroll = zoom" : "camera");
             }
             if (key == GLFW_KEY_R && !(mods & GLFW_MOD_SHIFT)) {
                 self->knife_pos = Vec3(0.09, 0.3, 0.09);
@@ -1030,6 +1030,7 @@ private:
         auto* self = (Viewer*)glfwGetWindowUserPointer(w);
         if (button == GLFW_MOUSE_BUTTON_LEFT)  self->m_lmb_down = (action == GLFW_PRESS);
         if (button == GLFW_MOUSE_BUTTON_RIGHT) self->m_rmb_down = (action == GLFW_PRESS);
+        if (button == GLFW_MOUSE_BUTTON_MIDDLE) self->m_mmb_down = (action == GLFW_PRESS);
         glfwGetCursorPos(w, &self->m_last_mx, &self->m_last_my);
     }
 
@@ -1067,13 +1068,9 @@ private:
                 last_t = now;
             }
         }
-        if ((self->m_space_held || self->m_move_mode) && self->knife_active) {
-            // Space(按住) 或 M(切换) + 移动鼠标：移动刀具（灵敏度和相机距离成比例）
-            float scale = self->m_cam_dist * 0.002f;
-
-            self->knife_pos += Vec3(right.x(), right.y(), right.z()) * dx * scale;
-            self->knife_pos -= Vec3(up.x(), up.y(), up.z()) * dy * scale;
-        } else if (self->m_lmb_down) {
+        // A held mouse button always drives the camera (also in knife-move mode M); the knife follows
+        // the mouse only while no button is held.
+        if (self->m_lmb_down) {
             // LMB: 旋转相机
             self->m_cam_yaw += (float)dx * 0.005f;
             self->m_cam_pitch += (float)dy * 0.005f;
@@ -1083,6 +1080,16 @@ private:
             float scale = self->m_cam_dist * 0.003f;
             self->m_cam_target += right * (float)dx * scale;
             self->m_cam_target -= up * (float)dy * scale;
+        } else if (self->m_mmb_down) {
+            // MMB drag: 缩放相机（上拖 = 拉近）
+            self->m_cam_dist *= (1.0f + (float)dy * 0.01f);
+            self->m_cam_dist = std::max(0.05f, std::min(10.0f, self->m_cam_dist));
+        } else if ((self->m_space_held || self->m_move_mode) && self->knife_active) {
+            // Space(按住) 或 M(切换) + 移动鼠标：移动刀具（灵敏度和相机距离成比例）
+            float scale = self->m_cam_dist * 0.002f;
+
+            self->knife_pos += Vec3(right.x(), right.y(), right.z()) * dx * scale;
+            self->knife_pos -= Vec3(up.x(), up.y(), up.z()) * dy * scale;
         }
     }
 
@@ -1095,8 +1102,9 @@ private:
         Eigen::Vector3f right, up, fwd;
         self->_get_camera_axes(right, up, fwd);
 
-        if ((self->m_space_held || self->m_move_mode) && self->knife_active) {
-            // Space(按住) 或 M(切换) + Scroll：刀具沿视线方向前后移动
+        const bool shift = glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+        if (self->knife_active && (self->m_space_held || (self->m_move_mode && shift))) {
+            // Space(按住) + Scroll 或 M 模式下 Shift + Scroll：刀具沿视线方向前后移动（不带 Shift 的滚轮 = 缩放）
             float scale = self->m_cam_dist * 0.1f;
             self->knife_pos += Vec3(fwd.x(), fwd.y(), fwd.z()) * limited_dy * scale;
         } else {

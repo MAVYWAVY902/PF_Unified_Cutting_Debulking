@@ -184,3 +184,90 @@ __device__ inline bool cut_curve_crossing_sdist(const CutChannel& c, float3 pa0,
     }
     return true;
 }
+
+// Closest points of segments p1 q1 and p2 q2 (Ericson 5.1.9): parameters s (on 1), t (on 2).
+__device__ inline void cc_closest_seg_seg(float3 p1, float3 q1, float3 p2, float3 q2, float& s, float& t) {
+    float3 d1 = make_float3(q1.x - p1.x, q1.y - p1.y, q1.z - p1.z);
+    float3 d2 = make_float3(q2.x - p2.x, q2.y - p2.y, q2.z - p2.z);
+    float3 r  = make_float3(p1.x - p2.x, p1.y - p2.y, p1.z - p2.z);
+    float a = d1.x*d1.x + d1.y*d1.y + d1.z*d1.z, e = d2.x*d2.x + d2.y*d2.y + d2.z*d2.z;
+    float f = d2.x*r.x + d2.y*r.y + d2.z*r.z;
+    if (a <= 1e-20f && e <= 1e-20f) { s = t = 0.0f; return; }
+    if (a <= 1e-20f) { s = 0.0f; t = fminf(fmaxf(f / e, 0.0f), 1.0f); return; }
+    float c = d1.x*r.x + d1.y*r.y + d1.z*r.z;
+    if (e <= 1e-20f) { t = 0.0f; s = fminf(fmaxf(-c / a, 0.0f), 1.0f); return; }
+    float b = d1.x*d2.x + d1.y*d2.y + d1.z*d2.z, den = a*e - b*b;
+    s = den > 1e-20f ? fminf(fmaxf((b*f - c*e) / den, 0.0f), 1.0f) : 0.0f;
+    t = (b*s + f) / e;
+    if (t < 0.0f)      { t = 0.0f; s = fminf(fmaxf(-c / a, 0.0f), 1.0f); }
+    else if (t > 1.0f) { t = 1.0f; s = fminf(fmaxf((b - c) / a, 0.0f), 1.0f); }
+}
+
+// edge_sweep_contact — tissue-edge vs tool-edge CCD (the edge-edge case of continuous collision
+// detection; particle vs tool face is tool_project_out_ccd). Contact on particles alone lets a tool
+// part thinner than the particle spacing (a blunt spine, the blade ends) pass BETWEEN two particles
+// without touching either: the intact edge then runs through the tool body (it is neither cut nor
+// pushed). Here an edge (a, b) of the tissue is tested against every convex tool edge PQ: if PQ
+// crossed the swept patch a0 b0 b1 a1 (reference -> now, both in the tool frame), the tool edge
+// passed between a and b. A sharp edge that leads is a cut (the cut channel decides it, nothing is
+// pushed); any other crossing is contact: the edge is moved back to the side of PQ it came from,
+// along the common perpendicular n = (b - a) x (Q - P), until the two segments touch. Returns the
+// correction of the closest point (local frame) and its parameter s on ab.
+__device__ inline bool tool_edge_sweep_push(const ToolDesc& cur, const ToolDesc& ref_t, float3 pa0, float3 pb0,
+                                            float3 pa1, float3 pb1, bool sharp_leading_cuts,
+                                            float3& corr, float& s_out) {
+    float3 a1 = tq_rot_T(cur.rot, make_float3(pa1.x - cur.pos.x, pa1.y - cur.pos.y, pa1.z - cur.pos.z));
+    float3 b1 = tq_rot_T(cur.rot, make_float3(pb1.x - cur.pos.x, pb1.y - cur.pos.y, pb1.z - cur.pos.z));
+    float3 a0 = tq_rot_T(ref_t.rot, make_float3(pa0.x - ref_t.pos.x, pa0.y - ref_t.pos.y, pa0.z - ref_t.pos.z));
+    float3 b0 = tq_rot_T(ref_t.rot, make_float3(pb0.x - ref_t.pos.x, pb0.y - ref_t.pos.y, pb0.z - ref_t.pos.z));
+    // prefilter: the patch's bounding box against the tool's baked box (local frame)
+    float3 lo = cur.origin;
+    float3 hi = make_float3(lo.x + cur.res_x * cur.cell.x, lo.y + cur.res_y * cur.cell.y, lo.z + cur.res_z * cur.cell.z);
+    if (fmaxf(fmaxf(a0.x, b0.x), fmaxf(a1.x, b1.x)) < lo.x || fminf(fminf(a0.x, b0.x), fminf(a1.x, b1.x)) > hi.x ||
+        fmaxf(fmaxf(a0.y, b0.y), fmaxf(a1.y, b1.y)) < lo.y || fminf(fminf(a0.y, b0.y), fminf(a1.y, b1.y)) > hi.y ||
+        fmaxf(fmaxf(a0.z, b0.z), fmaxf(a1.z, b1.z)) < lo.z || fminf(fminf(a0.z, b0.z), fminf(a1.z, b1.z)) > hi.z)
+        return false;
+    bool any = false; float best = 0.0f;
+    for (int k = 0; k < cur.n_cedge; k++) {
+        float3 P = cur.cedge[4*k], Q = cur.cedge[4*k+1];
+        float u, v, s = -1.0f;
+        if (cc_seg_tri(P, Q, a0, b0, b1, u, v)) s = u + v;
+        else if (cc_seg_tri(P, Q, a0, b1, a1, u, v)) s = u;
+        if (s < 0.0f) continue;
+        float3 p0 = make_float3(a0.x + s*(b0.x - a0.x), a0.y + s*(b0.y - a0.y), a0.z + s*(b0.z - a0.z));
+        float3 p1 = make_float3(a1.x + s*(b1.x - a1.x), a1.y + s*(b1.y - a1.y), a1.z + s*(b1.z - a1.z));
+        if (cur.cedge_sharp[k] && (!sharp_leading_cuts ||
+            cut_feature_leads(cur.cedge[4*k+2], cur.cedge[4*k+3], make_float3(p0.x - p1.x, p0.y - p1.y, p0.z - p1.z))))
+            continue;                                      // the blade edge cuts here: the cut channel decides
+        float3 dab = make_float3(b1.x - a1.x, b1.y - a1.y, b1.z - a1.z), dpq = make_float3(Q.x - P.x, Q.y - P.y, Q.z - P.z);
+        float3 n = make_float3(dab.y*dpq.z - dab.z*dpq.y, dab.z*dpq.x - dab.x*dpq.z, dab.x*dpq.y - dab.y*dpq.x);
+        float nn = sqrtf(n.x*n.x + n.y*n.y + n.z*n.z);
+        if (nn < 1e-12f) continue;                         // parallel: the particles' own contact handles it
+        n.x /= nn; n.y /= nn; n.z /= nn;
+        // side before the crossing: the tissue point moved from p0 to p1 through the tool edge line
+        float sg = (p0.x - p1.x)*n.x + (p0.y - p1.y)*n.y + (p0.z - p1.z)*n.z;
+        if (sg == 0.0f) continue;
+        if (sg < 0.0f) { n.x = -n.x; n.y = -n.y; n.z = -n.z; }
+        // Contact normal = the common perpendicular restricted to the edge's normal cone (the outward
+        // directions at PQ, spanned by its face normals n1, n2): outside the cone the common
+        // perpendicular points into a face, and moving the tissue edge along it carries an endpoint
+        // that rests on that face through the tool (measured: then the particle contact keeps it on
+        // the wrong side). Inside the cone it is kept; otherwise the nearer face normal is used.
+        {
+            float3 n1 = cur.cedge[4*k+2], n2 = cur.cedge[4*k+3];
+            if (!cut_feature_leads(n1, n2, n)) {
+                float c1 = n.x*n1.x + n.y*n1.y + n.z*n1.z, c2 = n.x*n2.x + n.y*n2.y + n.z*n2.z;
+                n = c1 >= c2 ? n1 : n2;
+            }
+        }
+        float s1, t1;
+        cc_closest_seg_seg(a1, b1, P, Q, s1, t1);
+        float3 x = make_float3(a1.x + s1*dab.x, a1.y + s1*dab.y, a1.z + s1*dab.z);
+        float3 y = make_float3(P.x + t1*dpq.x, P.y + t1*dpq.y, P.z + t1*dpq.z);
+        float d = (x.x - y.x)*n.x + (x.y - y.y)*n.y + (x.z - y.z)*n.z;   // < 0: on the wrong side
+        if (d >= 0.0f || d >= best) continue;              // keep the deepest
+        best = d; any = true;
+        corr = make_float3(-d * n.x, -d * n.y, -d * n.z); s_out = s1;
+    }
+    return any;
+}

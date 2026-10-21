@@ -7,6 +7,8 @@
 ## Also on: cut_curve leading, contact_iterate, contact_ccd, tool_proxy (see itest_cube_scalpel_fixes.yaml).
 ## Known: the blunt spine / blade ends (thinner than the particle spacing) can slide between particles
 ##   without pushing them (the blade passes through the tissue there, no cut); not fixed yet.
+## Known (model behaviour, accepted): pushing the blade sideways can break about one layer at the
+##   bottom of the cut, where the tissue rests at the edge height and the edge sweeps past it.
 ## Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_cube_scalpel_split.yaml
 ## See config/ITEST_README.md for keys and what to look for.
 

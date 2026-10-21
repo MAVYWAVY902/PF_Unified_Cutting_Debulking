@@ -548,12 +548,13 @@ __global__ void compute_cell_hash_kernel(
 }
 
 __global__ void find_cell_bounds_kernel(
-    unsigned int* sorted_hash, unsigned int* cell_start, unsigned int* cell_end, int N)
+    unsigned int* sorted_hash, unsigned int* cell_start, unsigned int* cell_end, int table_size, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N) return;
 
     unsigned int h = sorted_hash[i];
+    if (h >= (unsigned int)table_size) return;   // removed particles (sentinel = table_size): no cell
     if (i == 0 || sorted_hash[i - 1] != h) {
         cell_start[h] = i;
     }
@@ -690,7 +691,7 @@ __global__ void tool_damage_kernel(
     float sdist;
     const bool crossing = channel.kind == CUT_CURVE && channel.prev_pos != nullptr;
     if (crossing) {
-        if (damage[eid] >= 0.5f) return;      // already at the break threshold (logged once)
+        if (damage[eid] > 0.5f) return;       // already past the break threshold (logged once)
         if (!cut_curve_crossing_sdist(channel, channel.prev_pos[a], channel.prev_pos[b], pred_pos[a], pred_pos[b],
                                       radius, sdist, eid)) return;
     } else if (!cut_channel_sdist(channel, mid, radius, sdist)) return;
@@ -916,6 +917,7 @@ static ToolDesc grid_tool_desc(const SimConfigGPU& c, const SDFData& sdf) {
     t.normal_mode = c.sdf_normal_mode;
     t.tri = sdf.d_tri; t.n_tri = sdf.n_tri;
     t.sheet = sdf.d_sheet; t.sheet_seg = sdf.d_sheet_seg; t.n_sheet = sdf.n_sheet;
+    t.cedge = sdf.d_cedge; t.cedge_sharp = sdf.d_cedge_sharp; t.n_cedge = sdf.n_cedge;
     return t;
 }
 
@@ -1267,6 +1269,30 @@ __global__ void tool_edge_contact_kernel(
     atomicAdd(&counts[b], 1);
 }
 
+// edge_sweep_contact (tool_channels.cuh tool_edge_sweep_push): intact tissue edges a convex tool
+// edge swept across are pushed back to their side; same weighted, averaged apply as edge contact.
+__global__ void tool_edge_sweep_contact_kernel(
+    float3* pred_pos, const float3* ref_pos, int* removed, int* fixed,
+    int* edge_a, int* edge_b, int* broken,
+    ToolDesc cur, ToolDesc ref_t, int sharp_leading_cuts,
+    float3* deltas, int* counts, int num_edges)
+{
+    int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= num_edges || broken[e]) return;
+    int a = edge_a[e], b = edge_b[e];
+    if (removed[a] || removed[b] || (fixed[a] && fixed[b])) return;
+    float3 corr; float s;
+    if (!tool_edge_sweep_push(cur, ref_t, ref_pos[a], ref_pos[b], pred_pos[a], pred_pos[b],
+                              sharp_leading_cuts != 0, corr, s)) return;
+    float3 w = tq_rot(cur.rot, corr);
+    float wa = fixed[a] ? 0.0f : 1.0f - s, wb = fixed[b] ? 0.0f : s;
+    float den = wa * wa + wb * wb;
+    if (den < 1e-12f) return;
+    float sa = wa / den, sb = wb / den;      // the closest point moves by corr
+    if (wa > 0.0f) { atomicAdd(&deltas[a].x, sa * w.x); atomicAdd(&deltas[a].y, sa * w.y); atomicAdd(&deltas[a].z, sa * w.z); atomicAdd(&counts[a], 1); }
+    if (wb > 0.0f) { atomicAdd(&deltas[b].x, sb * w.x); atomicAdd(&deltas[b].y, sb * w.y); atomicAdd(&deltas[b].z, sb * w.z); atomicAdd(&counts[b], 1); }
+}
+
 // SDF debug: count particles inside rigid body
 __global__ void sdf_debug_kernel(
     float3* positions, int* removed, int* fixed,
@@ -1435,6 +1461,17 @@ void ShapeMatchingGPUSolver::gpu_update_damage() {
 
 }
 
+void ShapeMatchingGPUSolver::set_tool_contact_edges(const std::vector<float3>& e4, const std::vector<int>& sharp) {
+    if (d_tool_sdf.d_cedge) { cudaFree(d_tool_sdf.d_cedge); d_tool_sdf.d_cedge = nullptr; }
+    if (d_tool_sdf.d_cedge_sharp) { cudaFree(d_tool_sdf.d_cedge_sharp); d_tool_sdf.d_cedge_sharp = nullptr; }
+    d_tool_sdf.n_cedge = (int)sharp.size();
+    if (sharp.empty()) return;
+    CUDA_CHECK(cudaMalloc(&d_tool_sdf.d_cedge, e4.size() * sizeof(float3)));
+    CUDA_CHECK(cudaMemcpy(d_tool_sdf.d_cedge, e4.data(), e4.size() * sizeof(float3), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc(&d_tool_sdf.d_cedge_sharp, sharp.size() * sizeof(int)));
+    CUDA_CHECK(cudaMemcpy(d_tool_sdf.d_cedge_sharp, sharp.data(), sharp.size() * sizeof(int), cudaMemcpyHostToDevice));
+}
+
 void ShapeMatchingGPUSolver::set_tool_sheets(const std::vector<ToolSheetGPU>& sheets, const std::vector<float4>& seg) {
     if (d_tool_sdf.d_sheet) { cudaFree(d_tool_sdf.d_sheet); d_tool_sdf.d_sheet = nullptr; }
     if (d_tool_sdf.d_sheet_seg) { cudaFree(d_tool_sdf.d_sheet_seg); d_tool_sdf.d_sheet_seg = nullptr; }
@@ -1446,6 +1483,23 @@ void ShapeMatchingGPUSolver::set_tool_sheets(const std::vector<ToolSheetGPU>& sh
         CUDA_CHECK(cudaMalloc(&d_tool_sdf.d_sheet_seg, seg.size() * sizeof(float4)));
         CUDA_CHECK(cudaMemcpy(d_tool_sdf.d_sheet_seg, seg.data(), seg.size() * sizeof(float4), cudaMemcpyHostToDevice));
     }
+}
+
+// edge_sweep_contact: one pass of tissue-edge vs tool-edge CCD, reference positions ref (in pose ref_t)
+void ShapeMatchingGPUSolver::edge_sweep_contact(const float3* ref, const ToolDesc& ref_t) {
+    if (!config.edge_sweep_contact || d_tool_sdf.n_cedge == 0 || d_edges.num_edges == 0) return;
+    int N = d_particles.N, E = d_edges.num_edges;
+    int blocks_n = (N + 255) / 256, blocks_e = (E + 255) / 256;
+    clear_deltas_kernel<<<blocks_n, 256>>>(d_deltas_ec, d_delta_counts_ec, N);
+    tool_edge_sweep_contact_kernel<<<blocks_e, 256>>>(
+        d_particles.predicted_pos, ref, d_particles.removed, d_particles.fixed,
+        d_edges.particle_a, d_edges.particle_b, d_edges.broken,
+        grid_tool_desc(config, d_tool_sdf), ref_t,
+        config.use_sharp_edge_damage && config.cut_curve_leading ? 1 : 0,
+        d_deltas_ec, d_delta_counts_ec, E);
+    apply_self_collision_kernel<<<blocks_n, 256>>>(
+        d_particles.predicted_pos, d_deltas_ec, d_delta_counts_ec,
+        d_particles.removed, d_particles.fixed, N);
 }
 
 void ShapeMatchingGPUSolver::set_tool_triangles(const std::vector<float3>& tri4) {
@@ -1648,6 +1702,7 @@ void ShapeMatchingGPUSolver::step() {
             d_particles.predicted_pos, d_particles.old_pos, d_particles.removed, d_particles.fixed,
             grid_tool_desc(config, d_tool_sdf), prev_tool_desc(), tool_contact_mode(),
             config.contact_iterate ? 8 : 1, N);
+        edge_sweep_contact(d_particles.old_pos, prev_tool_desc());
     }
 
     // 2b. Rigid SDF collision
@@ -1761,6 +1816,7 @@ void ShapeMatchingGPUSolver::step() {
                 d_particles.removed, d_particles.fixed,
                 cur_tool, ccd_on ? cur_tool : prev_tool_desc(), tool_contact_mode(),
                 config.contact_iterate ? 8 : 1, N);
+            if (ccd_on) edge_sweep_contact(d_particles.pre_apply_pos, cur_tool);
         }
 
         trace_point(4, iter);
@@ -1968,13 +2024,14 @@ void ShapeMatchingGPUSolver::build_hash_grid() {
         d_cub_temp, cub_temp_bytes,
         d_cell_hash, d_cell_hash_sorted,
         d_particle_index, d_particle_index_sorted,
-        N, 0, 15);  // only sort lower 15 bits for TABLE_SIZE=32768
+        N, 0, 16);  // 16 bits: cells 0..32767 plus the removed sentinel 32768 (sorted to the end;
+                    // with 15 bits the sentinel sorted as cell 0 and was written past the bounds arrays)
 
     // 3. Find cell boundaries
     cudaMemset(d_cell_start, 0xFF, HASH_TABLE_SIZE * sizeof(unsigned int));
     cudaMemset(d_cell_end, 0xFF, HASH_TABLE_SIZE * sizeof(unsigned int));
     find_cell_bounds_kernel<<<blocks, 256>>>(
-        d_cell_hash_sorted, d_cell_start, d_cell_end, N);
+        d_cell_hash_sorted, d_cell_start, d_cell_end, HASH_TABLE_SIZE, N);
 }
 
 void ShapeMatchingGPUSolver::cleanup() {
@@ -1984,6 +2041,8 @@ void ShapeMatchingGPUSolver::cleanup() {
     if (d_tool_sdf.d_tri) { cudaFree(d_tool_sdf.d_tri); d_tool_sdf.d_tri = nullptr; }
     if (d_tool_sdf.d_sheet) { cudaFree(d_tool_sdf.d_sheet); d_tool_sdf.d_sheet = nullptr; }
     if (d_tool_sdf.d_sheet_seg) { cudaFree(d_tool_sdf.d_sheet_seg); d_tool_sdf.d_sheet_seg = nullptr; }
+    if (d_tool_sdf.d_cedge) { cudaFree(d_tool_sdf.d_cedge); d_tool_sdf.d_cedge = nullptr; }
+    if (d_tool_sdf.d_cedge_sharp) { cudaFree(d_tool_sdf.d_cedge_sharp); d_tool_sdf.d_cedge_sharp = nullptr; }
     if (d_cl_edge_start) { cudaFree(d_cl_edge_start); cudaFree(d_cl_edge_eid); cudaFree(d_cl_edge_uv); cudaFree(d_labels); cudaFree(d_topo_dirty); cudaFree(d_cluster_multi); }
     cudaFree(d_particles.pos);
     cudaFree(d_particles.vel);

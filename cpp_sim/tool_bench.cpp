@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
     std::string tool = "sphere";
     int n_frames = 80, grid_res = 64, n_settle = 60, n_approach = 30;
     bool timing = false, replay_allow_mismatch = false, gpu_only = false;
+    int pass_every = 1;
     std::string replay_path, stats_path, write_traj_path, pass_path, topo_path, track_path, trace_path, fast_path, cross_path;
     double proxy_step_override_mm = -1.0;
     int trace_from = 0, trace_to = -1;
@@ -101,7 +102,8 @@ int main(int argc, char** argv) {
         else if (a == "--gpu-only") gpu_only = true;
         else if (a == "--write-traj" && i + 1 < argc) write_traj_path = argv[++i];   // scripted pose → recording file   // replay without orphan cleanup / BFS (old behaviour)
         else if (a == "--stats" && i + 1 < argc) stats_path = argv[++i];
-        else if (a == "--pass-through" && i + 1 < argc) pass_path = argv[++i];   
+        else if (a == "--pass-through" && i + 1 < argc) pass_path = argv[++i];
+        else if (a == "--pass-every" && i + 1 < argc) pass_every = std::max(1, std::atoi(argv[++i]));   // pass-through on every N-th frame (large meshes)   
         else if (a == "--dump-topology" && i + 1 < argc) topo_path = argv[++i];
         else if (a == "--track-edges" && i + 1 < argc) track_path = argv[++i];
         else if (a == "--proxy-step-mm" && i + 1 < argc) proxy_step_override_mm = std::atof(argv[++i]);   // diagnostics only
@@ -591,7 +593,7 @@ int main(int argc, char** argv) {
             while (cross_frame.size() < g.cross_log.size()) cross_frame.push_back(f);
             while (strad_frame.size() < g.strad_log.size()) strad_frame.push_back(f);
             for (size_t k = trace_before; k < g.trace_log.size(); k++) trace_frame_of_step.push_back(f);
-            if (pass_f && fr.active) pass_through_frame(f, g.config.knife_pos);   // the pose the solver used (proxy)
+            if (pass_f && fr.active && f % pass_every == 0) pass_through_frame(f, g.config.knife_pos);   // the pose the solver used (proxy)
             if (track_f && fr.active && !track_ids.empty()) {
                 g.download_edge_broken(tbroken); g.download_edge_damage(tdmg);
                 for (int e : track_ids) {
