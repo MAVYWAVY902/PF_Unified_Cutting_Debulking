@@ -1,0 +1,82 @@
+## Interactive test (2026-10-21): the split config with a ROUND-BACK scalpel (resources/tools/scalpel_round.obj,
+##   tools/generate_scalpel_round_obj.py): same size and cutting-edge wedge, but the flat 9.6 mm spine (x12)
+##   is a circular arc tangent to both faces (radius 4.4 mm at x12). Tissue resting on the back slides off
+##   to its own side when the blade is pulled out, instead of being lifted (strands / stuck knife).
+##   Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_cube_scalpel_round.yaml
+## Interactive test (2026-10-20): cube + scalpel (x12), cut only — the fixes config plus:
+##   knife.straddle_fracture: false  R3 off: 95% of its breaks were triggered by deformation alone (the
+##                                edge's ball shrank inside the blade outline, nothing passed through it);
+##                                cutting is decided only by the blade edge passing between particles
+##   render.split_tets: true      a cut tet is drawn as one piece per side (ending at the cut) instead of
+##                                being hidden: no missing layer along the cut, no "floating" fragments
+## Also on: cut_curve leading, contact_iterate, contact_ccd, tool_proxy (see itest_cube_scalpel_fixes.yaml).
+## Known: the blunt spine / blade ends (thinner than the particle spacing) can slide between particles
+##   without pushing them (the blade passes through the tissue there, no cut); not fixed yet.
+## Known (model behaviour, accepted): pushing the blade sideways can break about one layer at the
+##   bottom of the cut, where the tissue rests at the edge height and the edge sweeps past it.
+## Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_cube_scalpel_split.yaml
+## See config/ITEST_README.md for keys and what to look for.
+
+## P(F) Shape Matching - Cube Test Configuration
+## Matches parameters from cube32.msh direct run
+
+name: "Interactive: cube + scalpel (x12), cut only, fixes A(leading)+F1+B(proxy)+CCD"
+debulking: false   # cut only: edges break, nothing is aspirated
+
+## Dense cube (1m x 1m x 1m, ~31k vertices, 158k tets)
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.005
+  gravity: [0, -9.81, 0]
+  num_iterations: 16    # 之前4，更多迭代 → 更stiff
+  stiffness: 1.0        # 之前0.6，满stiffness
+  damping: 0.95         # 0.98 → 0.88 → 0.95（中间值）
+  substeps: 4           # 之前4，更细时间步 → 更稳定
+  tool_proxy: true      # B: virtual coupling, step limit = particle radius per substep
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.10
+
+clusters:
+  rings: 2
+  local_split: true           # R1: clusters split by their own intact edges
+
+knife:
+  radius: 0.04                 # sphere fallback only
+  tool_mesh: "../../resources/tools/scalpel_round.obj"
+  tool_scale: 12.0             # 144 x 60 x 9.6 mm blade, cutting edge along x at the bottom
+  cutting_interval: 1          # damage every substep (mouse motion can be fast)
+  alpha_min: 7.0
+  aspiration_threshold: 0.7
+  tool_sdf_resolution: 64
+  sdf_normal: trilinear        # required by straddle_fracture
+  cut_features: auto           # sharp edges / points from the tool mesh (wedge or cone angle < 30 deg)
+  straddle_fracture: false     # R3 off (see header)
+  cut_curve: leading           # edge cuts only when it passes between the particles AND leads
+  contact_iterate: true        # F1: project until out of the tool
+  contact_ccd: true            # CCD tool contact: a particle whose path crosses the tool (exact
+                               # triangles) is put back on the face it came from
+  damage_growth_rate: 0.1      # ~5 substeps of loading before an edge breaks
+
+self_collision:
+  enabled: true
+  radius: 0.0045       # 2026-09-19: kernel 判定距离 = 2×radius = 9mm ≈ 粒子间距 8.9mm (原 0.012 → 24mm, 2.7× 间距, 刀压时粒子被弹飞)
+  stiffness: 0.8
+
+## 地板 Coulomb 摩擦 (2026-09-19, 对齐 cardinalsim tumor_debulk.yaml)
+## 没有 mesh，只用来覆盖 collision_kernel 的地板 μ_s/μ_k (默认 0.5/0.3)。
+## 该模型的"法向力"= 每 substep 穿透深度 (~0.1mm)，μ 必须大才能锁住落地碎片。
+rigid_object:
+  friction_s: 2.0
+  friction_k: 1.5
+
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: false
+
+render:
+  split_tets: true             # a cut tet is drawn as one piece per side
