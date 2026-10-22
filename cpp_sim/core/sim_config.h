@@ -38,6 +38,10 @@ struct SimConfigYAML {
     float damping = 0.98f;
     float damping_rate = -1.0f;         // [1/s] if >= 0: damping per substep = exp(-damping_rate * dt)
                                         //   (dt-independent); < 0 → the per-substep factor `damping`
+    std::string damping_mode = "global"; // "global": every velocity is damped (also a falling fragment's
+                                        //   fall: terminal speed g dt / (1 - damping)); "body": a body that is
+                                        //   not anchored to a fixed particle is damped only relative to its
+                                        //   rigid motion (Müller et al. 2007, PBD, Sec. 3.5)
     std::string solver = "pbd";         // tissue elasticity: "pbd" (stiffness per iteration, legacy) or
                                         //   "xpbd" (compliance: dt- and iteration-independent)
     float xpbd_stiffness = 0.0f;        // [1/s^2] xpbd: stiffness / particle mass of each particle-goal link
@@ -250,6 +254,7 @@ struct SimConfigYAML {
             if (sim["stiffness"]) stiffness = sim["stiffness"].as<float>();
             if (sim["damping"]) damping = sim["damping"].as<float>();
             if (sim["damping_rate"]) damping_rate = sim["damping_rate"].as<float>();
+            if (sim["damping_mode"]) damping_mode = sim["damping_mode"].as<std::string>();
             if (sim["solver"]) solver = sim["solver"].as<std::string>();
             if (sim["xpbd_stiffness"]) xpbd_stiffness = sim["xpbd_stiffness"].as<float>();
             if (sim["xpbd_damping"]) xpbd_damping = sim["xpbd_damping"].as<float>();

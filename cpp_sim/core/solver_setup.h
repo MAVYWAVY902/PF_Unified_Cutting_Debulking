@@ -27,6 +27,12 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     s.config.num_iterations = cfg.num_iterations;
     s.config.stiffness = cfg.stiffness;
     s.config.damping = cfg.damping_rate >= 0.0f ? std::exp(-cfg.damping_rate * cfg.dt) : cfg.damping;
+    if (cfg.damping_mode != "global" && cfg.damping_mode != "body") {
+        std::cerr << "[config] simulation.damping_mode must be global or body, got " << cfg.damping_mode << std::endl;
+        std::exit(1);
+    }
+    if (cfg.damping_mode == "body")
+        printf("[damping] body: free bodies are damped only relative to their rigid motion (Mueller 2007, Sec. 3.5)\n");
     // tissue elasticity solver (see SimConfigGPU::solver_xpbd)
     if (cfg.solver != "pbd" && cfg.solver != "xpbd") {
         std::cerr << "[config] simulation.solver must be pbd or xpbd, got " << cfg.solver << std::endl;

@@ -366,7 +366,46 @@ struct FramePipeline {
     bool proxy_valid = false;
     float3 proxy_pos = {0, 0, 0};
     float proxy_rot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    // simulation.damping_mode body: free bodies (connected by intact edges, no fixed particle) are
+    // relabelled on the GPU whenever the number of broken edges or removed particles changed
+    bool body_damping = false;
+    int body_broken = -1, body_removed = -1;
 };
+
+// damping_mode body: label the bodies (components of the alive particles over the intact edges, the
+// same connectivity the shape matching sees with R1 local_split) and upload them. A body containing a
+// fixed particle has no free rigid motion and gets -1 (plain damping), like removed particles.
+inline void refresh_body_labels(FramePipeline& P) {
+    std::vector<int> eb;
+    P.gpu.download_edge_broken(eb);
+    int nb = 0, nr = 0;
+    for (int v : eb) nb += (v != 0);
+    for (int i = 0; i < P.N; i++) nr += (P.removed[i] != 0);
+    if (nb == P.body_broken && nr == P.body_removed) return;
+    P.body_broken = nb; P.body_removed = nr;
+    std::vector<int> parent(P.N);
+    for (int i = 0; i < P.N; i++) parent[i] = i;
+    auto find = [&](int x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; };
+    for (int e = 0; e < (int)eb.size(); e++) {
+        const int a = P.edge_a[e], b = P.edge_b[e];
+        if (eb[e] || P.removed[a] || P.removed[b]) continue;
+        const int ra = find(a), rb = find(b);
+        if (ra != rb) parent[ra] = rb;
+    }
+    std::vector<char> anchored(P.N, 0);
+    for (int i = 0; i < P.N; i++)
+        if (!P.removed[i] && P.cpu.particles[i].fixed) anchored[find(i)] = 1;
+    std::vector<int> id(P.N, -1), label(P.N, -1);
+    int n_bodies = 0;
+    for (int i = 0; i < P.N; i++) {
+        if (P.removed[i]) continue;
+        const int r = find(i);
+        if (anchored[r]) continue;
+        if (id[r] < 0) id[r] = n_bodies++;
+        label[i] = id[r];
+    }
+    P.gpu.upload_body_labels(label, n_bodies);
+}
 
 struct FrameResult {
     int active = 0, removed = 0;
@@ -392,6 +431,7 @@ inline FrameResult advance_frame(FramePipeline& P, int substeps, int frame, bool
         // removed count entering this frame (state after last frame's orphan/BFS upload)
         int rem_before = 0;
         for (int i = 0; i < N; i++) rem_before += (P.removed[i] != 0);
+        if (P.body_damping) refresh_body_labels(P);   // topology at the start of this frame
         // GPU 仿真
         auto t0 = std::chrono::high_resolution_clock::now();
         // R4: the caller has set this frame's TARGET pose; substep k uses the pose (k+1)/substeps of

@@ -341,6 +341,7 @@ int main(int argc, char** argv) {
                                          rpos, rrem, rdmg, tet_broken, true, cfg.cutting_mode, N, cfg.local_split,
                                          cfg.tool_substep_interp};
         setup_tool_proxy(cfg, g, tool_rm, avg_spacing, pipe.tool_proxy, pipe.proxy_max_step, pipe.tool_reach);
+        pipe.body_damping = (cfg.damping_mode == "body");
         if (proxy_step_override_mm > 0.0) { pipe.proxy_max_step = proxy_step_override_mm * 1e-3;
                                             printf("[tool-proxy] DIAGNOSTIC override: max step %.3f mm\n", proxy_step_override_mm); }
         // --pass-through: after each active frame (end-of-frame positions, the tool pose of that

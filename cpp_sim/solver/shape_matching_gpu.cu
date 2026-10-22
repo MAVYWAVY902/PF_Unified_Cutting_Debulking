@@ -9,10 +9,90 @@
 
 // ============== CUDA Kernels ==============
 
+// damping_mode body (Müller et al. 2007, "Position Based Dynamics", Sec. 3.5): the velocity damping of
+// a free body acts only on each particle's velocity relative to the body's rigid motion v_cm + w x r, so
+// it damps deformation but leaves the body's linear and angular momentum alone (a detached fragment
+// falls and tumbles freely). A body anchored to a fixed particle has no free rigid motion: its particles
+// carry label -1 and keep the plain damping v *= damping (as do all particles when no labels exist).
+// Per body b: body_acc[16 b ..] = n, sum x, sum v, L = sum r x v, I = sum (r.r E - r r^T) (xx yy zz xy xz yz);
+// body_rig[9 b ..] = c, v_cm, w. All particles have the same mass (as everywhere in the GPU solver).
+__device__ __forceinline__ void body_add(float* acc, int b, const float* val, int k0, int k1) {
+    // warp-aggregated atomics: most warps lie in one body (contention on the big bodies otherwise)
+    const unsigned full = 0xFFFFFFFFu;
+    const int b0 = __shfl_sync(full, b, 0);
+    if (__all_sync(full, b == b0)) {
+        if (b0 < 0) return;
+        for (int k = k0; k < k1; k++) {
+            float v = val[k];
+            for (int o = 16; o > 0; o >>= 1) v += __shfl_down_sync(full, v, o);
+            if ((threadIdx.x & 31) == 0) atomicAdd(&acc[16 * b0 + k], v);
+        }
+    } else if (b >= 0) {
+        for (int k = k0; k < k1; k++) atomicAdd(&acc[16 * b + k], val[k]);
+    }
+}
+
+__global__ void body_sum_kernel(const float3* pos, const float3* vel, const int* label, float* acc, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int b = (i < N) ? label[i] : -1;            // every lane reaches body_add (warp shuffles)
+    float val[16];
+    if (b >= 0) {
+        val[0] = 1.0f;
+        val[1] = pos[i].x; val[2] = pos[i].y; val[3] = pos[i].z;
+        val[4] = vel[i].x; val[5] = vel[i].y; val[6] = vel[i].z;
+    } else for (int k = 0; k < 7; k++) val[k] = 0.0f;
+    body_add(acc, b, val, 0, 7);
+}
+
+__global__ void body_moment_kernel(const float3* pos, const float3* vel, const int* label, float* acc, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int b = (i < N) ? label[i] : -1;
+    float val[16];
+    for (int k = 0; k < 16; k++) val[k] = 0.0f;
+    if (b >= 0) {
+        const float* a = acc + 16 * b;
+        const float inv_n = 1.0f / a[0];
+        const float rx = pos[i].x - a[1] * inv_n, ry = pos[i].y - a[2] * inv_n, rz = pos[i].z - a[3] * inv_n;
+        const float vx = vel[i].x, vy = vel[i].y, vz = vel[i].z;
+        val[7] = ry * vz - rz * vy; val[8] = rz * vx - rx * vz; val[9] = rx * vy - ry * vx;
+        val[10] = ry * ry + rz * rz; val[11] = rx * rx + rz * rz; val[12] = rx * rx + ry * ry;
+        val[13] = -rx * ry; val[14] = -rx * rz; val[15] = -ry * rz;
+    }
+    body_add(acc, b, val, 7, 16);
+}
+
+// w = I^-1 L. A body whose particles are collinear (or a single particle) has a singular I; the rotation
+// about that line moves none of its particles, so the solve is regularised (eps * trace(I)) and returns
+// the minimum-norm w, whose w x r is the rigid velocity field all the same.
+__global__ void body_solve_kernel(const float* acc, float* rig, int B)
+{
+    int b = blockIdx.x * blockDim.x + threadIdx.x;
+    if (b >= B) return;
+    const float* a = acc + 16 * b;
+    float* r = rig + 9 * b;
+    const float inv_n = a[0] > 0.0f ? 1.0f / a[0] : 0.0f;
+    r[0] = a[1] * inv_n; r[1] = a[2] * inv_n; r[2] = a[3] * inv_n;
+    r[3] = a[4] * inv_n; r[4] = a[5] * inv_n; r[5] = a[6] * inv_n;
+    const float reg = 1e-6f * (a[10] + a[11] + a[12]) + 1e-30f;
+    const float xx = a[10] + reg, yy = a[11] + reg, zz = a[12] + reg, xy = a[13], xz = a[14], yz = a[15];
+    // adjugate of the symmetric matrix [[xx xy xz] [xy yy yz] [xz yz zz]]
+    const float c00 = yy * zz - yz * yz, c01 = xz * yz - xy * zz, c02 = xy * yz - xz * yy;
+    const float c11 = xx * zz - xz * xz, c12 = xy * xz - xx * yz, c22 = xx * yy - xy * xy;
+    const float det = xx * c00 + xy * c01 + xz * c02;
+    const float id = det > 0.0f ? 1.0f / det : 0.0f;
+    const float Lx = a[7], Ly = a[8], Lz = a[9];
+    r[6] = id * (c00 * Lx + c01 * Ly + c02 * Lz);
+    r[7] = id * (c01 * Lx + c11 * Ly + c12 * Lz);
+    r[8] = id * (c02 * Lx + c12 * Ly + c22 * Lz);
+}
+
 __global__ void predict_kernel(
     float3* pos, float3* vel, float3* predicted_pos, float3* old_pos,
     int* removed, int* fixed,
-    float3 gravity, float dt, float damping, int N)
+    float3 gravity, float dt, float damping, int N,
+    const int* body_label = nullptr, const float* body_rig = nullptr)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N) return;
@@ -24,9 +104,21 @@ __global__ void predict_kernel(
     // Damp the velocity carried over from the last substep, THEN add this substep's gravity. Damping
     // after gravity also scaled the gravity load: at rest (v = 0) the body carried only damping * g,
     // a dt-dependent loss (5% at 0.95, 14% at 0.857) that changed the static sag.
-    vel[i].x *= damping;
-    vel[i].y *= damping;
-    vel[i].z *= damping;
+    const int b = body_label ? body_label[i] : -1;
+    if (b >= 0) {        // free body: damp only the velocity relative to its rigid motion
+        const float* r = body_rig + 9 * b;
+        const float rx = pos[i].x - r[0], ry = pos[i].y - r[1], rz = pos[i].z - r[2];
+        const float ux = r[3] + r[7] * rz - r[8] * ry;
+        const float uy = r[4] + r[8] * rx - r[6] * rz;
+        const float uz = r[5] + r[6] * ry - r[7] * rx;
+        vel[i].x = ux + damping * (vel[i].x - ux);
+        vel[i].y = uy + damping * (vel[i].y - uy);
+        vel[i].z = uz + damping * (vel[i].z - uz);
+    } else {
+        vel[i].x *= damping;
+        vel[i].y *= damping;
+        vel[i].z *= damping;
+    }
     vel[i].x += gravity.x * dt;
     vel[i].y += gravity.y * dt;
     vel[i].z += gravity.z * dt;
@@ -1890,12 +1982,19 @@ void ShapeMatchingGPUSolver::step() {
     int C = d_clusters.num_clusters;
     int blocks_n = (N + 255) / 256;
 
-    // 1. Predict
+    // 1. Predict (damping_mode body: rigid motion of each free body first, see body_sum_kernel)
+    if (n_bodies > 0) {
+        CUDA_CHECK(cudaMemsetAsync(d_body_acc, 0, 16 * n_bodies * sizeof(float)));
+        body_sum_kernel<<<blocks_n, 256>>>(d_particles.pos, d_particles.vel, d_body_label, d_body_acc, N);
+        body_moment_kernel<<<blocks_n, 256>>>(d_particles.pos, d_particles.vel, d_body_label, d_body_acc, N);
+        body_solve_kernel<<<(n_bodies + 127) / 128, 128>>>(d_body_acc, d_body_rig, n_bodies);
+    }
     predict_kernel<<<blocks_n, 256>>>(
         d_particles.pos, d_particles.vel,
         d_particles.predicted_pos, d_particles.old_pos,
         d_particles.removed, d_particles.fixed,
-        config.gravity, config.dt, config.damping, N);
+        config.gravity, config.dt, config.damping, N,
+        n_bodies > 0 ? d_body_label : nullptr, d_body_rig);
     trace_point(0, -1);
 
     // 2. Collision (predict 后) — floor + sphere tool
@@ -2193,6 +2292,17 @@ void ShapeMatchingGPUSolver::upload_removed(const std::vector<int>& removed) {
     if (local_split) { int one = 1; CUDA_CHECK(cudaMemcpy(d_topo_dirty, &one, sizeof(int), cudaMemcpyHostToDevice)); }
 }
 
+void ShapeMatchingGPUSolver::upload_body_labels(const std::vector<int>& label, int nb) {
+    int N = d_particles.N;
+    if (!d_body_label) {
+        CUDA_CHECK(cudaMalloc(&d_body_label, N * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&d_body_acc, 16 * (size_t)N * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_body_rig, 9 * (size_t)N * sizeof(float)));
+    }
+    CUDA_CHECK(cudaMemcpy(d_body_label, label.data(), N * sizeof(int), cudaMemcpyHostToDevice));
+    n_bodies = nb;
+}
+
 void ShapeMatchingGPUSolver::reupload_clusters(
     const std::vector<int>& cluster_starts,
     const std::vector<int>& cluster_sizes,
@@ -2322,6 +2432,7 @@ void ShapeMatchingGPUSolver::cleanup() {
     if (xpbd_check) printf("[XPBD-CHECK] total: %lld substeps checked, %lld mismatching particle counts\n",
                            xpbd_check_substeps, xpbd_check_mismatch);
     if (d_xpbd_lambda) { cudaFree(d_xpbd_lambda); cudaFree(d_xpbd_goal_n); cudaFree(d_xpbd_count); d_xpbd_lambda = d_xpbd_goal_n = nullptr; d_xpbd_count = nullptr; xpbd_entries = 0; }
+    if (d_body_label) { cudaFree(d_body_label); cudaFree(d_body_acc); cudaFree(d_body_rig); d_body_label = nullptr; d_body_acc = d_body_rig = nullptr; n_bodies = 0; }
     if (d_edges.particle_a) {
         cudaFree(d_edges.particle_a);
         cudaFree(d_edges.particle_b);

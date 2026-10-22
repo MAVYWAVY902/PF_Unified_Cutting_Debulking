@@ -243,6 +243,12 @@ public:
     // 上传 removed（CPU 分裂后同步回 GPU）
     void upload_removed(const std::vector<int>& removed);
 
+    // damping_mode body (Müller et al. 2007, PBD, Sec. 3.5): per particle, the free body it belongs to
+    // (0 .. n_bodies-1) or -1 (anchored to a fixed particle, or removed). The velocity damping of a free
+    // body acts only on the motion relative to the body's rigid motion (v_cm + w x r); particles with
+    // label -1 keep the plain damping. No labels uploaded (n_bodies = 0 everywhere) = plain damping.
+    void upload_body_labels(const std::vector<int>& label, int n_bodies);
+
     // 重新上传簇数据（分裂后）
     void reupload_clusters(
         const std::vector<int>& cluster_starts,
@@ -357,6 +363,12 @@ private:
     long long xpbd_check_substeps = 0, xpbd_check_mismatch = 0;
     void xpbd_check_counts();
     float3* d_xpbd_goal_n = nullptr;  // goals at the start-of-substep positions (constraint damping), NaN = none
+    // damping_mode body: label per particle [N]; per body sums [16 x N] (n, sum x, sum v, L, I) and
+    // rigid motion [9 x N] (c, v_cm, w); sized for N bodies at the first upload
+    int* d_body_label = nullptr;
+    float* d_body_acc = nullptr;
+    float* d_body_rig = nullptr;
+    int n_bodies = 0;
     int xpbd_entries = 0;
     void ensure_xpbd_buffers();
 

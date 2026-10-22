@@ -1,0 +1,81 @@
+## Interactive test (2026-10-22, branch real_xpbd): itest_cube_scalpel10_xpbd_ss32_k1e5.yaml with
+##   simulation.damping_mode: body (Mueller et al. 2007, PBD, Sec. 3.5). damping_rate 40 damped every velocity,
+##   so a detached fragment fell at most g dt / (1 - damping) = 0.25 m/s (free-fall test: 0.11 g). Now a body not
+##   anchored to a fixed particle is damped only relative to its rigid motion (falls and tumbles freely, its
+##   wobble still decays at 40/s); the anchored main body keeps the plain damping, so pushing and cutting are
+##   unchanged (poke: same overshoot / settle / sag; cut replay of cmp_s10: same broken / threaded edges).
+##   Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_cube_scalpel10_xpbd_ss32_k1e5_body.yaml
+## Interactive test (2026-10-21, branch real_xpbd): itest_cube_scalpel_round_xpbd_ss32_k1e5.yaml with a No. 10
+##   scalpel profile (resources/tools/scalpel10.obj, tools/generate_scalpel10_obj.py): curved cutting edge rising
+##   to a pointed tip, same outer size and wedge angle. The extruded wedge's flat 60 mm ends (x12) pushed tissue
+##   when the blade was drawn along its length; the curved edge leads (and cuts) when drawn towards the tip.
+##   Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_cube_scalpel10_xpbd_ss32_k1e5.yaml
+## Interactive test (2026-10-21, branch real_xpbd): XPBD 32 substeps x 1 iteration, xpbd_stiffness 1e5,
+##   damping_rate 40 (itest_cube_scalpel_round_xpbd_ss64_d40.yaml with half the substeps and a stiffer k).
+##   Sweep (poke test + cut replay of cmp_xpbd64_d40): 32 x 1 costs half of 64 x 1 (GPU ~38 vs ~77 ms/frame)
+##   and a stiffer k makes up for the extra softness of the larger substep (top sag incl. self-collision:
+##   64x1 k 2e4 1.16 mm; 32x1 k 5e4 1.08 mm, k 1e5 0.83 mm). Overshoot 8-10% after a push.
+##   dt 0.625 ms -> damage_growth_rate 0.0125 (= 0.1 per 5 ms); damping_rate / tool_proxy_speed are per second.
+##   Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_cube_scalpel_round_xpbd_ss32_k1e5.yaml
+
+
+name: "Interactive: cube + scalpel (x12), cut only, fixes A(leading)+F1+B(proxy)+CCD"
+debulking: false   # cut only: edges break, nothing is aspirated
+
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.000625
+  gravity: [0, -9.81, 0]
+  num_iterations: 1
+  stiffness: 1.0        # unused by xpbd
+  solver: xpbd          # XPBD shape matching (compliance; dt- and iteration-independent once converged)
+  xpbd_stiffness: 1e5
+  damping_rate: 40      # per second (was 10.259 = 0.95 per 5 ms); damps the post-push wobble
+  damping_mode: body    # free bodies: damp only the motion relative to their rigid motion
+  substeps: 32
+  tool_proxy: true
+  tool_proxy_speed: 0.887  # m/s sim time (= particle radius 4.437 mm per 5 ms)
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.10
+
+clusters:
+  rings: 2
+  local_split: true           # R1: clusters split by their own intact edges
+
+knife:
+  radius: 0.04                 # sphere fallback only
+  tool_mesh: "../../resources/tools/scalpel10.obj"
+  tool_scale: 12.0             # 144 x 60 x 9.6 mm blade, cutting edge along x at the bottom
+  cutting_interval: 1          # damage every substep (mouse motion can be fast)
+  alpha_min: 7.0
+  aspiration_threshold: 0.7
+  tool_sdf_resolution: 64
+  sdf_normal: trilinear        # required by straddle_fracture
+  cut_features: auto           # sharp edges / points from the tool mesh (wedge or cone angle < 30 deg)
+  straddle_fracture: false     # R3 off (see header)
+  cut_curve: leading           # edge cuts only when it passes between the particles AND leads
+  contact_iterate: true        # F1: project until out of the tool
+  contact_ccd: true            # CCD tool contact: a particle whose path crosses the tool (exact
+                               # triangles) is put back on the face it came from
+  damage_growth_rate: 0.0125
+
+self_collision:
+  enabled: true
+  radius: 0.0045       # 2026-09-19: kernel 判定距离 = 2×radius = 9mm ≈ 粒子间距 8.9mm (原 0.012 → 24mm, 2.7× 间距, 刀压时粒子被弹飞)
+  stiffness: 0.8
+
+rigid_object:
+  friction_s: 2.0
+  friction_k: 1.5
+
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: false
+
+render:
+  split_tets: true             # a cut tet is drawn as one piece per side

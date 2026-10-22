@@ -400,6 +400,7 @@ int main(int argc, char** argv) {
                                          cpu_positions, cpu_removed, cpu_damage, tet_broken,
                                          use_tet, cfg.cutting_mode, N, cfg.local_split, cfg.tool_substep_interp};
     setup_tool_proxy(cfg, gpu_solver, tool_mesh, avg_spacing, pipeline.tool_proxy, pipeline.proxy_max_step, pipeline.tool_reach);
+    pipeline.body_damping = (cfg.damping_mode == "body");
 
     // --- Step 0.5a: recorder / per-frame stats (observation only) ---
     simrec::TrajectoryRecorder recorder;
