@@ -34,6 +34,7 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
     }
     s.config.solver_xpbd = cfg.solver == "xpbd" ? 1 : 0;
     s.config.xpbd_stiffness = cfg.xpbd_stiffness;
+    s.config.xpbd_damping = cfg.xpbd_damping;
     if (s.config.solver_xpbd) {
         if (cfg.xpbd_stiffness <= 0.0f) {
             std::cerr << "[config] solver xpbd needs simulation.xpbd_stiffness > 0 (1/s^2)" << std::endl;
@@ -43,8 +44,8 @@ inline void apply_config_to_solver(const SimConfigYAML& cfg, ShapeMatchingGPUSol
             std::cerr << "[config] solver xpbd does not support per_particle_stiffness yet" << std::endl;
             std::exit(1);
         }
-        printf("[XPBD] k/m = %.4g 1/s^2, dt %.4g s, %d iterations, damping %.6g per substep\n",
-               cfg.xpbd_stiffness, cfg.dt, cfg.num_iterations, s.config.damping);
+        printf("[XPBD] k/m = %.4g 1/s^2, constraint damping %.4g s, dt %.4g s, %d iterations, damping %.6g per substep\n",
+               cfg.xpbd_stiffness, cfg.xpbd_damping, cfg.dt, cfg.num_iterations, s.config.damping);
     }
     s.config.floor_y = cfg.floor_y;
     s.config.knife_pos = make_float3(100, 100, 100);
@@ -258,8 +259,12 @@ inline void setup_tool_proxy(const SimConfigYAML& cfg, const ShapeMatchingGPUSol
     max_step = 0.5 * (double)avg_spacing;
     reach = (double)s.config.knife_radius;
     if (s.config.tool_type == 1) { reach = 0.0; for (const auto& v : tool_mesh.vertices) reach = std::max(reach, v.norm()); }
-    if (on) std::printf("[tool-proxy] max step %.3f mm per substep (particle radius), tool reach %.1f mm\n",
-                        max_step * 1e3, reach * 1e3);
+    if (cfg.tool_proxy_speed > 0.0f) {          // a speed, so the limit does not change with the substep count
+        max_step = (double)cfg.tool_proxy_speed * (double)cfg.dt;
+        if (on) std::printf("[tool-proxy] max step %.3f mm per substep (%.3f m/s sim time), tool reach %.1f mm\n",
+                            max_step * 1e3, cfg.tool_proxy_speed, reach * 1e3);
+    } else if (on) std::printf("[tool-proxy] max step %.3f mm per substep (particle radius), tool reach %.1f mm\n",
+                               max_step * 1e3, reach * 1e3);
 }
 
 // Longest cutting edge at the rest positions (the tool-box margin straddle_fracture needs).

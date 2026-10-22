@@ -1,0 +1,70 @@
+## Interactive test (2026-10-21, branch real_xpbd): XPBD 64 x 1 (itest_cube_scalpel_round_xpbd_ss64.yaml)
+##   with stronger global (mass-proportional) velocity damping: damping_rate 40 /s instead of 10.259 /s.
+##   Small steps remove most of the numerical damping of 4 x 16, so the cube wobbled after a push
+##   (poke test: 36% overshoot, 6 swings). damping_rate 40: 5% overshoot, 1 swing, static sag unchanged
+##   (1.16 mm), no extra GPU cost. Side effect: all motion is damped, e.g. a cut-off piece falls at
+##   ~ g / 40 = 0.25 m/s at most (sim time).
+##   XPBD constraint damping (xpbd_damping) is NOT used: with one iteration per substep its gamma = tau/dt
+##   is large, it slowed convergence (sag 1.2 -> 8.7 mm at 1e-2 s) and cost +47% GPU.
+##   Run from cpp_sim/build:  ./pf_sim_gpu_viewer ../../config/itest_cube_scalpel_round_xpbd_ss64_d40.yaml
+
+
+name: "Interactive: cube + scalpel (x12), cut only, fixes A(leading)+F1+B(proxy)+CCD"
+debulking: false   # cut only: edges break, nothing is aspirated
+
+mesh: "../../resources/cube/cube_tet.msh"
+
+simulation:
+  dt: 0.0003125         # 20 ms per frame / 64 substeps
+  gravity: [0, -9.81, 0]
+  num_iterations: 1     # small steps: one iteration per substep
+  stiffness: 1.0        # unused by xpbd
+  solver: xpbd          # XPBD shape matching (compliance; dt- and iteration-independent once converged)
+  xpbd_stiffness: 2.0e4 # k/m per particle-goal link, 1/s^2
+  damping_rate: 40      # per second (was 10.259 = 0.95 per 5 ms); damps the post-push wobble
+  substeps: 64
+  tool_proxy: true
+  tool_proxy_speed: 0.887  # m/s sim time (= particle radius 4.437 mm per 5 ms)
+
+boundary:
+  floor_y: 0.0
+  fix_bottom: true
+  fixed_ratio: 0.10
+
+clusters:
+  rings: 2
+  local_split: true           # R1: clusters split by their own intact edges
+
+knife:
+  radius: 0.04                 # sphere fallback only
+  tool_mesh: "../../resources/tools/scalpel_round.obj"
+  tool_scale: 12.0             # 144 x 60 x 9.6 mm blade, cutting edge along x at the bottom
+  cutting_interval: 1          # damage every substep (mouse motion can be fast)
+  alpha_min: 7.0
+  aspiration_threshold: 0.7
+  tool_sdf_resolution: 64
+  sdf_normal: trilinear        # required by straddle_fracture
+  cut_features: auto           # sharp edges / points from the tool mesh (wedge or cone angle < 30 deg)
+  straddle_fracture: false     # R3 off (see header)
+  cut_curve: leading           # edge cuts only when it passes between the particles AND leads
+  contact_iterate: true        # F1: project until out of the tool
+  contact_ccd: true            # CCD tool contact: a particle whose path crosses the tool (exact
+                               # triangles) is put back on the face it came from
+  damage_growth_rate: 0.00625  # = 0.1 per 5 ms (same rate per second)
+
+self_collision:
+  enabled: true
+  radius: 0.0045       # 2026-09-19: kernel 判定距离 = 2×radius = 9mm ≈ 粒子间距 8.9mm (原 0.012 → 24mm, 2.7× 间距, 刀压时粒子被弹飞)
+  stiffness: 0.8
+
+rigid_object:
+  friction_s: 2.0
+  friction_k: 1.5
+
+viewer:
+  draw_surface: true
+  draw_wireframe: false
+  draw_points: false
+
+render:
+  split_tets: true             # a cut tet is drawn as one piece per side

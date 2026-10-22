@@ -41,12 +41,15 @@ struct SimConfigYAML {
     std::string solver = "pbd";         // tissue elasticity: "pbd" (stiffness per iteration, legacy) or
                                         //   "xpbd" (compliance: dt- and iteration-independent)
     float xpbd_stiffness = 0.0f;        // [1/s^2] xpbd: stiffness / particle mass of each particle-goal link
+    float xpbd_damping = 0.0f;          // [s] xpbd: constraint damping time beta/k (Macklin 2016 eq. 26); 0 = off
     int substeps = 4;
     bool substeps_auto = false;
     bool tool_substep_interp = false;   // R4: tool pose interpolated across the substeps of a frame
     bool render_split_tets = false;     // render.split_tets: a cut tet is drawn as one piece per side (TetMesh split rendering)
     bool tool_proxy = false;            // B: the simulated tool follows the input pose at <= one particle
                                         //    radius per substep (virtual coupling)
+    float tool_proxy_speed = 0.0f;      // [m/s, sim time] if > 0: proxy step limit = tool_proxy_speed * dt per
+                                        //    substep (the same speed limit for any substep count); 0 → particle radius
 
     // Boundary
     float floor_y = 0.0f;
@@ -249,6 +252,7 @@ struct SimConfigYAML {
             if (sim["damping_rate"]) damping_rate = sim["damping_rate"].as<float>();
             if (sim["solver"]) solver = sim["solver"].as<std::string>();
             if (sim["xpbd_stiffness"]) xpbd_stiffness = sim["xpbd_stiffness"].as<float>();
+            if (sim["xpbd_damping"]) xpbd_damping = sim["xpbd_damping"].as<float>();
             if (sim["substeps"]) {
                 try {
                     substeps = sim["substeps"].as<int>();
@@ -258,6 +262,7 @@ struct SimConfigYAML {
             }
             if (sim["tool_substep_interp"]) tool_substep_interp = sim["tool_substep_interp"].as<bool>();
             if (sim["tool_proxy"]) tool_proxy = sim["tool_proxy"].as<bool>();
+            if (sim["tool_proxy_speed"]) tool_proxy_speed = sim["tool_proxy_speed"].as<float>();
         }
 
         // Boundary

@@ -3,6 +3,7 @@
 #include "tool_channels.cuh"   // Step 1: unified tool query (sphere)
 #include <cub/cub.cuh>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <algorithm>
 
@@ -14,9 +15,12 @@ __global__ void predict_kernel(
     float3 gravity, float dt, float damping, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= N || removed[i] || fixed[i]) return;
-
+    if (i >= N) return;
+    // start-of-substep position of EVERY particle (fixed ones too: the XPBD constraint-damping goal
+    // pass reads all cluster members; old_pos was never written for fixed particles before)
     old_pos[i] = pos[i];
+    if (removed[i] || fixed[i]) return;
+
     // Damp the velocity carried over from the last substep, THEN add this substep's gravity. Damping
     // after gravity also scaled the gravity load: at rest (v = 0) the body carried only damping * g,
     // a dt-dependent loss (5% at 0.95, 14% at 0.857) that changed the static sag.
@@ -75,13 +79,64 @@ __global__ void collision_kernel(
     }
 }
 
+// XPBD shape matching (Macklin 2016). Each cluster entry e = (cluster, member i) is a zero-length link
+// C = x_i - g (goal g held fixed within the iteration, as in Müller 2005) with compliance alpha = 1/k.
+// Mass-normalised (lambda in metres, k/m = xpbd_stiffness):
+//   alpha_t = 1 / (k/m * dt^2),  dlambda = (-C - alpha_t * lambda) / (n_i + alpha_t),  dx_i += dlambda
+// n_i = the number of goals particle i receives in this solve (xpbd_count_kernel, once per substep: the
+// skip rules depend only on removed / labels / damage, which do not change during a substep): the Jacobi
+// average of the PBD path written as mass splitting, so the multipliers stay consistent with the
+// averaged positions. Damage softens the link like apply_kernel's (1 - 0.95 damage) stiffness factor.
+// Constraint damping (Macklin 2016 eq. 26, gamma = (beta/k) / dt, goal_n != nullptr): the constraint's
+// change over the substep, (x - x_n) - (g - g_n), g_n = the goal of the start-of-substep positions:
+//   dlambda = (-C - alpha_t * lambda - gamma * dC) / ((1 + gamma) n_i + alpha_t)
+// A cluster moving rigidly has dC = 0 and is not damped.
+// Evaluated by the cluster kernels right where the goal is computed (no goal buffer, no second pass).
+struct XpbdLink {
+    float3* lambda = nullptr;          // [total_entries]; nullptr = PBD (or goal-only) pass
+    const int* count = nullptr;        // [N] n_i
+    const int* fixed = nullptr;
+    const float3* old_pos = nullptr;   // start-of-substep positions (damping)
+    const float3* goal_n = nullptr;    // start-of-substep goals (damping), nullptr = no damping
+    float k_over_m = 0.0f, dt = 0.0f, gamma = 0.0f;
+};
+
+__device__ __forceinline__ void xpbd_link_update(
+    int e, int i, float3 g, const float3* pred_pos, const float* damage, const XpbdLink& xl, float3* deltas)
+{
+    if (xl.fixed[i]) return;
+    float k = xl.k_over_m * (1.0f - damage[i] * 0.95f);
+    if (k <= 0.0f) return;
+    float at = 1.0f / (k * xl.dt * xl.dt);
+    float n = (float)xl.count[i];
+    float3 l = xl.lambda[e], p = pred_pos[i];
+    float3 dc = make_float3(0.0f, 0.0f, 0.0f);
+    float gm = 0.0f;
+    if (xl.goal_n) {
+        float3 gn = xl.goal_n[e];
+        if (!isnan(gn.x)) {
+            float3 xn = xl.old_pos[i];
+            dc = make_float3((p.x - xn.x) - (g.x - gn.x), (p.y - xn.y) - (g.y - gn.y), (p.z - xn.z) - (g.z - gn.z));
+            gm = xl.gamma;
+        }
+    }
+    float inv = 1.0f / ((1.0f + gm) * n + at);
+    float3 dl = make_float3((g.x - p.x - at * l.x - gm * dc.x) * inv,
+                            (g.y - p.y - at * l.y - gm * dc.y) * inv,
+                            (g.z - p.z - at * l.z - gm * dc.z) * inv);
+    xl.lambda[e] = make_float3(l.x + dl.x, l.y + dl.y, l.z + dl.z);
+    atomicAdd(&deltas[i].x, dl.x);
+    atomicAdd(&deltas[i].y, dl.y);
+    atomicAdd(&deltas[i].z, dl.z);
+}
+
 __device__ __forceinline__ void cluster_solve_body(
     int cid,
     float3* positions, int* removed, float* damage,
     int* cluster_starts, int* cluster_sizes,
     int* particle_ids, float3* rest_offsets,
     float3* deltas, int* delta_counts,
-    float damage_shape_weight, float3* goals);
+    float damage_shape_weight, float3* goals, const XpbdLink& xl);
 
 __global__ void cluster_solve_kernel(
     float3* positions, int* removed, float* damage,
@@ -90,12 +145,13 @@ __global__ void cluster_solve_kernel(
     float3* deltas, int* delta_counts,
     float damage_shape_weight,    // α: 0=no weighting (debulk), 1=PF-weighted (cut_only)
     int num_clusters,
-    float3* goals)                // XPBD: write each member's goal here instead of the delta (nullptr = PBD)
+    float3* goals,                // write each member's goal here instead of the delta (XPBD damping goals)
+    XpbdLink xl)                  // xl.lambda != nullptr: XPBD link update instead of the PBD delta
 {
     int cid = blockIdx.x;
     if (cid >= num_clusters) return;
     cluster_solve_body(cid, positions, removed, damage, cluster_starts, cluster_sizes, particle_ids,
-                       rest_offsets, deltas, delta_counts, damage_shape_weight, goals);
+                       rest_offsets, deltas, delta_counts, damage_shape_weight, goals, xl);
 }
 
 // Body of the legacy whole-cluster shape match (also used by R1 for clusters that are not split).
@@ -105,7 +161,7 @@ __device__ __forceinline__ void cluster_solve_body(
     int* cluster_starts, int* cluster_sizes,
     int* particle_ids, float3* rest_offsets,
     float3* deltas, int* delta_counts,
-    float damage_shape_weight, float3* goals)
+    float damage_shape_weight, float3* goals, const XpbdLink& xl)
 {
     int tid = threadIdx.x;
 
@@ -244,11 +300,12 @@ __device__ __forceinline__ void cluster_solve_body(
         float gy = r21*qx + r22*qy + r23*qz + cy;
         float gz = r31*qx + r32*qy + r33*qz + cz;
 
-        if (goals) {                    // XPBD: the link update needs every member's count first
+        if (goals) {                    // goal-only pass (XPBD damping: goals of the start positions)
             goals[start + j] = make_float3(gx, gy, gz);
             atomicAdd(&delta_counts[pid], 1);
             continue;
         }
+        if (xl.lambda) { xpbd_link_update(start + j, pid, make_float3(gx, gy, gz), positions, damage, xl, deltas); continue; }
         atomicAdd(&deltas[pid].x, gx - positions[pid].x);
         atomicAdd(&deltas[pid].y, gy - positions[pid].y);
         atomicAdd(&deltas[pid].z, gz - positions[pid].z);
@@ -319,13 +376,13 @@ __global__ void cluster_solve_sub_kernel(
     float3* deltas, int* delta_counts,
     float damage_shape_weight, int min_sub,
     int num_clusters, const int* cluster_multi,
-    float3* goals)
+    float3* goals, XpbdLink xl)
 {
     int cid = blockIdx.x;
     if (cid >= num_clusters) return;
     if (!cluster_multi[cid]) {          // not split: the legacy whole-cluster shape match
         cluster_solve_body(cid, positions, removed, damage, cluster_starts, cluster_sizes, particle_ids,
-                           rest_offsets, deltas, delta_counts, damage_shape_weight, goals);
+                           rest_offsets, deltas, delta_counts, damage_shape_weight, goals, xl);
         return;
     }
     int tid = threadIdx.x;
@@ -452,6 +509,7 @@ __global__ void cluster_solve_sub_kernel(
                 atomicAdd(&delta_counts[pid], 1);
                 continue;
             }
+            if (xl.lambda) { xpbd_link_update(start + j, pid, make_float3(gx, gy, gz), positions, damage, xl, deltas); continue; }
             atomicAdd(&deltas[pid].x, gx - positions[pid].x);
             atomicAdd(&deltas[pid].y, gy - positions[pid].y);
             atomicAdd(&deltas[pid].z, gz - positions[pid].z);
@@ -495,45 +553,95 @@ __global__ void apply_kernel_per_particle_stiff(
     pred_pos[i].z += local_stiff * deltas[i].z * inv_count;
 }
 
-// XPBD shape matching (Macklin 2016), one thread per cluster entry. The entry is a zero-length link
-// C = x_i - g (goal g held fixed within the iteration, as in Müller 2005) with compliance
-// alpha = 1/k. Mass-normalised (lambda in metres, k/m = xpbd_stiffness):
-//   alpha_t = 1 / (k/m * dt^2),  dlambda = (-C - alpha_t * lambda) / (n_i + alpha_t),  dx_i += dlambda
-// n_i = the particle's goals this iteration: the Jacobi average of the PBD path written as mass
-// splitting, so the multipliers stay consistent with the averaged positions. Damage softens the link
-// like apply_kernel's (1 - 0.95 damage) stiffness factor. The goal is reset to NaN once read.
-__global__ void xpbd_shape_kernel(
-    const float3* pred_pos, const int* particle_ids, float3* goals, float3* lambda,
-    const int* delta_counts, const float* damage, const int* removed, const int* fixed,
-    float3* deltas, float k_over_m, float dt, int E)
+// XPBD n_i: the number of goals each particle receives in this substep's solve. Replays EXACTLY the skip
+// rules of cluster_solve_body / cluster_solve_sub_kernel (same loops and warp reductions, so the
+// weight-sum thresholds decide bit-identically) without the shape match itself. The rules depend only on
+// removed / labels / damage, which are constant during a substep, so one count serves all iterations.
+// cluster_multi == nullptr: no R1 (whole clusters only).
+__global__ void xpbd_count_kernel(
+    const int* removed, const float* damage,
+    const int* cluster_starts, const int* cluster_sizes, const int* particle_ids,
+    const int* labels, const int* cluster_multi,
+    float damage_shape_weight, int min_sub, int num_clusters, int* count)
 {
-    int e = blockIdx.x * blockDim.x + threadIdx.x;
-    if (e >= E) return;
-    float3 g = goals[e];
-    if (isnan(g.x)) return;
-    goals[e] = make_float3(NAN, NAN, NAN);
-    int i = particle_ids[e];
-    if (removed[i] || fixed[i]) return;
-    float k = k_over_m * (1.0f - damage[i] * 0.95f);
-    if (k <= 0.0f) return;
-    float at = 1.0f / (k * dt * dt);
-    float n = (float)delta_counts[i];
-    float3 l = lambda[e], p = pred_pos[i];
-    float inv = 1.0f / (n + at);
-    float3 dl = make_float3((g.x - p.x - at * l.x) * inv, (g.y - p.y - at * l.y) * inv, (g.z - p.z - at * l.z) * inv);
-    lambda[e] = make_float3(l.x + dl.x, l.y + dl.y, l.z + dl.z);
-    atomicAdd(&deltas[i].x, dl.x);
-    atomicAdd(&deltas[i].y, dl.y);
-    atomicAdd(&deltas[i].z, dl.z);
+    int cid = blockIdx.x;
+    if (cid >= num_clusters) return;
+    int tid = threadIdx.x;
+    int start = cluster_starts[cid];
+    int size  = cluster_sizes[cid];
+    if (size < 2) return;
+    if (!cluster_multi || !cluster_multi[cid]) {          // cluster_solve_body
+        float tw = 0;
+        for (int j = tid; j < size; j += 32) {
+            int pid = particle_ids[start + j];
+            if (removed[pid]) continue;
+            float w = 1.0f - damage_shape_weight * damage[pid];
+            if (w < 0.05f) w = 0.05f;
+            tw += w;
+        }
+        for (int offset = 16; offset > 0; offset >>= 1) tw += __shfl_down_sync(0xFFFFFFFF, tw, offset);
+        float total_w = __shfl_sync(0xFFFFFFFF, tw, 0);
+        if (total_w < 1.5f) return;
+        for (int j = tid; j < size; j += 32) {
+            int pid = particle_ids[start + j];
+            if (!removed[pid]) atomicAdd(&count[pid], 1);
+        }
+        return;
+    }
+    // cluster_solve_sub_kernel (split cluster)
+    int l0 = 0x7fffffff;
+    for (int j = tid; j < size; j += 32) { int l = labels[start + j]; if (l >= 0 && l < l0) l0 = l; }
+    for (int o = 16; o > 0; o >>= 1) l0 = min(l0, __shfl_down_sync(0xFFFFFFFF, l0, o));
+    l0 = __shfl_sync(0xFFFFFFFF, l0, 0);
+    if (l0 == 0x7fffffff) return;
+    bool multi = false;
+    for (int j = tid; j < size; j += 32) { int l = labels[start + j]; if (l >= 0 && l != l0) multi = true; }
+    multi = __any_sync(0xFFFFFFFF, multi);
+    int prev = -1;
+    while (true) {
+        int L = 0x7fffffff;
+        for (int j = tid; j < size; j += 32) { int l = labels[start + j]; if (l > prev && l < L) L = l; }
+        for (int o = 16; o > 0; o >>= 1) L = min(L, __shfl_down_sync(0xFFFFFFFF, L, o));
+        L = __shfl_sync(0xFFFFFFFF, L, 0);
+        if (L == 0x7fffffff) break;
+        prev = L;
+        int cnt = 0;
+        float tw = 0;
+        for (int j = tid; j < size; j += 32) {
+            int pid = particle_ids[start + j];
+            if (removed[pid] || labels[start + j] != L) continue;
+            float w = 1.0f - damage_shape_weight * damage[pid];
+            if (w < 0.05f) w = 0.05f;
+            tw += w; cnt++;
+        }
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            tw += __shfl_down_sync(0xFFFFFFFF, tw, offset);
+            cnt += __shfl_down_sync(0xFFFFFFFF, cnt, offset);
+        }
+        float total_w = __shfl_sync(0xFFFFFFFF, tw, 0);
+        cnt = __shfl_sync(0xFFFFFFFF, cnt, 0);
+        if (multi ? (cnt < min_sub) : (total_w < 1.5f)) continue;
+        for (int j = tid; j < size; j += 32) {
+            int pid = particle_ids[start + j];
+            if (!removed[pid] && labels[start + j] == L) atomicAdd(&count[pid], 1);
+        }
+    }
 }
 
-// XPBD apply: the summed link corrections (already split by n_i in xpbd_shape_kernel).
+// Check (PFSM_XPBD_CHECK): n_i of xpbd_count_kernel vs the goal counts of a real cluster pass.
+__global__ void xpbd_count_check_kernel(const int* count, const int* ref, int* mismatch, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N && count[i] != ref[i]) atomicAdd(mismatch, 1);
+}
+
+// XPBD apply: the summed link corrections (already split by n_i in xpbd_link_update).
 __global__ void xpbd_apply_kernel(
-    float3* pred_pos, const float3* deltas, const int* delta_counts,
+    float3* pred_pos, const float3* deltas, const int* counts,
     const int* removed, const int* fixed, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= N || removed[i] || fixed[i] || delta_counts[i] == 0) return;
+    if (i >= N || removed[i] || fixed[i] || counts[i] == 0) return;
     pred_pos[i].x += deltas[i].x;
     pred_pos[i].y += deltas[i].y;
     pred_pos[i].z += deltas[i].z;
@@ -1733,16 +1841,48 @@ void ShapeMatchingGPUSolver::update_cluster_labels() {
 
 // ============== Simulation Step ==============
 
-// XPBD buffers, sized to the current cluster CSR (reupload_clusters may change it). A new goal
-// buffer starts all-NaN (= no goal); xpbd_shape_kernel resets every goal it reads.
+// XPBD buffers, sized to the current cluster CSR (reupload_clusters may change it).
 void ShapeMatchingGPUSolver::ensure_xpbd_buffers() {
     int E = d_clusters.total_entries;
-    if (d_xpbd_goal && xpbd_entries == E) return;
-    if (d_xpbd_goal) { cudaFree(d_xpbd_goal); cudaFree(d_xpbd_lambda); }
-    CUDA_CHECK(cudaMalloc(&d_xpbd_goal, E * sizeof(float3)));
+    if (d_xpbd_lambda && xpbd_entries == E) return;
+    if (d_xpbd_lambda) { cudaFree(d_xpbd_lambda); cudaFree(d_xpbd_goal_n); cudaFree(d_xpbd_count); }
     CUDA_CHECK(cudaMalloc(&d_xpbd_lambda, E * sizeof(float3)));
-    CUDA_CHECK(cudaMemset(d_xpbd_goal, 0xFF, E * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_xpbd_goal_n, E * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&d_xpbd_count, d_particles.N * sizeof(int)));
     xpbd_entries = E;
+    const char* chk = std::getenv("PFSM_XPBD_CHECK");
+    xpbd_check = chk && chk[0] == '1';
+    if (xpbd_check) printf("[XPBD] PFSM_XPBD_CHECK: n_i checked against a real cluster pass every substep\n");
+}
+
+// PFSM_XPBD_CHECK=1: a goal-only cluster pass on the current predicted positions counts the goals each
+// particle really receives; it must equal xpbd_count_kernel's n_i for every particle.
+void ShapeMatchingGPUSolver::xpbd_check_counts() {
+    int N = d_particles.N, C = d_clusters.num_clusters, E = d_clusters.total_entries;
+    float3* g = nullptr; int* mm = nullptr;
+    CUDA_CHECK(cudaMalloc(&g, E * sizeof(float3)));
+    CUDA_CHECK(cudaMalloc(&mm, sizeof(int)));
+    CUDA_CHECK(cudaMemset(mm, 0, sizeof(int)));
+    clear_deltas_kernel<<<(N + 255) / 256, 256>>>(d_deltas, d_delta_counts, N);
+    if (local_split)
+        cluster_solve_sub_kernel<<<C, 32>>>(
+            d_particles.predicted_pos, d_particles.removed, d_particles.damage,
+            d_clusters.cluster_starts, d_clusters.cluster_sizes, d_clusters.particle_ids, d_clusters.rest_offsets,
+            d_labels, d_deltas, d_delta_counts, config.damage_shape_weight, 4, C, d_cluster_multi, g, XpbdLink());
+    else
+        cluster_solve_kernel<<<C, 32>>>(
+            d_particles.predicted_pos, d_particles.removed, d_particles.damage,
+            d_clusters.cluster_starts, d_clusters.cluster_sizes, d_clusters.particle_ids, d_clusters.rest_offsets,
+            d_deltas, d_delta_counts, config.damage_shape_weight, C, g, XpbdLink());
+    xpbd_count_check_kernel<<<(N + 255) / 256, 256>>>(d_xpbd_count, d_delta_counts, mm, N);
+    int h = 0;
+    CUDA_CHECK(cudaMemcpy(&h, mm, sizeof(int), cudaMemcpyDeviceToHost));
+    cudaFree(g); cudaFree(mm);
+    xpbd_check_substeps++; xpbd_check_mismatch += h;
+    if (h) printf("[XPBD-CHECK] step %d: %d particles with n_i != real goal count\n", step_count, h);
+    if (xpbd_check_substeps % 1000 == 0)
+        printf("[XPBD-CHECK] %lld substeps checked, %lld mismatching particle counts in total\n",
+               xpbd_check_substeps, xpbd_check_mismatch);
 }
 
 void ShapeMatchingGPUSolver::step() {
@@ -1796,7 +1936,38 @@ void ShapeMatchingGPUSolver::step() {
         ensure_xpbd_buffers();
         CUDA_CHECK(cudaMemsetAsync(d_xpbd_lambda, 0, xpbd_entries * sizeof(float3)));
     }
-    float3* goals = xpbd ? d_xpbd_goal : nullptr;
+    // n_i for this substep (see xpbd_count_kernel); the link update runs inside the cluster kernels
+    XpbdLink xl;
+    if (xpbd) {
+        CUDA_CHECK(cudaMemsetAsync(d_xpbd_count, 0, N * sizeof(int)));
+        xpbd_count_kernel<<<C, 32>>>(
+            d_particles.removed, d_particles.damage,
+            d_clusters.cluster_starts, d_clusters.cluster_sizes, d_clusters.particle_ids,
+            local_split ? d_labels : nullptr, local_split ? d_cluster_multi : nullptr,
+            config.damage_shape_weight, 4, C, d_xpbd_count);
+        xl.lambda = d_xpbd_lambda; xl.count = d_xpbd_count; xl.fixed = d_particles.fixed;
+        xl.old_pos = d_particles.old_pos; xl.k_over_m = config.xpbd_stiffness; xl.dt = config.dt;
+        if (xpbd_check) xpbd_check_counts();
+    }
+    // XPBD constraint damping: the goals of the start-of-substep positions x_n (same clusters / labels)
+    const bool xdamp = xpbd && config.xpbd_damping > 0.0f;
+    if (xdamp) {
+        CUDA_CHECK(cudaMemsetAsync(d_xpbd_goal_n, 0xFF, xpbd_entries * sizeof(float3)));
+        clear_deltas_kernel<<<blocks_n, 256>>>(d_deltas, d_delta_counts, N);   // the goal pass also counts
+        if (local_split)
+            cluster_solve_sub_kernel<<<C, 32>>>(
+                d_particles.old_pos, d_particles.removed, d_particles.damage,
+                d_clusters.cluster_starts, d_clusters.cluster_sizes,
+                d_clusters.particle_ids, d_clusters.rest_offsets, d_labels,
+                d_deltas, d_delta_counts, config.damage_shape_weight, 4, C, d_cluster_multi, d_xpbd_goal_n, XpbdLink());
+        else
+            cluster_solve_kernel<<<C, 32>>>(
+                d_particles.old_pos, d_particles.removed, d_particles.damage,
+                d_clusters.cluster_starts, d_clusters.cluster_sizes,
+                d_clusters.particle_ids, d_clusters.rest_offsets,
+                d_deltas, d_delta_counts, config.damage_shape_weight, C, d_xpbd_goal_n, XpbdLink());
+        xl.goal_n = d_xpbd_goal_n; xl.gamma = config.xpbd_damping / config.dt;
+    }
 
     // 3. Jacobi 迭代 — FleX constraint groups (Macklin 2014 Sec 4):
     //    Group 1: shape-matching (cluster_solve → apply) — soft constraint, Jacobi-averaged
@@ -1815,7 +1986,7 @@ void ShapeMatchingGPUSolver::step() {
                 d_clusters.particle_ids, d_clusters.rest_offsets, d_labels,
                 d_deltas, d_delta_counts,
                 config.damage_shape_weight, 4,
-                C, d_cluster_multi, goals);
+                C, d_cluster_multi, nullptr, xl);
         } else {
             cluster_solve_kernel<<<C, 32>>>(
                 d_particles.predicted_pos, d_particles.removed, d_particles.damage,
@@ -1823,14 +1994,7 @@ void ShapeMatchingGPUSolver::step() {
                 d_clusters.particle_ids, d_clusters.rest_offsets,
                 d_deltas, d_delta_counts,
                 config.damage_shape_weight,
-                C, goals);
-        }
-        if (xpbd) {
-            int E = d_clusters.total_entries;
-            xpbd_shape_kernel<<<(E + 255) / 256, 256>>>(
-                d_particles.predicted_pos, d_clusters.particle_ids, d_xpbd_goal, d_xpbd_lambda,
-                d_delta_counts, d_particles.damage, d_particles.removed, d_particles.fixed,
-                d_deltas, config.xpbd_stiffness, config.dt, E);
+                C, nullptr, xl);
         }
 
         // CCD (contact_ccd): the positions before this iteration's apply — just put outside the tool
@@ -1847,7 +2011,7 @@ void ShapeMatchingGPUSolver::step() {
         // Global path (else branch) is BYTE-IDENTICAL to original behavior.
         if (xpbd) {
             xpbd_apply_kernel<<<blocks_n, 256>>>(
-                d_particles.predicted_pos, d_deltas, d_delta_counts,
+                d_particles.predicted_pos, d_deltas, d_xpbd_count,
                 d_particles.removed, d_particles.fixed, N);
         } else if (per_particle_stiffness && d_stiffness_per_particle != nullptr) {
             apply_kernel_per_particle_stiff<<<blocks_n, 256>>>(
@@ -2155,7 +2319,9 @@ void ShapeMatchingGPUSolver::cleanup() {
     cudaFree(d_delta_counts_sc);
     cudaFree(d_deltas_ec);
     cudaFree(d_delta_counts_ec);
-    if (d_xpbd_goal) { cudaFree(d_xpbd_goal); cudaFree(d_xpbd_lambda); d_xpbd_goal = d_xpbd_lambda = nullptr; xpbd_entries = 0; }
+    if (xpbd_check) printf("[XPBD-CHECK] total: %lld substeps checked, %lld mismatching particle counts\n",
+                           xpbd_check_substeps, xpbd_check_mismatch);
+    if (d_xpbd_lambda) { cudaFree(d_xpbd_lambda); cudaFree(d_xpbd_goal_n); cudaFree(d_xpbd_count); d_xpbd_lambda = d_xpbd_goal_n = nullptr; d_xpbd_count = nullptr; xpbd_entries = 0; }
     if (d_edges.particle_a) {
         cudaFree(d_edges.particle_a);
         cudaFree(d_edges.particle_b);

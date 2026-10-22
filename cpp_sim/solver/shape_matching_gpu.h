@@ -127,6 +127,10 @@ struct SimConfigGPU {
     // num_iterations. 0 = legacy PBD (stiffness applied per iteration).
     int solver_xpbd = 0;
     float xpbd_stiffness = 0.0f;
+    // XPBD constraint damping (Macklin 2016, eq. 26), stiffness-proportional: beta = xpbd_damping * k,
+    // gamma = xpbd_damping / dt. Damps the rate of the constraint C = x - g (motion relative to the
+    // cluster's own rigid motion), not the absolute velocity. 0 = off.
+    float xpbd_damping = 0.0f;
 };
 
 // SDF data (used for both rigid body collision and tool collision)
@@ -345,10 +349,14 @@ private:
     int* d_cluster_multi = nullptr;   // [C] 1 = cluster split into >= 2 sub-clusters
     int max_cluster_size = 0;
     void update_cluster_labels();
-    // XPBD (config.solver_xpbd): per cluster entry [total_entries], goal of this iteration (NaN = no
-    // goal) and the accumulated multiplier of the substep (mass-normalised, metres)
-    float3* d_xpbd_goal = nullptr;
+    // XPBD (config.solver_xpbd): per cluster entry [total_entries], the accumulated multiplier of the
+    // substep (mass-normalised, metres); per particle, n_i = goals received this substep
     float3* d_xpbd_lambda = nullptr;
+    int* d_xpbd_count = nullptr;
+    bool xpbd_check = false;               // env PFSM_XPBD_CHECK=1: verify n_i every substep (slow)
+    long long xpbd_check_substeps = 0, xpbd_check_mismatch = 0;
+    void xpbd_check_counts();
+    float3* d_xpbd_goal_n = nullptr;  // goals at the start-of-substep positions (constraint damping), NaN = none
     int xpbd_entries = 0;
     void ensure_xpbd_buffers();
 
